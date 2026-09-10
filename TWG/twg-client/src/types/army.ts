@@ -1,0 +1,36 @@
+import { Unit } from './game';
+
+export interface FactionInfo {
+  id: string;
+  name: string;
+  shortName: string;
+  title: string;
+  quote: string;
+  colors: {
+    primary: string;
+    secondary: string;
+    accent: string;
+    border: string;
+  };
+  symbol: string;
+  loreSummary: string;
+  leaderName: string;
+  strengths: string[];
+}
+
+export interface ArmyRoster {
+  id: string;
+  name: string;
+  factionId: string;
+  tags?: string[];
+  maxPoints: number;
+  totalPoints: number;
+  units: Unit[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ValidationIssue {
+  type: 'error' | 'warning';
+  message: string;
+}
