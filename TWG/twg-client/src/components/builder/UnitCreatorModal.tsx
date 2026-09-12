@@ -1,10 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
   X, Upload, Image as ImageIcon, ZoomIn, ZoomOut, Move, 
-  RotateCcw, Sparkles, Check, Shield, Heart, Zap, Crosshair
+  RotateCcw, Sparkles, Check, Shield, Heart, Zap, Crosshair,
+  ChevronDown, ChevronUp, Search, Tag, Plus, Edit2, Trash2
 } from 'lucide-react';
-import { Unit, UnitRole, UnitType, BaseShape, UnitSize } from '../../types/game';
+import { Unit, UnitRole, UnitType, BaseShape, UnitSize, CORE_TRAIT_DEFINITIONS, UnitAbility } from '../../types/game';
 import { StorageService } from '../../services/storageService';
+import { AbilityEditorModal } from './AbilityEditorModal';
 
 interface UnitCreatorModalProps {
   isOpen: boolean;
@@ -57,6 +59,58 @@ export const UnitCreatorModal: React.FC<UnitCreatorModalProps> = ({
   const [avatar, setAvatar] = useState<string>(initialUnit?.avatar || faction?.symbol || '⚔️');
   const [description, setDescription] = useState<string>(initialUnit?.description || 'Custom tactical unit configured for battle.');
   const [canDeployOutsideZone, setCanDeployOutsideZone] = useState<boolean>(!!initialUnit?.canDeployOutsideZone);
+  const [selectedTraits, setSelectedTraits] = useState<string[]>(
+    initialUnit?.traits || (initialUnit?.canDeployOutsideZone ? ['Infiltrator'] : [])
+  );
+
+  const [traitDropdownOpen, setTraitDropdownOpen] = useState<boolean>(false);
+  const [traitSearchTerm, setTraitSearchTerm] = useState<string>('');
+  const traitDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (traitDropdownRef.current && !traitDropdownRef.current.contains(e.target as Node)) {
+        setTraitDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const toggleTrait = (traitId: string) => {
+    setSelectedTraits(prev => 
+      prev.includes(traitId) ? prev.filter(t => t !== traitId) : [...prev, traitId]
+    );
+  };
+
+  // Abilities State (DESIGN-007 / CODE-025)
+  const [abilities, setAbilities] = useState<UnitAbility[]>(initialUnit?.abilities || []);
+  const [editingAbilityIndex, setEditingAbilityIndex] = useState<number | null>(null);
+  const [isAbilityModalOpen, setIsAbilityModalOpen] = useState<boolean>(false);
+
+  const handleOpenAddAbility = () => {
+    setEditingAbilityIndex(null);
+    setIsAbilityModalOpen(true);
+  };
+
+  const handleOpenEditAbility = (index: number) => {
+    setEditingAbilityIndex(index);
+    setIsAbilityModalOpen(true);
+  };
+
+  const handleDeleteAbility = (index: number) => {
+    setAbilities(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleSaveAbility = (ability: UnitAbility) => {
+    if (editingAbilityIndex !== null) {
+      setAbilities(prev => prev.map((a, i) => i === editingAbilityIndex ? ability : a));
+    } else {
+      if (abilities.length < 3) {
+        setAbilities(prev => [...prev, ability]);
+      }
+    }
+  };
   
   // Base Geometry
   const [baseShape, setBaseShape] = useState<BaseShape>(initialUnit?.baseShape || 'circle');
@@ -245,7 +299,9 @@ export const UnitCreatorModal: React.FC<UnitCreatorModalProps> = ({
       tokenImageUrl: tokenImageUrl || undefined,
       description: description.trim(),
       passives: initialUnit?.passives || ['Veteran Specialists', 'Custom Loadout'],
-      canDeployOutsideZone,
+      traits: selectedTraits,
+      abilities: abilities.length > 0 ? abilities : undefined,
+      canDeployOutsideZone: selectedTraits.includes('Infiltrator') || canDeployOutsideZone,
       owner: initialUnit?.owner || 'player1',
       position: initialUnit?.position || null,
       tokens: initialUnit?.tokens || [],
@@ -667,24 +723,244 @@ export const UnitCreatorModal: React.FC<UnitCreatorModalProps> = ({
                 </div>
               </div>
 
-              {/* Traits & Deploy Rules */}
-              <div className="bg-[#131622] p-3 rounded-xl border border-zinc-800 space-y-2">
-                <label className="flex items-center space-x-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={canDeployOutsideZone}
-                    onChange={e => setCanDeployOutsideZone(e.target.checked)}
-                    className="w-4 h-4 rounded text-amber-500 accent-amber-500"
-                  />
-                  <div className="flex flex-col">
-                    <span className="text-xs font-bold text-white font-mono">
-                      Trait: DEPLOY_OUTSIDE_ZONE
+              {/* Tactical Traits (CODE-014 & FEATURE-002: Multi-select Dropdown & Tag Input) */}
+              <div className="bg-[#131622] p-3.5 rounded-xl border border-zinc-800 space-y-3" ref={traitDropdownRef}>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="text-xs font-bold font-mono text-zinc-200 block">
+                      🏷️ Tactical Traits
                     </span>
                     <span className="text-[10px] text-zinc-400">
-                      Bypasses deployment zone limits. Can deploy anywhere on the continuous VTT canvas.
+                      Select multiple tactical traits (Scout, Infiltrator, Leader, etc.) for this unit
                     </span>
                   </div>
-                </label>
+                  <div className="flex items-center space-x-2">
+                    {selectedTraits.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedTraits([])}
+                        className="text-[10px] font-mono text-zinc-500 hover:text-rose-400 transition cursor-pointer"
+                      >
+                        Clear All
+                      </button>
+                    )}
+                    <span className="text-[10px] font-mono text-amber-400 bg-amber-950/60 border border-amber-800/80 px-2 py-0.5 rounded">
+                      {selectedTraits.length} selected
+                    </span>
+                  </div>
+                </div>
+
+                {/* Selected Traits as Removable Tags/Chips */}
+                <div className="flex flex-wrap gap-1.5 min-h-[36px] p-2 bg-zinc-950/80 rounded-lg border border-zinc-800 items-center">
+                  {selectedTraits.length === 0 ? (
+                    <span className="text-xs text-zinc-500 italic">No traits assigned yet. Click the dropdown below to add traits.</span>
+                  ) : (
+                    selectedTraits.map(tid => {
+                      const def = (CORE_TRAIT_DEFINITIONS as any)[tid] || { id: tid, name: tid, icon: '🏷️' };
+                      return (
+                        <span
+                          key={tid}
+                          className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-md bg-amber-950/60 border border-amber-500/50 text-amber-200 text-xs font-mono shadow-sm"
+                        >
+                          <span className="text-sm">{def.icon}</span>
+                          <span className="font-bold">{def.name}</span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleTrait(tid);
+                            }}
+                            className="text-amber-400 hover:text-white rounded p-0.5 hover:bg-amber-800/50 transition cursor-pointer"
+                            title={`Remove ${def.name}`}
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </span>
+                      );
+                    })
+                  )}
+                </div>
+
+                {/* Multi-Select Dropdown Trigger & Popover */}
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setTraitDropdownOpen(prev => !prev)}
+                    className="w-full flex items-center justify-between px-3 py-2 bg-zinc-900/90 border border-zinc-700 hover:border-amber-400 rounded-lg text-xs text-zinc-300 font-mono transition cursor-pointer shadow-sm"
+                  >
+                    <span className="flex items-center space-x-2">
+                      <Tag className="w-3.5 h-3.5 text-amber-400" />
+                      <span>{traitDropdownOpen ? 'Close Traits Selector' : 'Add / Select Traits from Dropdown...'}</span>
+                    </span>
+                    {traitDropdownOpen ? (
+                      <ChevronUp className="w-4 h-4 text-zinc-400" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4 text-zinc-400" />
+                    )}
+                  </button>
+
+                  {traitDropdownOpen && (() => {
+                    const filteredTraits = Object.values(CORE_TRAIT_DEFINITIONS).filter(trait => {
+                      if (!traitSearchTerm.trim()) return true;
+                      const q = traitSearchTerm.toLowerCase();
+                      return trait.name.toLowerCase().includes(q) ||
+                        trait.summary.toLowerCase().includes(q) ||
+                        trait.id.toLowerCase().includes(q);
+                    });
+
+                    return (
+                      <div className="absolute top-full left-0 right-0 mt-1.5 bg-[#0f111a] border border-zinc-700 rounded-xl shadow-2xl z-50 p-2 space-y-2 animate-in fade-in zoom-in-95 duration-150">
+                        {/* Search Filter Input */}
+                        <div className="relative">
+                          <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                          <input
+                            type="text"
+                            value={traitSearchTerm}
+                            onChange={e => setTraitSearchTerm(e.target.value)}
+                            placeholder="Filter traits by name, keyword, or rule..."
+                            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white placeholder-zinc-500 focus:border-amber-500 focus:outline-none font-mono"
+                            autoFocus
+                          />
+                        </div>
+
+                        {/* Dropdown Options List */}
+                        <div className="max-h-56 overflow-y-auto space-y-1 pr-1">
+                          {filteredTraits.length === 0 ? (
+                            <div className="p-3 text-center text-xs text-zinc-500 font-mono">
+                              No matching traits found
+                            </div>
+                          ) : (
+                            filteredTraits.map(trait => {
+                              const isSelected = selectedTraits.includes(trait.id);
+                              return (
+                                <div
+                                  key={trait.id}
+                                  onClick={() => toggleTrait(trait.id)}
+                                  className={`p-2 rounded-lg border text-left transition cursor-pointer flex items-center justify-between space-x-2.5 ${
+                                    isSelected
+                                      ? 'bg-amber-950/40 border-amber-500/80 text-white'
+                                      : 'bg-zinc-900/60 border-zinc-800/80 text-zinc-300 hover:bg-zinc-850 hover:border-zinc-700'
+                                  }`}
+                                >
+                                  <div className="flex items-start space-x-2 min-w-0 flex-1">
+                                    <span className="text-base leading-none pt-0.5">{trait.icon}</span>
+                                    <div className="min-w-0">
+                                      <div className="flex items-center space-x-1.5">
+                                        <span className="text-xs font-bold font-mono">{trait.name}</span>
+                                        {trait.isMVP && (
+                                          <span className="text-[8px] font-mono font-bold uppercase px-1 py-0.2 bg-emerald-950 text-emerald-300 border border-emerald-700 rounded">
+                                            MVP
+                                          </span>
+                                        )}
+                                      </div>
+                                      <p className="text-[10px] text-zinc-400 leading-tight truncate">
+                                        {trait.summary}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition ${
+                                    isSelected
+                                      ? 'bg-amber-500 border-amber-400 text-black'
+                                      : 'border-zinc-600 bg-zinc-950'
+                                  }`}>
+                                    {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              </div>
+
+              {/* Tactical Abilities (DESIGN-007 / CODE-025: Unit Ability Builder) */}
+              <div className="bg-[#131622] p-3.5 rounded-xl border border-zinc-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="text-xs font-bold font-mono text-zinc-200 block">
+                      ⚡ Tactical Abilities ({abilities.length}/3)
+                    </span>
+                    <span className="text-[10px] text-zinc-400">
+                      Configure active or passive abilities with timing, cost, and effects
+                    </span>
+                  </div>
+                  {abilities.length < 3 && (
+                    <button
+                      type="button"
+                      onClick={handleOpenAddAbility}
+                      className="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/50 text-amber-300 text-xs font-mono rounded-lg flex items-center space-x-1 transition cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Ability</span>
+                    </button>
+                  )}
+                </div>
+
+                {abilities.length === 0 ? (
+                  <div className="p-3 bg-zinc-950/70 border border-zinc-850 rounded-lg text-center text-xs text-zinc-500 font-mono">
+                    No custom abilities configured. Click "+ Add Ability" to create up to 3 abilities.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {abilities.map((ability, idx) => (
+                      <div
+                        key={ability.id || idx}
+                        className="bg-zinc-950/90 border border-zinc-800 hover:border-amber-500/40 rounded-xl p-3 flex items-start justify-between gap-3 transition"
+                      >
+                        <div className="flex items-start space-x-2.5 min-w-0">
+                          <span className="text-xl p-1.5 rounded-lg bg-zinc-900 border border-zinc-750 shrink-0">
+                            {ability.icon || '⚡'}
+                          </span>
+                          <div className="min-w-0">
+                            <div className="flex items-center space-x-2 flex-wrap gap-y-1">
+                              <h5 className="text-xs font-bold font-mono text-white">{ability.name}</h5>
+                              <span className={`text-[9px] px-1.5 py-0.2 rounded font-mono font-bold uppercase ${
+                                ability.type === 'active' ? 'bg-amber-950 text-amber-300 border border-amber-800' : 'bg-sky-950 text-sky-300 border border-sky-800'
+                              }`}>
+                                {ability.type}
+                              </span>
+                              {ability.type === 'active' && ability.cost && (
+                                <span className="text-[9px] px-1.5 py-0.2 rounded font-mono bg-zinc-850 text-zinc-300 border border-zinc-700">
+                                  {ability.cost.replace('_', ' ').toUpperCase()}
+                                </span>
+                              )}
+                              {ability.activationTiming && (
+                                <span className="text-[9px] px-1.5 py-0.2 rounded font-mono bg-zinc-900 text-amber-400 border border-zinc-800">
+                                  {ability.activationTiming.replace('_', ' ').toUpperCase()}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[11px] text-zinc-300 mt-1 line-clamp-2">
+                              {ability.effect}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center space-x-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditAbility(idx)}
+                            className="p-1.5 text-zinc-400 hover:text-amber-400 hover:bg-zinc-800 rounded transition cursor-pointer"
+                            title="Edit Ability"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteAbility(idx)}
+                            className="p-1.5 text-zinc-400 hover:text-rose-400 hover:bg-zinc-800 rounded transition cursor-pointer"
+                            title="Delete Ability"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Description */}
@@ -719,6 +995,15 @@ export const UnitCreatorModal: React.FC<UnitCreatorModalProps> = ({
             <span>Save Unit & Token</span>
           </button>
         </div>
+
+        {/* Ability Editor Sub-Modal */}
+        <AbilityEditorModal
+          isOpen={isAbilityModalOpen}
+          onClose={() => setIsAbilityModalOpen(false)}
+          onSaveAbility={handleSaveAbility}
+          initialAbility={editingAbilityIndex !== null ? abilities[editingAbilityIndex] : null}
+          contextType="unit"
+        />
       </div>
     </div>
   );

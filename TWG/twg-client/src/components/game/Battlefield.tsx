@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Swords, Shield, Compass, Sparkles, AlertTriangle, Dice6, 
   RotateCcw, Trophy, Check, ArrowRight, Zap, Target, Flame, Eye,
-  Layers, ChevronRight, RefreshCw, X, Play, Move, ZoomIn, ZoomOut,
+  Layers, ChevronRight, ChevronLeft, ChevronUp, ChevronDown, RefreshCw, X, Play, Move, ZoomIn, ZoomOut,
   Maximize2, Send, MessageSquare, BookOpen, Volume2, Settings,
   HelpCircle, UserCheck, Plus, Circle, Box, Truck, UserPlus, UserMinus,
   Users, Boxes, FolderOpen, Tag, MapPin
@@ -10,7 +10,8 @@ import {
 import confetti from 'canvas-confetti';
 import { 
   Unit, Phase, Card, POI, SpecialTile, GameEvent, 
-  CombatLogEntry, GameState, WorldPoint, FormationType, BattleMap, Token 
+  CombatLogEntry, GameState, WorldPoint, FormationType, BattleMap, Token,
+  UnitAbility, CardTheme, CardRarity 
 } from '../../types/game';
 import { ArmyRoster } from '../../types/army';
 import { DEFAULT_POIS, DEFAULT_SPECIAL_TILES, GAME_EVENTS, GENERAL_CARDS, FACTION_CARDS } from '../../data/gameContent';
@@ -20,131 +21,244 @@ import { checkAndTriggerEvents } from '../../engine/eventsEngine';
 import { StorageService, PRESET_MAPS } from '../../services/storageService';
 import { TabletopCanvas } from './TabletopCanvas';
 import { vttDragBridge } from '../../services/dragBridge';
+import { vfxDispatcher } from '../../services/audioVfxService';
+import { FactionLogo } from '../common/FactionLogo';
 import { 
   gridDistance, worldDistance, moveUnit, setUnitFormation, 
   syncUnitTokens, applyDamageToTokens, isInsideDeploymentZone, 
   canUnitDeployOutsideZone, DEFAULT_GRID_SIZE,
-  canAttachLeader, canEmbark, setUnitMutualState, getUnitBaseDimensions,
+  canAttachLeader, canEmbark, canEmbarkWithDistance, findValidDisembarkPosition,
+  validateNormalMovementEnemyProximity, setUnitMutualState, getUnitBaseDimensions,
   validateUnitCoherency, moveIndividualToken, checkPathCrossesStructure,
   fitFormationToZone, checkUniversalTokenCollisions, validateModelMovementDistance,
-  getUnitCollisionRadius
+  getUnitCollisionRadius, isUnitInShootingRange, isUnitInMeleeRange,
+  getUnitsModelDistance, findValidMovePositionForBot, findNearestNonOverlappingPosition,
+  checkPathCrossesUnits, validateDisembarkPlacement
 } from '../../engine/formationEngine';
 
 interface BattlefieldProps {
   customRoster?: ArmyRoster | null;
   boardSkin: string;
+  onReturnHome?: () => void;
 }
 
 const PHASES_ORDER: Phase[] = ['Deployment', 'Command', 'Movement', 'Shooting', 'Charge', 'Fight'];
 
-export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSkin }) => {
-  const [gameState, setGameState] = useState<GameState>(() => {
-    const allTemplates = StorageService.getUnitTemplates();
+const CARD_THEME_STYLES: Record<CardTheme, {
+  bg: string;
+  border: string;
+  glow: string;
+  headerText: string;
+  accentText: string;
+  ribbonBg: string;
+  buttonBg: string;
+  innerShadow: string;
+}> = {
+  gold: {
+    bg: 'bg-gradient-to-b from-[#2a1d09] via-[#171309] to-[#0c0a07]',
+    border: 'border-amber-400',
+    glow: 'shadow-[0_0_20px_rgba(245,158,11,0.35)]',
+    headerText: 'text-amber-100',
+    accentText: 'text-amber-300',
+    ribbonBg: 'bg-amber-950/80 border-amber-500/50',
+    buttonBg: 'bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 text-black',
+    innerShadow: 'from-amber-500/10'
+  },
+  crimson: {
+    bg: 'bg-gradient-to-b from-[#330c14] via-[#1a080c] to-[#0d0406]',
+    border: 'border-rose-500',
+    glow: 'shadow-[0_0_20px_rgba(244,63,94,0.35)]',
+    headerText: 'text-rose-100',
+    accentText: 'text-rose-300',
+    ribbonBg: 'bg-rose-950/80 border-rose-500/50',
+    buttonBg: 'bg-gradient-to-r from-rose-600 via-rose-500 to-rose-600 text-white',
+    innerShadow: 'from-rose-500/10'
+  },
+  amethyst: {
+    bg: 'bg-gradient-to-b from-[#280c36] via-[#15071d] to-[#0a030e]',
+    border: 'border-purple-400',
+    glow: 'shadow-[0_0_20px_rgba(168,85,247,0.35)]',
+    headerText: 'text-purple-100',
+    accentText: 'text-purple-300',
+    ribbonBg: 'bg-purple-950/80 border-purple-500/50',
+    buttonBg: 'bg-gradient-to-r from-purple-600 via-purple-500 to-purple-600 text-white',
+    innerShadow: 'from-purple-500/10'
+  },
+  sapphire: {
+    bg: 'bg-gradient-to-b from-[#0b2238] via-[#071320] to-[#040b12]',
+    border: 'border-sky-400',
+    glow: 'shadow-[0_0_20px_rgba(56,189,248,0.35)]',
+    headerText: 'text-sky-100',
+    accentText: 'text-sky-300',
+    ribbonBg: 'bg-sky-950/80 border-sky-500/50',
+    buttonBg: 'bg-gradient-to-r from-sky-500 via-sky-400 to-sky-500 text-black',
+    innerShadow: 'from-sky-500/10'
+  },
+  emerald: {
+    bg: 'bg-gradient-to-b from-[#092c1c] via-[#05180f] to-[#030d08]',
+    border: 'border-emerald-400',
+    glow: 'shadow-[0_0_20px_rgba(52,211,153,0.35)]',
+    headerText: 'text-emerald-100',
+    accentText: 'text-emerald-300',
+    ribbonBg: 'bg-emerald-950/80 border-emerald-500/50',
+    buttonBg: 'bg-gradient-to-r from-emerald-500 via-emerald-400 to-emerald-500 text-black',
+    innerShadow: 'from-emerald-500/10'
+  },
+  void: {
+    bg: 'bg-gradient-to-b from-[#180828] via-[#0d0416] to-[#06020c]',
+    border: 'border-fuchsia-400',
+    glow: 'shadow-[0_0_20px_rgba(232,121,249,0.35)]',
+    headerText: 'text-fuchsia-100',
+    accentText: 'text-fuchsia-300',
+    ribbonBg: 'bg-fuchsia-950/80 border-fuchsia-500/50',
+    buttonBg: 'bg-gradient-to-r from-fuchsia-600 via-fuchsia-500 to-fuchsia-600 text-white',
+    innerShadow: 'from-fuchsia-500/10'
+  },
+  steel: {
+    bg: 'bg-gradient-to-b from-[#222730] via-[#14171d] to-[#0b0c0f]',
+    border: 'border-zinc-400',
+    glow: 'shadow-[0_0_20px_rgba(161,161,170,0.35)]',
+    headerText: 'text-zinc-100',
+    accentText: 'text-zinc-300',
+    ribbonBg: 'bg-zinc-800/80 border-zinc-500/50',
+    buttonBg: 'bg-gradient-to-r from-zinc-300 via-zinc-100 to-zinc-300 text-black',
+    innerShadow: 'from-zinc-500/10'
+  }
+};
 
-    const ensureValidLives = (u: any): Unit => {
-      const lives = Math.max(1, Number(u.stats?.lives) || 5);
-      const modelCount = Math.max(1, Number(u.stats?.modelCount) || 1);
-      return {
-        ...u,
-        tokenImageUrl: u.tokenImageUrl,
-        stats: {
-          ...u.stats,
-          lives,
-          maxLives: Math.max(lives, Number(u.stats?.maxLives) || lives),
-          modelCount,
-          hpPerModel: Math.max(1, Math.floor(lives / modelCount))
-        }
-      };
-    };
+const CARD_RARITY_BADGES: Record<CardRarity, { label: string; badge: string }> = {
+  Common: { label: 'Common', badge: 'bg-zinc-800/90 text-zinc-300 border-zinc-650' },
+  Uncommon: { label: 'Uncommon', badge: 'bg-emerald-950/90 text-emerald-300 border-emerald-600' },
+  Rare: { label: 'Rare', badge: 'bg-sky-950/90 text-sky-300 border-sky-500' },
+  Epic: { label: 'Epic', badge: 'bg-purple-950/90 text-purple-200 border-purple-400' },
+  Legendary: { label: 'Legendary', badge: 'bg-gradient-to-r from-amber-600 to-yellow-500 text-black font-black border-amber-300 shadow-[0_0_8px_rgba(251,191,36,0.6)]' }
+};
 
-    // Player 1 Units (Reserves)
-    const baseP1 = customRoster 
-      ? customRoster.units.map(u => syncUnitTokens(ensureValidLives({ ...u, owner: 'player1' as const, position: null, formation: 'circle' as const, transportCapacity: u.type === 'Vehicle' ? (u.transportCapacity || 1) : undefined })))
-      : allTemplates.filter(u => u.factionId === 'crimson_empire').slice(0, 5).map((u, i) => syncUnitTokens(ensureValidLives({
-          ...u,
-          id: `p1_unit_${i}`,
-          owner: 'player1' as const,
-          position: null,
-          formation: 'circle' as const,
-          transportCapacity: u.type === 'Vehicle' ? 1 : undefined
-        })));
+export const createInitialGameState = (customRoster?: ArmyRoster | null): GameState => {
+  const allTemplates = StorageService.getUnitTemplates();
 
-    // Player 2 Units (Reserves)
-    const baseP2 = allTemplates.filter(u => u.factionId === 'daughters_astraea').slice(0, 5).map((u, i) => syncUnitTokens(ensureValidLives({
-      ...u,
-      id: `p2_unit_${i}`,
-      owner: 'player2' as const,
-      position: null,
-      formation: 'circle' as const,
-      transportCapacity: u.type === 'Vehicle' ? 1 : undefined
-    })));
-
-    // Coin flip for deployment phase (alternating 1 unit per turn)
-    const deploymentCoinFlip: 'player1' | 'player2' = Math.random() >= 0.5 ? 'player1' : 'player2';
-
-    // Initiative roll (Section 2)
-    const p1InitRoll = Math.floor(Math.random() * 6) + 1;
-    const p2InitRoll = Math.floor(Math.random() * 6) + 1;
-    const initWinner: 'player1' | 'player2' = p1InitRoll >= p2InitRoll ? 'player1' : 'player2';
-
-    const p1AllCards = [...GENERAL_CARDS, ...(FACTION_CARDS['crimson_empire'] || [])];
-    const p2AllCards = [...GENERAL_CARDS, ...(FACTION_CARDS['daughters_astraea'] || [])];
-
-    const initialMaps = StorageService.getMaps();
-    const initialMap = initialMaps[0] || PRESET_MAPS[0];
-    const initialPois: POI[] = initialMap && initialMap.objectives.length > 0 ? initialMap.objectives.map(obj => ({
-      id: obj.id,
-      name: obj.name,
-      type: 'Basic' as const,
-      x: obj.x,
-      y: obj.y,
-      radius: obj.radius,
-      multiplier: obj.pointsValue
-    })) : DEFAULT_POIS;
-
+  const ensureValidLives = (u: any): Unit => {
+    const lives = Math.max(1, Number(u.stats?.lives) || 5);
+    const modelCount = Math.max(1, Number(u.stats?.modelCount) || 1);
     return {
-      matchId: `match_${Date.now()}`,
-      round: 1,
-      phase: 'Deployment',
-      initiativeWinner: initWinner,
-      activePlayer: deploymentCoinFlip,
-      deployingPlayer: deploymentCoinFlip,
-      deploymentCoinFlipWinner: deploymentCoinFlip,
-      player1Score: 0,
-      player2Score: 0,
-      player1Kills: 0,
-      player2Kills: 0,
-      gridWidth: 24,
-      gridHeight: 16,
-      currentMap: initialMap,
-      pois: initialPois,
-      specialTiles: DEFAULT_SPECIAL_TILES,
-      units: [...baseP1, ...baseP2],
-      player1CardPool: p1AllCards,
-      player1ActiveCards: p1AllCards.slice(0, 4),
-      player2CardPool: p2AllCards,
-      player2ActiveCards: p2AllCards.slice(0, 4),
-      activeEvents: [...GAME_EVENTS],
-      eventHistory: [],
-      isGameOver: false,
-      winner: null,
-      logs: [
-        {
-          id: 'log_0',
-          round: 1,
-          phase: 'Deployment',
-          source: 'System',
-          message: `Match Initialized! 🪙 Deployment Coin Flip: ${deploymentCoinFlip === 'player1' ? 'Player 1 (West)' : 'Player 2 (East)'} won and deploys first! Players alternate placing 1 unit per turn.`,
-          type: 'info',
-          timestamp: new Date().toLocaleTimeString()
-        }
-      ],
-      player1VotedEnd: false,
-      player2VotedEnd: false,
-      player1CP: 3,
-      player2CP: 3
+      ...u,
+      tokenImageUrl: u.tokenImageUrl,
+      stats: {
+        ...u.stats,
+        lives,
+        maxLives: Math.max(lives, Number(u.stats?.maxLives) || lives),
+        modelCount,
+        hpPerModel: Math.max(1, Math.floor(lives / modelCount))
+      }
     };
-  });
+  };
+
+  // Player 1 Units (Reserves)
+  const baseP1 = customRoster 
+    ? customRoster.units.map(u => syncUnitTokens(ensureValidLives({ ...u, owner: 'player1' as const, position: null, formation: 'circle' as const, transportCapacity: u.type === 'Vehicle' ? (u.transportCapacity || 1) : undefined })))
+    : allTemplates.filter(u => u.factionId === 'crimson_empire').slice(0, 5).map((u, i) => syncUnitTokens(ensureValidLives({
+        ...u,
+        id: `p1_unit_${i}`,
+        owner: 'player1' as const,
+        position: null,
+        formation: 'circle' as const,
+        transportCapacity: u.type === 'Vehicle' ? 1 : undefined
+      })));
+
+  // Player 2 Units (Reserves)
+  const baseP2 = allTemplates.filter(u => u.factionId === 'daughters_astraea').slice(0, 5).map((u, i) => syncUnitTokens(ensureValidLives({
+    ...u,
+    id: `p2_unit_${i}`,
+    owner: 'player2' as const,
+    position: null,
+    formation: 'circle' as const,
+    transportCapacity: u.type === 'Vehicle' ? 1 : undefined
+  })));
+
+  // Coin flip for deployment phase (alternating 1 unit per turn)
+  const deploymentCoinFlip: 'player1' | 'player2' = Math.random() >= 0.5 ? 'player1' : 'player2';
+
+  // Initiative roll (Section 2)
+  const p1InitRoll = Math.floor(Math.random() * 6) + 1;
+  const p2InitRoll = Math.floor(Math.random() * 6) + 1;
+  const initWinner: 'player1' | 'player2' = p1InitRoll >= p2InitRoll ? 'player1' : 'player2';
+
+  const p1AllCards = [...GENERAL_CARDS, ...(FACTION_CARDS['crimson_empire'] || [])];
+  const p2AllCards = [...GENERAL_CARDS, ...(FACTION_CARDS['daughters_astraea'] || [])];
+
+  const initialMaps = StorageService.getMaps();
+  const initialMap = initialMaps[0] || PRESET_MAPS[0];
+  const initialPois: POI[] = initialMap && initialMap.objectives.length > 0 ? initialMap.objectives.map(obj => ({
+    id: obj.id,
+    name: obj.name,
+    type: (obj.name.toLowerCase().includes('core') || obj.name.toLowerCase().includes('well') || (obj.pointsValue && obj.pointsValue >= 10)) ? 'Special' as const : 'Basic' as const,
+    x: obj.x,
+    y: obj.y,
+    radius: obj.radius || 70,
+    multiplier: (obj.name.toLowerCase().includes('core') || obj.name.toLowerCase().includes('well') || (obj.pointsValue && obj.pointsValue >= 10)) ? 2 : 1
+  })) : DEFAULT_POIS;
+
+  return {
+    matchId: `match_${Date.now()}`,
+    round: 1,
+    phase: 'Deployment',
+    initiativeWinner: initWinner,
+    activePlayer: deploymentCoinFlip,
+    deployingPlayer: deploymentCoinFlip,
+    deploymentCoinFlipWinner: deploymentCoinFlip,
+    player1Score: 0,
+    player2Score: 0,
+    player1Kills: 0,
+    player2Kills: 0,
+    gridWidth: 24,
+    gridHeight: 16,
+    currentMap: initialMap,
+    pois: initialPois,
+    specialTiles: DEFAULT_SPECIAL_TILES,
+    units: [...baseP1, ...baseP2],
+    player1CardPool: p1AllCards,
+    player1ActiveCards: p1AllCards.slice(0, 4),
+    player2CardPool: p2AllCards,
+    player2ActiveCards: p2AllCards.slice(0, 4),
+    activeEvents: [...GAME_EVENTS],
+    eventHistory: [],
+    isGameOver: false,
+    winner: null,
+    logs: [
+      {
+        id: 'log_0',
+        round: 1,
+        phase: 'Deployment',
+        source: 'System',
+        message: `Match Initialized! 🪙 Deployment Coin Flip: ${deploymentCoinFlip === 'player1' ? 'Player 1 (West)' : 'Player 2 (East)'} won and deploys first! Players alternate placing 1 unit per turn.`,
+        type: 'info',
+        timestamp: new Date().toLocaleTimeString()
+      }
+    ],
+    player1VotedEnd: false,
+    player2VotedEnd: false,
+    player1CP: 3,
+    player2CP: 3
+  };
+};
+
+export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSkin, onReturnHome }) => {
+  const [gameState, setGameState] = useState<GameState>(() => createInitialGameState(customRoster));
+
+  // UI-003: Ability Cards Dock State
+  const [abilitiesDockOpen, setAbilitiesDockOpen] = useState<boolean>(false);
+  const [usedAbilitiesThisRound, setUsedAbilitiesThisRound] = useState<Record<string, number>>({});
+  const [usedAbilitiesThisGame, setUsedAbilitiesThisGame] = useState<Record<string, boolean>>({});
+
+  const handleRestartMatch = () => {
+    setGameState(createInitialGameState(customRoster));
+    setSelectedUnitId(null);
+    setTargetUnitId(null);
+    setRecentCombatResult(null);
+    setUsedAbilitiesThisRound({});
+    setUsedAbilitiesThisGame({});
+    setAbilitiesDockOpen(false);
+  };
 
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null);
   const [targetUnitId, setTargetUnitId] = useState<string | null>(null);
@@ -153,11 +267,20 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
   const [draggedUnitId, setDraggedUnitId] = useState<string | null>(null);
   
   // Slide-out drawers for Army Tray, Dice Tray, Command Phase, Strategic Reserves, and Embarked Units
-  const [armyTrayDrawerOpen, setArmyTrayDrawerOpen] = useState<boolean>(true);
+  // UI-004: Closed by default to keep tactical canvas clean and spacious
+  const [armyTrayDrawerOpen, setArmyTrayDrawerOpen] = useState<boolean>(false);
   const [diceDrawerOpen, setDiceDrawerOpen] = useState<boolean>(false);
   const [commandDrawerOpen, setCommandDrawerOpen] = useState<boolean>(false);
   const [reservesDrawerOpen, setReservesDrawerOpen] = useState<boolean>(false);
   const [embarkedDrawerOpen, setEmbarkedDrawerOpen] = useState<boolean>(false);
+
+  // UI-004: Right Sidebar collapse toggle (enables full-width tactical canvas)
+  const [showRightSidebar, setShowRightSidebar] = useState<boolean>(true);
+
+  // BUG-026: Deployment error toast & Bot action status indicators
+  const [deploymentErrorNotice, setDeploymentErrorNotice] = useState<string | null>(null);
+  const [isBotDeploying, setIsBotDeploying] = useState<boolean>(false);
+  const [isDeployStagingMinimized, setIsDeployStagingMinimized] = useState<boolean>(false);
 
   // Modals for Leader Attachment and Transport Embarking
   const [attachModalUnitId, setAttachModalUnitId] = useState<string | null>(null);
@@ -269,26 +392,25 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
     if (gameState.phase === 'Shooting') {
       if (selectedUnit.stats.range === 0 || selectedUnit.hasShot) return [];
-      return enemies.filter(e => {
-        const dist = gridDistance(selectedUnit.position!, e.position!, DEFAULT_GRID_SIZE);
-        return dist > 0 && dist <= selectedUnit.stats.range;
-      });
+      if (selectedUnit.attachedTo) {
+        const hostSquad = gameState.units.find(u => u.id === selectedUnit.attachedTo);
+        if (hostSquad && (hostSquad.stats.range === 0 || hostSquad.hasShot)) return [];
+      }
+      return enemies.filter(e => isUnitInShootingRange(selectedUnit, e, DEFAULT_GRID_SIZE));
     }
 
     if (gameState.phase === 'Charge') {
       if (selectedUnit.hasCharged) return [];
       return enemies.filter(e => {
-        const dist = gridDistance(selectedUnit.position!, e.position!, DEFAULT_GRID_SIZE);
-        return dist > 0.5 && dist <= selectedUnit.stats.mv;
+        const { minModelDistPx } = getUnitsModelDistance(selectedUnit, e);
+        const dist = minModelDistPx / DEFAULT_GRID_SIZE;
+        return dist > 0.3 && dist <= (selectedUnit.stats.mv + 0.3);
       });
     }
 
     if (gameState.phase === 'Fight') {
       if (selectedUnit.hasFought) return [];
-      return enemies.filter(e => {
-        const dist = gridDistance(selectedUnit.position!, e.position!, DEFAULT_GRID_SIZE);
-        return dist <= 1.8;
-      });
+      return enemies.filter(e => isUnitInMeleeRange(selectedUnit, e, DEFAULT_GRID_SIZE));
     }
 
     return [];
@@ -307,11 +429,11 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     const mapPois: POI[] = chosenMap && chosenMap.objectives.length > 0 ? chosenMap.objectives.map(obj => ({
       id: obj.id,
       name: obj.name,
-      type: 'Basic' as const,
+      type: (obj.name.toLowerCase().includes('core') || obj.name.toLowerCase().includes('well') || (obj.pointsValue && obj.pointsValue >= 10)) ? 'Special' as const : 'Basic' as const,
       x: obj.x,
       y: obj.y,
-      radius: obj.radius,
-      multiplier: obj.pointsValue
+      radius: obj.radius || 70,
+      multiplier: (obj.name.toLowerCase().includes('core') || obj.name.toLowerCase().includes('well') || (obj.pointsValue && obj.pointsValue >= 10)) ? 2 : 1
     })) : DEFAULT_POIS;
 
     // Pick Bot opponent army for Player 2 (matched points from an opposing faction)
@@ -432,7 +554,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     setSelectedUnitId(null);
     setTargetUnitId(null);
     setShowArmySelectionModal(false);
-    setArmyTrayDrawerOpen(true);
+    setArmyTrayDrawerOpen(false);
 
     setBotSelectedNotice(`Bot selected: "${botRoster.name}" (${botRoster.totalPoints} pts)`);
     setTimeout(() => setBotSelectedNotice(null), 4500);
@@ -600,11 +722,16 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     }
   };
 
-  // Detach a Leader from a squad
+  // Detach a Leader from a squad (Strictly Deployment Phase only - BUG-020)
   const handleDetachLeader = (bodyguardId: string, leaderId: string) => {
     const bodyguard = gameState.units.find(u => u.id === bodyguardId);
     const leader = gameState.units.find(u => u.id === leaderId);
     if (!bodyguard || !leader) return;
+
+    if (gameState.phase !== 'Deployment') {
+      addLog('⛔ Detachment Locked: Leaders can only be attached or detached during Deployment Phase.', 'info');
+      return;
+    }
 
     const spawnPos = bodyguard.position ? { x: bodyguard.position.x + 60, y: bodyguard.position.y } : { x: 200, y: 200 };
     const updatedLeader = moveUnit(setUnitMutualState(leader, 'onBoard', { position: spawnPos }), spawnPos);
@@ -626,31 +753,61 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     setSelectedUnitId(leader.id);
   };
 
-  // Embark an Infantry Squad into a Transport Vehicle
+  // Embark an Infantry Squad into a Transport Vehicle (RULE-001: Once per phase restriction + Fight phase exception)
   const handleEmbarkUnit = (infantryId: string, vehicleId: string) => {
     const infantry = gameState.units.find(u => u.id === infantryId);
     const vehicle = gameState.units.find(u => u.id === vehicleId);
     if (!infantry || !vehicle) return;
 
-    if (gameState.phase !== 'Deployment' && gameState.phase !== 'Movement') {
-      addLog('Units can only embark into transport vehicles during Deployment or Movement Phase.', 'info');
+    // RULE-001: Cannot embark if already embarked in this phase
+    if (infantry.lastEmbarkPhase === gameState.phase && infantry.lastEmbarkRound === gameState.round) {
+      addLog(`⛔ Action Restricted: ${infantry.name} has already embarked in this phase.`, 'info');
+      return;
+    }
+
+    // RULE-001: Cannot embark if already disembarked in this phase (unless Fight phase exception)
+    const isFightReembark = gameState.phase === 'Fight' && infantry.lastDisembarkRound === gameState.round && infantry.lastDisembarkPhase !== 'Fight';
+    if (infantry.lastDisembarkPhase === gameState.phase && infantry.lastDisembarkRound === gameState.round) {
+      addLog(`⛔ Action Restricted: ${infantry.name} cannot embark and disembark in the same phase!`, 'info');
+      return;
+    }
+
+    if (gameState.phase !== 'Deployment' && gameState.phase !== 'Movement' && !isFightReembark) {
+      addLog('Units can only embark during Deployment or Movement Phase (or re-embark in Fight Phase if disembarked earlier this round).', 'info');
       return;
     }
 
     const currentEmbarkedUnits = gameState.units.filter(u => u.embarkedIn === vehicle.id);
     const currentEmbarkedModels = currentEmbarkedUnits.reduce((acc, u) => acc + (u.stats.modelCount || 1) + (u.attachedUnits?.length || 0), 0);
-    if (!canEmbark(infantry, vehicle, currentEmbarkedModels)) {
+    
+    // Proximity check if unit is already placed on the battlefield
+    if (infantry.position && vehicle.position) {
+      const distCheck = canEmbarkWithDistance(infantry, vehicle, currentEmbarkedModels, 150);
+      if (!distCheck.canEmbark) {
+        addLog(`⛔ Cannot Embark: ${distCheck.reason}`, 'event');
+        return;
+      }
+    } else if (!canEmbark(infantry, vehicle, currentEmbarkedModels)) {
       const maxCap = vehicle.carryCapacity ?? vehicle.stats?.carryCapacity ?? 6;
       addLog(`Cannot embark ${infantry.name} into ${vehicle.name}: vehicle capacity exceeded (Current: ${currentEmbarkedModels}/${maxCap} models).`, 'info');
       return;
     }
 
-    const updatedInfantry = setUnitMutualState(infantry, 'embarked', { vehicleId: vehicle.id });
+    const updatedInfantry: Unit = {
+      ...setUnitMutualState(infantry, 'embarked', { vehicleId: vehicle.id }),
+      lastEmbarkPhase: gameState.phase,
+      lastEmbarkRound: gameState.round
+    };
+
     // Also embark any attached leaders with the bodyguard squad! (BUG-010)
     let updatedUnits = gameState.units.map(u => {
       if (u.id === infantryId) return updatedInfantry;
       if (infantry.attachedUnits && infantry.attachedUnits.includes(u.id)) {
-        return setUnitMutualState(u, 'embarked', { vehicleId: vehicle.id });
+        return {
+          ...setUnitMutualState(u, 'embarked', { vehicleId: vehicle.id }),
+          lastEmbarkPhase: gameState.phase,
+          lastEmbarkRound: gameState.round
+        };
       }
       return u;
     });
@@ -669,11 +826,13 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     }
   };
 
-  // Disembark an Infantry Squad from a Transport Vehicle (Movement Phase)
+  // Disembark an Infantry Squad from a Transport Vehicle (RULE-001 & RULE-002: Staged free manual placement)
   const handleDisembarkUnit = (infantryId: string) => {
     const infantry = gameState.units.find(u => u.id === infantryId);
     if (!infantry || !infantry.embarkedIn) return;
     const vehicle = gameState.units.find(u => u.id === infantry.embarkedIn);
+    if (!vehicle) return;
+
     if (gameState.phase !== 'Movement') {
       addLog('Units can only disembark during Movement Phase.', 'info');
       return;
@@ -683,28 +842,43 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       return;
     }
 
-    const basePos = vehicle?.position || { x: 300, y: 300 };
-    const disembarkPos = { x: basePos.x + 55, y: basePos.y };
+    // RULE-001: Once per phase restriction
+    if (infantry.lastDisembarkPhase === gameState.phase && infantry.lastDisembarkRound === gameState.round) {
+      addLog(`⛔ Action Restricted: ${infantry.name} has already disembarked in this phase.`, 'info');
+      return;
+    }
+    if (infantry.lastEmbarkPhase === gameState.phase && infantry.lastEmbarkRound === gameState.round) {
+      addLog(`⛔ Action Restricted: ${infantry.name} cannot embark and disembark in the same phase!`, 'info');
+      return;
+    }
 
-    // Disembark both infantry and its attached leaders (BUG-010)
+    // Initial drop point adjacent to vehicle footprint
+    const disembarkPos = findValidDisembarkPosition(infantry, vehicle, gameState.units) || {
+      x: vehicle.position ? vehicle.position.x + 60 : 600,
+      y: vehicle.position ? vehicle.position.y : 400
+    };
+
+    // Staging the squad for free manual positioning (RULE-002)
     let updatedUnits = gameState.units.map(u => {
       if (infantry.attachedUnits && infantry.attachedUnits.includes(u.id)) {
         return {
           ...setUnitMutualState(u, 'attached', { leaderTargetId: infantry.id, position: disembarkPos }),
-          hasMoved: true,
-          position: disembarkPos
+          position: disembarkPos,
+          isPendingDisembarkConfirm: true,
+          disembarkingFromVehicleId: vehicle.id
         };
       }
       return u;
     });
 
-    const disembarked = moveUnit({ 
+    const staged = moveUnit({ 
       ...setUnitMutualState(infantry, 'onBoard', { position: disembarkPos }), 
-      hasMoved: true 
+      isPendingDisembarkConfirm: true,
+      disembarkingFromVehicleId: vehicle.id,
+      pendingOriginalPosition: null
     }, disembarkPos, updatedUnits);
 
-    updatedUnits = updatedUnits.map(u => u.id === infantryId ? disembarked : u);
-    // Ensure tokens are synced with attached leader
+    updatedUnits = updatedUnits.map(u => u.id === infantryId ? staged : u);
     updatedUnits = updatedUnits.map(u => u.id === infantryId ? syncUnitTokens(u, updatedUnits) : u);
 
     setGameState(prev => ({
@@ -712,7 +886,106 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       units: updatedUnits
     }));
     setSelectedUnitId(infantry.id);
-    addLog(`🛡️ ${infantry.name}${infantry.attachedUnits?.length ? ' (with Commander)' : ''} disembarked from ${vehicle ? vehicle.name : 'transport'} at (${disembarkPos.x}px, ${disembarkPos.y}px)! (Counts as moved)`, 'event');
+    addLog(`🛡️ ${infantry.name} disembarking from ${vehicle.name}! Models staged on board. Drag models freely (within 3" of transport, in 2" coherency), then click Confirm Disembark.`, 'event');
+  };
+
+  // Confirm staged disembark placement (RULE-002)
+  const handleConfirmDisembark = (unitId: string) => {
+    const unit = gameState.units.find(u => u.id === unitId);
+    if (!unit || !unit.isPendingDisembarkConfirm || !unit.disembarkingFromVehicleId) return;
+    const vehicle = gameState.units.find(u => u.id === unit.disembarkingFromVehicleId);
+    if (!vehicle) return;
+
+    // Validate placement against RULE-002:
+    // (a) 2" coherency is maintained
+    // (b) all models within 3" of vehicle
+    // (c) no base overlaps exist with vehicle or other units
+    const validation = validateDisembarkPlacement(unit, vehicle, gameState.units, 150, 100);
+    if (!validation.valid) {
+      addLog(`⛔ Disembark Placement Invalid: ${validation.reason}`, 'event');
+      if (validation.offendingTokenIds && validation.offendingTokenIds.length > 0) {
+        setGameState(prev => ({
+          ...prev,
+          units: prev.units.map(u => u.id === unitId ? {
+            ...u,
+            tokens: (u.tokens || []).map(t => ({
+              ...t,
+              offendingCoherency: validation.offendingTokenIds!.includes(t.id)
+            }))
+          } : u)
+        }));
+      }
+      return;
+    }
+
+    // Mark as confirmed and moved
+    let updatedUnits = gameState.units.map(u => {
+      if (u.id === unitId) {
+        return {
+          ...u,
+          isPendingDisembarkConfirm: false,
+          disembarkingFromVehicleId: null,
+          hasMoved: true,
+          lastDisembarkPhase: gameState.phase,
+          lastDisembarkRound: gameState.round,
+          tokens: (u.tokens || []).map(t => ({
+            ...t,
+            offendingCoherency: false,
+            turnStartPos: { x: t.x, y: t.y }
+          }))
+        };
+      }
+      if (unit.attachedUnits && unit.attachedUnits.includes(u.id)) {
+        return {
+          ...u,
+          isPendingDisembarkConfirm: false,
+          disembarkingFromVehicleId: null,
+          hasMoved: true,
+          lastDisembarkPhase: gameState.phase,
+          lastDisembarkRound: gameState.round
+        };
+      }
+      return u;
+    });
+
+    setGameState(prev => ({
+      ...prev,
+      units: updatedUnits
+    }));
+    addLog(`✅ Disembark Confirmed! ${unit.name} successfully deployed outside ${vehicle.name} with full coherency and zero overlap. (Counts as moved)`, 'event');
+  };
+
+  // Cancel staged disembark and return inside vehicle (RULE-002)
+  const handleCancelDisembark = (unitId: string) => {
+    const unit = gameState.units.find(u => u.id === unitId);
+    if (!unit || !unit.isPendingDisembarkConfirm || !unit.disembarkingFromVehicleId) return;
+    const vehicleId = unit.disembarkingFromVehicleId;
+    const vehicle = gameState.units.find(u => u.id === vehicleId);
+
+    let updatedUnits = gameState.units.map(u => {
+      if (u.id === unitId) {
+        return {
+          ...setUnitMutualState(u, 'embarked', { vehicleId }),
+          isPendingDisembarkConfirm: false,
+          disembarkingFromVehicleId: null
+        };
+      }
+      if (unit.attachedUnits && unit.attachedUnits.includes(u.id)) {
+        return {
+          ...setUnitMutualState(u, 'embarked', { vehicleId }),
+          isPendingDisembarkConfirm: false,
+          disembarkingFromVehicleId: null
+        };
+      }
+      return u;
+    });
+
+    setGameState(prev => ({
+      ...prev,
+      units: updatedUnits
+    }));
+    setSelectedUnitId(vehicleId);
+    addLog(`↩ Disembark cancelled. ${unit.name} returned inside transport ${vehicle?.name || 'vehicle'}.`, 'info');
   };
 
   // VTT Tabletop Canvas Movement Handler
@@ -723,7 +996,10 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     if (gameState.phase === 'Deployment') {
       const currentDeployer = gameState.deployingPlayer || gameState.activePlayer;
       if (unit.owner !== currentDeployer) {
-        addLog(`It is ${currentDeployer === 'player1' ? 'Player 1' : 'Player 2'}'s turn to deploy!`, 'info');
+        const msg = `⚠️ It is ${currentDeployer === 'player1' ? 'Player 1' : 'Player 2 (Bot)'}'s turn to deploy!`;
+        addLog(msg, 'info');
+        setDeploymentErrorNotice(msg);
+        setTimeout(() => setDeploymentErrorNotice(null), 3500);
         return;
       }
 
@@ -736,10 +1012,10 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       const inZone = isInsideDeploymentZone(newPos, unit.owner, 1200, zoneDepth);
 
       if (!canBypass && !inZone) {
-        addLog(
-          `⛔ Placement Rejected! ${unit.name} cannot deploy outside your designated deployment zone (${unit.owner === 'player1' ? `West: x ≤ ${p1Zone}px` : `East: x ≥ ${1200 - p2Zone}px`}). (Requires DEPLOY_OUTSIDE_ZONE trait)`,
-          'info'
-        );
+        const msg = `⛔ Placement Rejected! ${unit.name} cannot deploy outside your designated deployment zone (${unit.owner === 'player1' ? `West: x ≤ ${p1Zone}px` : `East: x ≥ ${1200 - p2Zone}px`}).`;
+        addLog(msg, 'info');
+        setDeploymentErrorNotice(msg);
+        setTimeout(() => setDeploymentErrorNotice(null), 4000);
         return;
       }
 
@@ -761,7 +1037,10 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
         unit.id
       );
       if (collisionCheck.hasCollision) {
-        addLog(`⛔ Placement Rejected! Model base overlaps with ${collisionCheck.collidingUnitName}! (Tangents allowed, no intersections).`, 'info');
+        const msg = `⛔ Placement Rejected! Model base overlaps with ${collisionCheck.collidingUnitName}!`;
+        addLog(msg, 'info');
+        setDeploymentErrorNotice(msg);
+        setTimeout(() => setDeploymentErrorNotice(null), 4000);
         return;
       }
 
@@ -826,10 +1105,24 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
         pendingOriginalTokens: pendingOrigTokens
       }, newPos, gameState.units);
 
+      // 1" Enemy Proximity Check (BUG-019: Cannot end within 1" / 50px of an enemy model)
+      const proxCheck = validateNormalMovementEnemyProximity(unit, movedUnit.tokens || [], gameState.units, 50);
+      if (!proxCheck.valid) {
+        addLog(`⛔ Movement Blocked: Normal movement cannot end within 1" (50px) of enemy ${proxCheck.offendingEnemyUnit?.name}! Only a Charge move can enter Engagement Range.`, 'event');
+        return;
+      }
+
       // Universal Collision Check (No model base overlap, tangents permitted)
       const collisionCheck = checkUniversalTokenCollisions(movedUnit.tokens || [], gameState.units, unit.id);
       if (collisionCheck.hasCollision) {
         addLog(`⛔ Movement Blocked: Base overlap with ${collisionCheck.collidingUnitName}!`, 'info');
+        return;
+      }
+
+      // Swept path collision check (BUG-024): Cannot cross through other units unless FLY
+      const pathCheckUnits = checkPathCrossesUnits(unit, originPos, newPos, gameState.units);
+      if (pathCheckUnits.hasCollision) {
+        addLog(`⛔ Movement Blocked! ${pathCheckUnits.reason || 'Path cuts through another unit.'} (Units cannot move through other models without FLY).`, 'event');
         return;
       }
 
@@ -862,13 +1155,71 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     }
   };
 
-  // Move Individual Token Model within a Squad
+  // Move Individual Token Model within a Squad (Deployment Manual Mode & Movement Phase)
   const handleMoveIndividualModel = (unitId: string, tokenId: string, newWorldPos: WorldPoint) => {
     const unit = gameState.units.find(u => u.id === unitId);
     if (!unit) return;
 
+    // Support Manual Placement Mode during Deployment Phase (BUG-013)
+    if (gameState.phase === 'Deployment') {
+      const currentDeployer = gameState.deployingPlayer || gameState.activePlayer;
+      if (unit.owner !== currentDeployer) {
+        const msg = `⚠️ It is ${currentDeployer === 'player1' ? 'Player 1' : 'Player 2 (Bot)'}'s turn to deploy!`;
+        addLog(msg, 'info');
+        setDeploymentErrorNotice(msg);
+        setTimeout(() => setDeploymentErrorNotice(null), 3500);
+        return;
+      }
+
+      const p1Zone = gameState.currentMap?.deploymentZones.player1.maxX ?? 200;
+      const p2Zone = gameState.currentMap ? (1200 - gameState.currentMap.deploymentZones.player2.minX) : 200;
+      const zoneDepth = unit.owner === 'player1' ? p1Zone : p2Zone;
+
+      const canBypass = canUnitDeployOutsideZone(unit);
+      const inZone = isInsideDeploymentZone(newWorldPos, unit.owner, 1200, zoneDepth);
+
+      if (!canBypass && !inZone) {
+        const msg = `⛔ Placement Rejected! Model cannot deploy outside your designated deployment zone!`;
+        addLog(msg, 'info');
+        setDeploymentErrorNotice(msg);
+        setTimeout(() => setDeploymentErrorNotice(null), 4000);
+        return;
+      }
+
+      const tokenToMove = unit.tokens?.find(t => t.id === tokenId);
+      if (tokenToMove) {
+        const candidateTok = { ...tokenToMove, x: newWorldPos.x, y: newWorldPos.y };
+        const colCheck = checkUniversalTokenCollisions([candidateTok], gameState.units, unit.id, tokenId);
+        if (colCheck.hasCollision) {
+          const msg = `⛔ Placement Rejected: Model base overlaps with ${colCheck.collidingUnitName}!`;
+          addLog(msg, 'info');
+          setDeploymentErrorNotice(msg);
+          setTimeout(() => setDeploymentErrorNotice(null), 4000);
+          return;
+        }
+      }
+
+      const updatedUnit = moveIndividualToken(unit, tokenId, newWorldPos);
+      let updatedUnits = gameState.units.map(u => u.id === unitId ? { ...updatedUnit, isPendingDeploymentConfirm: true } : u);
+
+      if (unit.attachedUnits && unit.attachedUnits.length > 0) {
+        const leaderTok = updatedUnit.tokens?.find(t => t.isLeaderToken);
+        const leaderPos = leaderTok ? { x: leaderTok.x, y: leaderTok.y } : updatedUnit.position;
+        updatedUnits = updatedUnits.map(u => {
+          if (unit.attachedUnits!.includes(u.id)) {
+            return { ...u, position: leaderPos, isPendingDeploymentConfirm: true };
+          }
+          return u;
+        });
+      }
+
+      setGameState(prev => ({ ...prev, units: updatedUnits }));
+      setSelectedUnitId(unit.id);
+      return;
+    }
+
     if (gameState.phase !== 'Movement') {
-      addLog('Individual model movement is only permitted during Movement Phase.', 'info');
+      addLog('Individual model movement is only permitted during Deployment or Movement Phase.', 'info');
       return;
     }
 
@@ -877,22 +1228,31 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       return;
     }
 
-    if (unit.hasMoved && !unit.isPendingMoveConfirm) {
+    if (unit.hasMoved && !unit.isPendingMoveConfirm && !unit.isPendingDisembarkConfirm) {
       addLog(`⛔ Action Rejected! ${unit.name} already moved this turn.`, 'info');
       return;
     }
 
-    // Anti-Relay Exploit Prevention: Validate movement against turnStartPos
-    const distCheck = validateModelMovementDistance(unit, tokenId, newWorldPos);
-    if (!distCheck.valid) {
-      addLog(`⛔ Exploit Blocked: ${distCheck.reason}`, 'info');
-      return;
+    if (!unit.isPendingDisembarkConfirm) {
+      // Anti-Relay Exploit Prevention: Validate movement against turnStartPos
+      const distCheck = validateModelMovementDistance(unit, tokenId, newWorldPos);
+      if (!distCheck.valid) {
+        addLog(`⛔ Exploit Blocked: ${distCheck.reason}`, 'info');
+        return;
+      }
     }
 
-    // Universal Collision Check (No model base overlap, tangents permitted)
+    // 1" Enemy proximity check (BUG-019)
     const tokenToMove = unit.tokens?.find(t => t.id === tokenId);
     if (tokenToMove) {
       const candidateTok = { ...tokenToMove, x: newWorldPos.x, y: newWorldPos.y };
+      const proxCheck = validateNormalMovementEnemyProximity(unit, [candidateTok], gameState.units, 50);
+      if (!proxCheck.valid) {
+        addLog(`⛔ Movement Blocked: Model cannot end within 1" (50px) of enemy ${proxCheck.offendingEnemyUnit?.name}! Only a Charge move can enter Engagement Range.`, 'event');
+        return;
+      }
+
+      // Universal Collision Check (No model base overlap, tangents permitted)
       const colCheck = checkUniversalTokenCollisions([candidateTok], gameState.units, unit.id, tokenId);
       if (colCheck.hasCollision) {
         addLog(`⛔ Movement Rejected: Model base overlaps with ${colCheck.collidingUnitName}! (Tangents permitted, no intersections).`, 'info');
@@ -905,7 +1265,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
     const updatedUnit = moveIndividualToken({
       ...unit,
-      isPendingMoveConfirm: true,
+      isPendingMoveConfirm: unit.isPendingDisembarkConfirm ? false : true,
       pendingOriginalPosition: pendingOrigPos,
       pendingOriginalTokens: pendingOrigTokens
     }, tokenId, newWorldPos);
@@ -1170,7 +1530,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     if (!unit || !unit.pendingOriginalPosition) return;
 
     const restoredPos = unit.pendingOriginalPosition;
-    const restoredTokens = (unit.pendingOriginalTokens || (unit.tokens || [])).map(t => ({
+    const restoredTokens = (unit.pendingOriginalTokens || (unit.tokens || [])).map((t: Token) => ({
       ...t,
       offendingCoherency: false
     }));
@@ -1302,16 +1662,42 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
     const currentDeployer = gameState.deployingPlayer || gameState.activePlayer;
     if (unit.owner !== currentDeployer) {
-      addLog(`It is ${currentDeployer === 'player1' ? 'Player 1' : 'Player 2'}'s turn to deploy!`, 'info');
+      const msg = `⚠️ It is ${currentDeployer === 'player1' ? 'Player 1' : 'Player 2 (Bot)'}'s turn to deploy!`;
+      addLog(msg, 'info');
+      setDeploymentErrorNotice(msg);
+      setTimeout(() => setDeploymentErrorNotice(null), 3500);
       return;
     }
 
-    // Check if another squad is already waiting for placement confirmation
+    // Auto-commit any previously placed unit that was pending confirmation if it passes coherency (BUG-026)
     const existingPending = gameState.units.find(u => u.owner === currentDeployer && u.isPendingDeploymentConfirm);
     if (existingPending && existingPending.id !== unitId) {
-      addLog(`⚠️ Please confirm placement of ${existingPending.name} before deploying another squad!`, 'info');
-      setSelectedUnitId(existingPending.id);
-      return;
+      const coherencyDistInches = gameState.currentMap?.coherencyDistanceInches || 2;
+      const coherencyDistPx = coherencyDistInches * 50;
+      const coherencyCheck = validateUnitCoherency(existingPending, coherencyDistPx);
+      if (coherencyCheck.isCoherent) {
+        const cleanTokens = (existingPending.tokens || []).map(t => ({
+          ...t,
+          offendingCoherency: false,
+          turnStartPos: { x: t.x, y: t.y }
+        }));
+        setGameState(prev => ({
+          ...prev,
+          units: prev.units.map(u => u.id === existingPending.id ? {
+            ...u,
+            tokens: cleanTokens,
+            isPendingDeploymentConfirm: false
+          } : u)
+        }));
+        addLog(`✅ Auto-confirmed placement of ${existingPending.name}.`, 'info');
+      } else {
+        const msg = `⚠️ Please adjust coherency for ${existingPending.name} before placing another squad!`;
+        addLog(msg, 'info');
+        setDeploymentErrorNotice(msg);
+        setTimeout(() => setDeploymentErrorNotice(null), 4000);
+        setSelectedUnitId(existingPending.id);
+        return;
+      }
     }
 
     // Leader-attachment warning popup on deployment
@@ -1342,10 +1728,10 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     const inZone = isInsideDeploymentZone(dropPos, unit.owner, 1200, zoneDepth);
 
     if (!canBypass && !inZone) {
-      addLog(
-        `⛔ Placement Rejected! ${unit.name} cannot deploy outside your designated deployment zone (${unit.owner === 'player1' ? `West: x ≤ ${p1Zone}px` : `East: x ≥ ${1200 - p2Zone}px`}).`,
-        'info'
-      );
+      const msg = `⛔ Placement Rejected! ${unit.name} cannot deploy outside your designated deployment zone (${unit.owner === 'player1' ? `West: x ≤ ${p1Zone}px` : `East: x ≥ ${1200 - p2Zone}px`}).`;
+      addLog(msg, 'info');
+      setDeploymentErrorNotice(msg);
+      setTimeout(() => setDeploymentErrorNotice(null), 4000);
       return;
     }
 
@@ -1365,7 +1751,10 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     // Universal Collision Check (No base overlap, tangents allowed)
     const collisionCheck = checkUniversalTokenCollisions(deployed.tokens || [], gameState.units, unit.id);
     if (collisionCheck.hasCollision) {
-      addLog(`⛔ Placement Blocked! Base overlap with ${collisionCheck.collidingUnitName}! (Tangents allowed, visual bases cannot intersect).`, 'info');
+      const msg = `⛔ Placement Blocked! Base overlap with ${collisionCheck.collidingUnitName}! (Tangents allowed, no intersections).`;
+      addLog(msg, 'info');
+      setDeploymentErrorNotice(msg);
+      setTimeout(() => setDeploymentErrorNotice(null), 4000);
       return;
     }
 
@@ -1399,16 +1788,42 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
     const currentDeployer = gameState.deployingPlayer || gameState.activePlayer;
     if (unit.owner !== currentDeployer) {
-      addLog(`It is ${currentDeployer === 'player1' ? 'Player 1' : 'Player 2'}'s turn to deploy!`, 'info');
+      const msg = `⚠️ It is ${currentDeployer === 'player1' ? 'Player 1' : 'Player 2 (Bot)'}'s turn to deploy!`;
+      addLog(msg, 'info');
+      setDeploymentErrorNotice(msg);
+      setTimeout(() => setDeploymentErrorNotice(null), 3500);
       return;
     }
 
-    // Check if another squad is already waiting for placement confirmation
+    // Auto-commit any previously placed unit that was pending confirmation if it passes coherency (BUG-026)
     const existingPending = gameState.units.find(u => u.owner === currentDeployer && u.isPendingDeploymentConfirm);
     if (existingPending && existingPending.id !== unitId) {
-      addLog(`⚠️ Please confirm placement of ${existingPending.name} before deploying another squad!`, 'info');
-      setSelectedUnitId(existingPending.id);
-      return;
+      const coherencyDistInches = gameState.currentMap?.coherencyDistanceInches || 2;
+      const coherencyDistPx = coherencyDistInches * 50;
+      const coherencyCheck = validateUnitCoherency(existingPending, coherencyDistPx);
+      if (coherencyCheck.isCoherent) {
+        const cleanTokens = (existingPending.tokens || []).map(t => ({
+          ...t,
+          offendingCoherency: false,
+          turnStartPos: { x: t.x, y: t.y }
+        }));
+        setGameState(prev => ({
+          ...prev,
+          units: prev.units.map(u => u.id === existingPending.id ? {
+            ...u,
+            tokens: cleanTokens,
+            isPendingDeploymentConfirm: false
+          } : u)
+        }));
+        addLog(`✅ Auto-confirmed placement of ${existingPending.name}.`, 'info');
+      } else {
+        const msg = `⚠️ Please adjust coherency for ${existingPending.name} before placing another squad!`;
+        addLog(msg, 'info');
+        setDeploymentErrorNotice(msg);
+        setTimeout(() => setDeploymentErrorNotice(null), 4000);
+        setSelectedUnitId(existingPending.id);
+        return;
+      }
     }
 
     // Leader-attachment warning popup on deployment
@@ -1430,8 +1845,37 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     const unit = gameState.units.find(u => u.id === unitId);
     if (!unit) return;
 
+    // Validate Coherency before confirming placement (BUG-013)
+    const coherencyDistInches = gameState.currentMap?.coherencyDistanceInches || 2;
+    const coherencyDistPx = coherencyDistInches * 50;
+    const coherencyCheck = validateUnitCoherency(unit, coherencyDistPx);
+
+    if (!coherencyCheck.isCoherent) {
+      // Flag offending tokens in red
+      const flaggedTokens = (unit.tokens || []).map(t => ({
+        ...t,
+        offendingCoherency: coherencyCheck.offendingTokenIds.includes(t.id)
+      }));
+
+      setGameState(prev => ({
+        ...prev,
+        units: prev.units.map(u => u.id === unitId ? { ...u, tokens: flaggedTokens } : u)
+      }));
+
+      addLog(`⛔ Deployment Blocked: ${coherencyCheck.message}`, 'event', 'Coherency Error');
+      return;
+    }
+
+    // Coherency valid: clear offending flags and initialize turnStartPos
+    const cleanTokens = (unit.tokens || []).map(t => ({
+      ...t,
+      offendingCoherency: false,
+      turnStartPos: { x: t.x, y: t.y }
+    }));
+
     const updatedUnits = gameState.units.map(u => u.id === unitId ? {
       ...u,
+      tokens: cleanTokens,
       isPendingDeploymentConfirm: false
     } : u);
 
@@ -1567,12 +2011,107 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     });
   };
 
+  // UI-003: Ability Activation Execution (Zero-CP rule, +1 CP generation, and Action VFX/SFX)
+  const handleActivateAbility = (item: {
+    key: string;
+    ability: UnitAbility;
+    sourceName: string;
+    sourceAvatar: string;
+    sourceUnitId?: string;
+    isFaction: boolean;
+    isActivatable: boolean;
+  }) => {
+    if (!item.isActivatable) return;
+
+    const { ability, key, sourceName, sourceUnitId } = item;
+    const isP1 = gameState.activePlayer === 'player1';
+    const gainsCP = ability.cost === 'gain_1_cp' || !!ability.gainsCP;
+
+    setGameState(prev => {
+      // Faction & Unit abilities do NOT cost CP. Abilities can grant +1 free CP!
+      const p1CP = isP1 && gainsCP ? (prev.player1CP ?? 0) + 1 : (prev.player1CP ?? 0);
+      const p2CP = !isP1 && gainsCP ? (prev.player2CP ?? 0) + 1 : (prev.player2CP ?? 0);
+
+      const updatedUnits = prev.units.map(u => {
+        if (sourceUnitId && u.id === sourceUnitId) {
+          if (ability.effectType === 'stat_modifier') {
+            return {
+              ...u,
+              advantageStacks: Math.min(2, u.advantageStacks + 1)
+            };
+          }
+          if (ability.effectType === 'defense') {
+            return {
+              ...u,
+              stats: {
+                ...u.stats,
+                defModifier: Math.min(3, u.stats.defModifier + 1)
+              }
+            };
+          }
+        }
+        return u;
+      });
+
+      const logMsg = `⚡ ABILITY ACTIVATION: [${ability.name}] invoked by ${sourceName}! ${ability.effect}${gainsCP ? ' (+1 Free CP Gained! ⭐)' : ''}`;
+      return {
+        ...prev,
+        player1CP: p1CP,
+        player2CP: p2CP,
+        units: updatedUnits,
+        logs: [
+          {
+            id: `log_ab_${Date.now()}`,
+            round: prev.round,
+            phase: prev.phase,
+            source: sourceName,
+            message: logMsg,
+            type: 'event',
+            timestamp: new Date().toLocaleTimeString()
+          },
+          ...prev.logs.slice(0, 74)
+        ]
+      };
+    });
+
+    // Trigger visual effect & procedural Web Audio synthesizer
+    const sourceUnit = gameState.units.find(u => u.id === sourceUnitId);
+    const casterPos = sourceUnit?.position || (isP1 ? { x: 300, y: 400 } : { x: 900, y: 400 });
+    const vfxStyle = gainsCP ? 'gain_cp' : (ability.vfxType || (ability.effectType === 'defense' ? 'holy' : 'command'));
+    vfxDispatcher.triggerAbility(casterPos, ability.icon || '⚡', ability.name, vfxStyle as any);
+
+    setUsedAbilitiesThisRound(prev => ({
+      ...prev,
+      [key]: (prev[key] || 0) + 1
+    }));
+
+    if (ability.cost === 'once_per_game') {
+      setUsedAbilitiesThisGame(prev => ({
+        ...prev,
+        [key]: true
+      }));
+    }
+
+    addLog(`✨ Activated ${ability.name}${gainsCP ? ' (+1 Free CP Gained! ⭐)' : ''}!`, 'score');
+  };
+
   // Combat Execution
   const handleExecuteShooting = () => {
     if (!selectedUnit || !targetUnit || !selectedUnit.position || !targetUnit.position) return;
-    const distSq = gridDistance(selectedUnit.position, targetUnit.position, DEFAULT_GRID_SIZE);
-    if (distSq > selectedUnit.stats.range) {
-      addLog(`Target is out of range (${distSq.toFixed(1)} sq > ${selectedUnit.stats.range} sq).`, 'info');
+
+    // BUG-018: If selected unit is an attached leader, check host squad
+    if (selectedUnit.attachedTo) {
+      const hostSquad = gameState.units.find(u => u.id === selectedUnit.attachedTo);
+      if (hostSquad && (hostSquad.stats.range === 0 || hostSquad.hasShot)) {
+        addLog(`⛔ Cannot Shoot: Attached leader cannot fire because host squad (${hostSquad.name}) ${hostSquad.stats.range === 0 ? 'is melee-only' : 'has already shot'}!`, 'info');
+        return;
+      }
+    }
+
+    if (!isUnitInShootingRange(selectedUnit, targetUnit, DEFAULT_GRID_SIZE)) {
+      const { minModelDistPx } = getUnitsModelDistance(selectedUnit, targetUnit);
+      const distSq = (minModelDistPx / DEFAULT_GRID_SIZE).toFixed(1);
+      addLog(`Target is out of range (${distSq} sq > ${selectedUnit.stats.range} sq).`, 'info');
       return;
     }
 
@@ -1587,15 +2126,36 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     addLog(result.logText, 'combat', 'Shooting');
     applyDamageToUnit(targetUnit.id, result.livesLost, result.defModifierChange, selectedUnit.owner);
 
+    // Trigger unit-specific and action-specific shooting VFX & SFX
+    if (selectedUnit.position && targetUnit.position) {
+      let shootVariant: 'ballistic' | 'laser' | 'plasma' = 'ballistic';
+      if (selectedUnit.traits?.includes('Psionic') || selectedUnit.abilities?.some(a => a.vfxType === 'laser')) {
+        shootVariant = 'laser';
+      } else if (selectedUnit.type === 'Monster' || selectedUnit.traits?.includes('Berserk') || selectedUnit.abilities?.some(a => a.vfxType === 'plasma')) {
+        shootVariant = 'plasma';
+      }
+      vfxDispatcher.triggerShoot(selectedUnit.position, targetUnit.position, shootVariant);
+    }
+
+    // Mark unit and any attached leaders (or host squad) as having shot
+    const shotUnitIds = new Set<string>([selectedUnit.id]);
+    if (selectedUnit.attachedUnits) {
+      selectedUnit.attachedUnits.forEach(id => shotUnitIds.add(id));
+    }
+    if (selectedUnit.attachedTo) {
+      shotUnitIds.add(selectedUnit.attachedTo);
+    }
+
     setGameState(prev => ({
       ...prev,
-      units: prev.units.map(u => u.id === selectedUnit.id ? { ...u, hasShot: true } : u)
+      units: prev.units.map(u => shotUnitIds.has(u.id) ? { ...u, hasShot: true } : u)
     }));
   };
 
   const handleExecuteCharge = () => {
     if (!selectedUnit || !targetUnit || !selectedUnit.position || !targetUnit.position) return;
-    const currentDistSq = gridDistance(selectedUnit.position, targetUnit.position, DEFAULT_GRID_SIZE);
+    const { minModelDistPx } = getUnitsModelDistance(selectedUnit, targetUnit);
+    const currentDistSq = minModelDistPx / DEFAULT_GRID_SIZE;
     const chargeRes = rollCharge(selectedUnit.stats.mv);
 
     if (!chargeRes.success) {
@@ -1604,7 +2164,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
         ...prev,
         units: prev.units.map(u => u.id === selectedUnit.id ? { ...u, hasCharged: true } : u)
       }));
-    } else if (chargeRes.distance < currentDistSq - 1) {
+    } else if (chargeRes.distance < currentDistSq - 1.2) {
       addLog(`⚠️ Charge Fell Short! Rolled ${chargeRes.roll} (${chargeRes.distance} sq < ${currentDistSq.toFixed(1)} sq).`, 'charge');
       setGameState(prev => ({
         ...prev,
@@ -1617,22 +2177,53 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       // Tangent base-to-base contact with 2px separation (BUG-011)
       const contactDist = targetRadius + chargerRadius + 2;
 
-      // Search angles to find closest valid non-overlapping base contact point
-      const candidateAngles = [angle, angle + 0.25, angle - 0.25, angle + 0.5, angle - 0.5, angle + 0.75, angle - 0.75, angle + 1.0, angle - 1.0];
+      // Filter out charger and its attached leaders from collision checks so they don't collide with themselves
+      const unitsToCheckCollision = gameState.units.filter(
+        u => u.id !== selectedUnit.id && !selectedUnit.attachedUnits?.includes(u.id)
+      );
+
+      // Search angles around target in 15-degree steps up to full circle to find closest non-overlapping base contact point
+      const angleDeltas: number[] = [0];
+      for (let step = 1; step <= 12; step++) {
+        angleDeltas.push(step * 0.26, -step * 0.26);
+      }
+
+      let foundValidCharge = false;
       let bestPos = {
         x: Math.max(chargerRadius, Math.min(1200 - chargerRadius, Math.round(targetUnit.position.x - Math.cos(angle) * contactDist))),
         y: Math.max(chargerRadius, Math.min(800 - chargerRadius, Math.round(targetUnit.position.y - Math.sin(angle) * contactDist)))
       };
 
-      for (const a of candidateAngles) {
-        const testX = Math.max(chargerRadius, Math.min(1200 - chargerRadius, Math.round(targetUnit.position.x - Math.cos(a) * contactDist)));
-        const testY = Math.max(chargerRadius, Math.min(800 - chargerRadius, Math.round(targetUnit.position.y - Math.sin(a) * contactDist)));
+      for (const delta of angleDeltas) {
+        const testAngle = angle + delta;
+        const testX = Math.max(chargerRadius, Math.min(1200 - chargerRadius, Math.round(targetUnit.position.x - Math.cos(testAngle) * contactDist)));
+        const testY = Math.max(chargerRadius, Math.min(800 - chargerRadius, Math.round(targetUnit.position.y - Math.sin(testAngle) * contactDist)));
         const testUnit = moveUnit(selectedUnit, { x: testX, y: testY }, gameState.units);
-        const colCheck = checkUniversalTokenCollisions(testUnit.tokens || [], gameState.units, selectedUnit.id);
+        const colCheck = checkUniversalTokenCollisions(testUnit.tokens || [], unitsToCheckCollision, selectedUnit.id);
         if (!colCheck.hasCollision) {
-          bestPos = { x: testX, y: testY };
-          break;
+          // BUG-023: Verify charge path doesn't cut through intervening units (screening squads / intervening models)
+          const pathCheck = checkPathCrossesUnits(
+            selectedUnit,
+            selectedUnit.position,
+            { x: testX, y: testY },
+            gameState.units,
+            { isCharge: true, chargeTargetUnitId: targetUnit.id }
+          );
+          if (!pathCheck.hasCollision) {
+            bestPos = { x: testX, y: testY };
+            foundValidCharge = true;
+            break;
+          }
         }
+      }
+
+      if (!foundValidCharge) {
+        addLog(`⛔ Charge Blocked: Intervening units obstruct all charge paths between ${selectedUnit.name} and ${targetUnit.name}! (Units cannot move through models without FLY).`, 'charge');
+        setGameState(prev => ({
+          ...prev,
+          units: prev.units.map(u => u.id === selectedUnit.id ? { ...u, hasCharged: true } : u)
+        }));
+        return;
       }
 
       const chargedUnit = moveUnit({
@@ -1642,7 +2233,8 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       }, bestPos, gameState.units);
 
       let nextUnits = gameState.units.map(u => u.id === selectedUnit.id ? chargedUnit : u);
-      // BUG-001: Sync attached leader position
+
+      // BUG-021: Sync attached leader position & ensure attached leader is preserved
       if (selectedUnit.attachedUnits && selectedUnit.attachedUnits.length > 0) {
         const leaderTok = chargedUnit.tokens?.find(t => t.isLeaderToken);
         const leaderPos = leaderTok ? { x: leaderTok.x, y: leaderTok.y } : bestPos;
@@ -1656,6 +2248,8 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
           }
           return u;
         });
+        // Re-sync chargedUnit tokens with updated nextUnits to ensure leader token is perpetually retained
+        nextUnits = nextUnits.map(u => u.id === selectedUnit.id ? syncUnitTokens(u, nextUnits) : u);
       }
 
       setGameState(prev => ({
@@ -1668,20 +2262,51 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
   const handleExecuteFight = () => {
     if (!selectedUnit || !targetUnit || !selectedUnit.position || !targetUnit.position) return;
-    const distSq = gridDistance(selectedUnit.position, targetUnit.position, DEFAULT_GRID_SIZE);
-    if (distSq > 1.8) {
-      addLog(`Target is too far for melee (${distSq.toFixed(1)} sq > 1.8 sq).`, 'info');
+    if (!isUnitInMeleeRange(selectedUnit, targetUnit, DEFAULT_GRID_SIZE)) {
+      const { minEdgeDistPx } = getUnitsModelDistance(selectedUnit, targetUnit);
+      const edgeSq = (minEdgeDistPx / DEFAULT_GRID_SIZE).toFixed(1);
+      addLog(`Target is too far for melee (edge distance ${edgeSq} sq > 1.0 sq engagement range).`, 'info');
       return;
     }
 
+    // 1. Host unit resolves combat
     const result = resolveCombat(selectedUnit, targetUnit, true, 0);
     setRecentCombatResult(result);
     addLog(result.logText, 'combat', 'Fight');
     applyDamageToUnit(targetUnit.id, result.livesLost, result.defModifierChange, selectedUnit.owner);
 
+    // Trigger Melee Fight VFX & SFX
+    if (targetUnit.position) {
+      let fightVariant: 'slash' | 'crush' | 'claws' = 'slash';
+      if (selectedUnit.type === 'Vehicle' || selectedUnit.traits?.includes('Unyielding') || selectedUnit.abilities?.some(a => a.vfxType === 'crush')) {
+        fightVariant = 'crush';
+      } else if (selectedUnit.type === 'Monster' || selectedUnit.traits?.includes('Berserk')) {
+        fightVariant = 'claws';
+      }
+      vfxDispatcher.triggerFight(targetUnit.position, fightVariant);
+    }
+
+    // 2. Attached Leader fights alongside their bodyguard unit (BUG-022)
+    if (selectedUnit.attachedUnits && selectedUnit.attachedUnits.length > 0) {
+      const attachedLeaders = selectedUnit.attachedUnits
+        .map(id => gameState.units.find(u => u.id === id))
+        .filter((l): l is Unit => !!l && l.stats.lives > 0);
+
+      for (const leader of attachedLeaders) {
+        const currentTarget = gameState.units.find(u => u.id === targetUnit.id);
+        if (currentTarget && currentTarget.stats.lives > 0) {
+          const leaderResult = resolveCombat(leader, currentTarget, true, 0);
+          addLog(`⚔️ [COMMANDER STRIKE] ${leader.name} fights alongside ${selectedUnit.name}! ${leaderResult.logText}`, 'combat', 'Commander Strike');
+          applyDamageToUnit(targetUnit.id, leaderResult.livesLost, leaderResult.defModifierChange, selectedUnit.owner);
+        }
+      }
+    }
+
+    // Mark host squad and attached leaders as having fought
+    const foughtIds = new Set<string>([selectedUnit.id, ...(selectedUnit.attachedUnits || [])]);
     setGameState(prev => ({
       ...prev,
-      units: prev.units.map(u => u.id === selectedUnit.id ? { ...u, hasFought: true } : u)
+      units: prev.units.map(u => foughtIds.has(u.id) ? { ...u, hasFought: true } : u)
     }));
   };
 
@@ -1743,6 +2368,66 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
         }
       ] : [];
 
+      // Check elimination victory
+      let isGameOver = prev.isGameOver;
+      let winner = prev.winner;
+      let winReason = prev.winReason;
+      const victoryLogs: CombatLogEntry[] = [];
+
+      if (unitDied && !prev.isGameOver) {
+        const p1Alive = updatedUnits.some(u => u.owner === 'player1' && (u.stats?.lives || 0) > 0);
+        const p2Alive = updatedUnits.some(u => u.owner === 'player2' && (u.stats?.lives || 0) > 0);
+
+        if (!p1Alive && !p2Alive) {
+          isGameOver = true;
+          winner = 'draw';
+          winReason = 'Mutual Elimination: All forces destroyed!';
+          victoryLogs.push({
+            id: `log_vic_${Date.now()}`,
+            round: prev.round,
+            phase: prev.phase,
+            source: 'Resolution Matrix',
+            message: '🏆 MATCH CONCLUDED! Mutual Elimination: All forces destroyed!',
+            type: 'event',
+            timestamp: new Date().toLocaleTimeString()
+          });
+        } else if (!p1Alive) {
+          isGameOver = true;
+          winner = 'player2';
+          winReason = 'Elimination: Player 1 forces completely wiped out!';
+          victoryLogs.push({
+            id: `log_vic_${Date.now()}`,
+            round: prev.round,
+            phase: prev.phase,
+            source: 'Resolution Matrix',
+            message: '🏆 MATCH CONCLUDED! Player 2 secures Victory by Elimination!',
+            type: 'event',
+            timestamp: new Date().toLocaleTimeString()
+          });
+        } else if (!p2Alive) {
+          isGameOver = true;
+          winner = 'player1';
+          winReason = 'Elimination: Player 2 forces completely wiped out!';
+          victoryLogs.push({
+            id: `log_vic_${Date.now()}`,
+            round: prev.round,
+            phase: prev.phase,
+            source: 'Resolution Matrix',
+            message: '🏆 MATCH CONCLUDED! Player 1 secures Victory by Elimination!',
+            type: 'event',
+            timestamp: new Date().toLocaleTimeString()
+          });
+        }
+
+        if (isGameOver) {
+          try {
+            confetti({ particleCount: 150, spread: 85, origin: { y: 0.6 } });
+          } catch {
+            // ignore
+          }
+        }
+      }
+
       return {
         ...prev,
         units: updatedUnits,
@@ -1750,7 +2435,10 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
         player2Score: attackerOwner === 'player2' ? prev.player2Score + scoreGain : prev.player2Score,
         player1Kills: p1Kills,
         player2Kills: p2Kills,
-        logs: [...killLogs, ...prev.logs.slice(0, 75 - killLogs.length)]
+        isGameOver,
+        winner,
+        winReason,
+        logs: [...victoryLogs, ...killLogs, ...prev.logs.slice(0, 75 - (victoryLogs.length + killLogs.length))]
       };
     });
 
@@ -1981,6 +2669,8 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
         } else {
           // Player 2 finished 'Fight'! END OF ROUND N!
           const poiResult = calculatePOIScores(baseUnits, prev.pois);
+          const newP1Score = prev.player1Score + poiResult.p1TotalPoiScore;
+          const newP2Score = prev.player2Score + poiResult.p2TotalPoiScore;
           const clonedEvents = [...prev.activeEvents];
           const clonedUnits = [...baseUnits];
           const eventRes = checkAndTriggerEvents(prev.round, clonedEvents, clonedUnits);
@@ -2003,6 +2693,59 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
               offendingCoherency: false
             }))
           }));
+
+          // CHECK WIN CONDITIONS (BUG-025 & DESIGN-010: Round 10 Hard Cap, Dominant Knockout, Elimination)
+          const winCheck = checkWinConditions(
+            prev.round,
+            newP1Score,
+            newP2Score,
+            cleanUnits.filter(u => u.owner === 'player1'),
+            cleanUnits.filter(u => u.owner === 'player2'),
+            prev.pois,
+            prev.player1VotedEnd,
+            prev.player2VotedEnd
+          );
+
+          if (winCheck.isOver) {
+            try {
+              confetti({ particleCount: 160, spread: 85, origin: { y: 0.55 } });
+            } catch {
+              // ignore
+            }
+
+            const victoryLogs: CombatLogEntry[] = [
+              {
+                id: `log_r_${Date.now()}`,
+                round: prev.round,
+                phase: 'Fight',
+                source: 'Scoring Engine',
+                message: `🏁 === Round ${prev.round} Completed! === P1: +${poiResult.p1TotalPoiScore} pts | P2: +${poiResult.p2TotalPoiScore} pts from Objectives. Final Scores: Player 1 ${newP1Score} VP - Player 2 ${newP2Score} VP.`,
+                type: 'score',
+                timestamp: new Date().toLocaleTimeString()
+              },
+              {
+                id: `log_match_end_${Date.now()}`,
+                round: prev.round,
+                phase: 'Fight',
+                source: 'Resolution Matrix',
+                message: `🏆 MATCH CONCLUDED! ${winCheck.reason}`,
+                type: 'event',
+                timestamp: new Date().toLocaleTimeString()
+              }
+            ];
+
+            return {
+              ...prev,
+              isGameOver: true,
+              winner: winCheck.winner,
+              winReason: winCheck.reason,
+              player1Score: newP1Score,
+              player2Score: newP2Score,
+              activeEvents: clonedEvents,
+              units: cleanUnits,
+              logs: [...victoryLogs, ...prev.logs.slice(0, 75 - victoryLogs.length)]
+            };
+          }
 
           const nextRound = prev.round + 1;
           const p1CPNew = (prev.player1CP ?? 3) + 1;
@@ -2041,8 +2784,8 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
             round: nextRound,
             phase: 'Command',
             activePlayer: 'player1',
-            player1Score: prev.player1Score + poiResult.p1TotalPoiScore,
-            player2Score: prev.player2Score + poiResult.p2TotalPoiScore,
+            player1Score: newP1Score,
+            player2Score: newP2Score,
             player1CP: p1CPNew,
             activeEvents: clonedEvents,
             units: cleanUnits,
@@ -2082,7 +2825,10 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
   // Bot auto-play for Player 2
   const handleExecuteBotAction = () => {
-    if (gameState.activePlayer !== 'player2' || gameState.isGameOver) return;
+    const currentDeployer = gameState.phase === 'Deployment' 
+      ? (gameState.deployingPlayer || gameState.activePlayer) 
+      : gameState.activePlayer;
+    if (currentDeployer !== 'player2' || gameState.isGameOver) return;
     const p2Units = gameState.units.filter(u => u.owner === 'player2' && u.stats.lives > 0);
     const p1Units = gameState.units.filter(u => u.owner === 'player1' && u.stats.lives > 0);
 
@@ -2091,12 +2837,14 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       if (undeployed.length > 0) {
         const botUnit = undeployed[0];
         const deployedCount = p2Units.filter(u => u.position).length;
-        const targetX = 1020 + (deployedCount % 2) * 70;
-        const targetY = 160 + deployedCount * 110;
-        const deployedBot = moveUnit(botUnit, { x: targetX, y: targetY });
+        const targetX = 1040 + (deployedCount % 2) * 80;
+        const targetY = 150 + (deployedCount % 5) * 125;
+        const candidatePos = { x: targetX, y: targetY };
+        const safePos = findNearestNonOverlappingPosition(botUnit, candidatePos, gameState.units) || candidatePos;
+        const deployedBot = moveUnit({ ...botUnit, isPendingDeploymentConfirm: false }, safePos, gameState.units);
 
-        const updatedUnits = gameState.units.map(u => u.id === botUnit.id ? deployedBot : u);
-        addLog(`Bot deployed ${botUnit.name} to East flank (${targetX}px, ${targetY}px).`, 'info');
+        const updatedUnits = gameState.units.map(u => u.id === botUnit.id ? { ...deployedBot, isPendingDeploymentConfirm: false } : u);
+        addLog(`🤖 Bot deployed ${botUnit.name} to East flank (${safePos.x}px, ${safePos.y}px).`, 'info');
         progressDeploymentAlternation('player2', updatedUnits);
       } else {
         handleAdvancePhase();
@@ -2121,19 +2869,31 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     if (gameState.phase === 'Movement') {
       const readyUnit = p2Units.find(u => !u.hasMoved && u.position);
       if (readyUnit && readyUnit.position) {
-        // Move towards center POI or nearest enemy
-        const target = p1Units.find(u => u.position) || { position: { x: 600, y: 400 } };
-        const angle = Math.atan2(target.position!.y - readyUnit.position.y, target.position!.x - readyUnit.position.x);
-        const step = Math.min(readyUnit.stats.mv * DEFAULT_GRID_SIZE, 120);
-        const newX = Math.max(300, Math.round(readyUnit.position.x + Math.cos(angle) * step));
-        const newY = Math.max(80, Math.min(720, Math.round(readyUnit.position.y + Math.sin(angle) * step)));
+        const unitIndex = p2Units.indexOf(readyUnit);
+        // Distribute bot destinations across objectives and enemies so squads do not cluster
+        let targetPos = { x: 600, y: 400 };
+        if (gameState.pois && gameState.pois.length > 0) {
+          const assignedPoi = gameState.pois[unitIndex % gameState.pois.length];
+          targetPos = { x: assignedPoi.x, y: assignedPoi.y };
+        }
+        if (p1Units.length > 0 && unitIndex % 2 === 1) {
+          const assignedEnemy = p1Units[unitIndex % p1Units.length];
+          if (assignedEnemy && assignedEnemy.position) {
+            targetPos = { x: assignedEnemy.position.x, y: assignedEnemy.position.y };
+          }
+        }
 
-        const movedBot = moveUnit({ ...readyUnit, hasMoved: true }, { x: newX, y: newY });
+        const maxStepPx = readyUnit.stats.mv * DEFAULT_GRID_SIZE;
+        // Guarantee collision-free, non-overlapping placement
+        const safeDestination = findValidMovePositionForBot(readyUnit, targetPos, gameState.units, maxStepPx);
+
+        const movedBot = moveUnit({ ...readyUnit, hasMoved: true }, safeDestination, gameState.units);
         setGameState(prev => ({
           ...prev,
           units: prev.units.map(u => u.id === readyUnit.id ? movedBot : u)
         }));
-        addLog(`Bot moved ${readyUnit.name} forward [${(step / DEFAULT_GRID_SIZE).toFixed(1)} sq].`, 'info');
+        const distMoved = Math.hypot(safeDestination.x - readyUnit.position.x, safeDestination.y - readyUnit.position.y);
+        addLog(`Bot moved ${readyUnit.name} forward [${(distMoved / DEFAULT_GRID_SIZE).toFixed(1)} sq].`, 'info');
       } else {
         handleAdvancePhase();
       }
@@ -2143,11 +2903,16 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     if (gameState.phase === 'Shooting') {
       const shooter = p2Units.find(u => !u.hasShot && u.stats.range > 0 && u.position);
       if (shooter && shooter.position) {
-        const inRangeTarget = p1Units.find(t => t.position && gridDistance(shooter.position!, t.position, DEFAULT_GRID_SIZE) <= shooter.stats.range);
-        if (inRangeTarget) {
+        const inRangeTarget = p1Units.find(t => t.position && isUnitInShootingRange(shooter, t, DEFAULT_GRID_SIZE));
+        if (inRangeTarget && inRangeTarget.position) {
           const res = resolveCombat(shooter, inRangeTarget, false);
           addLog(`Bot: ${res.logText}`, 'combat', 'Shooting');
           applyDamageToUnit(inRangeTarget.id, res.livesLost, res.defModifierChange, 'player2');
+          vfxDispatcher.triggerShoot(
+            shooter.position, 
+            inRangeTarget.position, 
+            shooter.traits?.includes('Psionic') ? 'laser' : shooter.type === 'Monster' ? 'plasma' : 'ballistic'
+          );
           setGameState(prev => ({
             ...prev,
             units: prev.units.map(u => u.id === shooter.id ? { ...u, hasShot: true } : u)
@@ -2162,7 +2927,11 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     if (gameState.phase === 'Charge') {
       const charger = p2Units.find(u => !u.hasCharged && u.position);
       if (charger && charger.position) {
-        const nearEnemy = p1Units.find(t => t.position && gridDistance(charger.position!, t.position, DEFAULT_GRID_SIZE) <= charger.stats.mv);
+        const nearEnemy = p1Units.find(t => {
+          if (!t.position) return false;
+          const { minModelDistPx } = getUnitsModelDistance(charger, t);
+          return (minModelDistPx / DEFAULT_GRID_SIZE) <= (charger.stats.mv + 0.3);
+        });
         if (nearEnemy && nearEnemy.position) {
           const res = rollCharge(charger.stats.mv);
           if (res.success) {
@@ -2205,11 +2974,15 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     if (gameState.phase === 'Fight') {
       const fighter = p2Units.find(u => !u.hasFought && u.position);
       if (fighter && fighter.position) {
-        const inMeleeTarget = p1Units.find(t => t.position && gridDistance(fighter.position!, t.position, DEFAULT_GRID_SIZE) <= 1.8);
-        if (inMeleeTarget) {
+        const inMeleeTarget = p1Units.find(t => t.position && isUnitInMeleeRange(fighter, t, DEFAULT_GRID_SIZE));
+        if (inMeleeTarget && inMeleeTarget.position) {
           const res = resolveCombat(fighter, inMeleeTarget, true);
           addLog(`Bot: ${res.logText}`, 'combat', 'Fight');
           applyDamageToUnit(inMeleeTarget.id, res.livesLost, res.defModifierChange, 'player2');
+          vfxDispatcher.triggerFight(
+            inMeleeTarget.position, 
+            fighter.type === 'Monster' ? 'claws' : fighter.type === 'Vehicle' ? 'crush' : 'slash'
+          );
           setGameState(prev => ({
             ...prev,
             units: prev.units.map(u => u.id === fighter.id ? { ...u, hasFought: true } : u)
@@ -2223,6 +2996,140 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
     handleAdvancePhase();
   };
+
+  // BUG-026: Automated Bot Turn Controller for Player 2 (Single-Player VS Opponent Bot)
+  useEffect(() => {
+    if (gameState.isGameOver) return;
+
+    const currentTurnDeployer = gameState.phase === 'Deployment'
+      ? (gameState.deployingPlayer || gameState.activePlayer)
+      : gameState.activePlayer;
+
+    if (currentTurnDeployer === 'player2') {
+      setIsBotDeploying(true);
+      const timer = setTimeout(() => {
+        handleExecuteBotAction();
+        setIsBotDeploying(false);
+      }, 750);
+      return () => {
+        clearTimeout(timer);
+        setIsBotDeploying(false);
+      };
+    } else {
+      setIsBotDeploying(false);
+    }
+  }, [
+    gameState.activePlayer,
+    gameState.deployingPlayer,
+    gameState.phase,
+    gameState.round,
+    gameState.isGameOver,
+    gameState.units
+  ]);
+
+  // UI-003: Collect all abilities for the active player (Unit abilities + Faction Army-Wide Ability)
+  const allFactionsList = StorageService.getFactions();
+  const activeFactionId = gameState.activePlayer === 'player1'
+    ? (customRoster?.factionId || gameState.units.find(u => u.owner === 'player1')?.factionId || 'crimson_empire')
+    : (gameState.units.find(u => u.owner === 'player2')?.factionId || 'daughters_astraea');
+  const activeFaction = allFactionsList.find(f => f.id === activeFactionId);
+
+  const currentCP = gameState.activePlayer === 'player1' ? (gameState.player1CP ?? 0) : (gameState.player2CP ?? 0);
+
+  interface BattlefieldAbilityItem {
+    key: string;
+    ability: UnitAbility;
+    sourceName: string;
+    sourceAvatar: string;
+    sourceUnitId?: string;
+    isFaction: boolean;
+    isActivatable: boolean;
+    disabledReason?: string;
+  }
+
+  const availableAbilities: BattlefieldAbilityItem[] = [];
+
+  // 1. Faction Ability
+  if (activeFaction?.factionAbility) {
+    const ab = activeFaction.factionAbility;
+    const key = `faction_${activeFaction.id}_${ab.id}`;
+    let isAct = false;
+    let reason = '';
+
+    if (ab.type === 'passive') {
+      reason = 'Passive doctrine always active';
+    } else {
+      const timingMatches = !ab.activationTiming || ab.activationTiming === 'any_time' || ab.activationTiming.toLowerCase() === gameState.phase.toLowerCase();
+      const usedInRound = usedAbilitiesThisRound[key] || 0;
+      const usedInGame = usedAbilitiesThisGame[key];
+
+      if (!timingMatches) {
+        reason = `Available in ${ab.activationTiming?.replace('_', ' ').toUpperCase()} phase`;
+      } else if (ab.cost === 'once_per_round' && usedInRound >= 1) {
+        reason = 'Already used this round';
+      } else if (ab.cost === 'once_per_game' && usedInGame) {
+        reason = 'Already used this match';
+      } else if (ab.cost === 'once_per_activation' && usedInRound >= 1) {
+        reason = 'Already activated';
+      } else {
+        isAct = true;
+      }
+    }
+
+    availableAbilities.push({
+      key,
+      ability: ab,
+      sourceName: `${activeFaction.shortName || activeFaction.name} (Faction)`,
+      sourceAvatar: activeFaction.symbol || '🔮',
+      isFaction: true,
+      isActivatable: isAct,
+      disabledReason: reason
+    });
+  }
+
+  // 2. Unit Abilities (Zero-CP cost rule)
+  gameState.units
+    .filter(u => u.owner === gameState.activePlayer && (u.stats?.lives ?? 0) > 0 && u.position)
+    .forEach(u => {
+      (u.abilities || []).forEach((ab, idx) => {
+        const key = `unit_${u.id}_${ab.id || idx}`;
+        let isAct = false;
+        let reason = '';
+
+        if (ab.type === 'passive') {
+          reason = 'Passive skill always active';
+        } else {
+          const timingMatches = !ab.activationTiming || ab.activationTiming === 'any_time' || ab.activationTiming.toLowerCase() === gameState.phase.toLowerCase();
+          const usedInRound = usedAbilitiesThisRound[key] || 0;
+          const usedInGame = usedAbilitiesThisGame[key];
+
+          if (!timingMatches) {
+            reason = `Available in ${ab.activationTiming?.replace('_', ' ').toUpperCase()} phase`;
+          } else if (ab.cost === 'once_per_round' && usedInRound >= 1) {
+            reason = 'Already used this round';
+          } else if (ab.cost === 'once_per_game' && usedInGame) {
+            reason = 'Already used this match';
+          } else if (ab.cost === 'once_per_activation' && usedInRound >= 1) {
+            reason = 'Already activated';
+          } else {
+            isAct = true;
+          }
+        }
+
+        availableAbilities.push({
+          key,
+          ability: ab,
+          sourceName: u.name,
+          sourceAvatar: u.avatar || '⚔️',
+          sourceUnitId: u.id,
+          isFaction: false,
+          isActivatable: isAct,
+          disabledReason: reason
+        });
+      });
+    });
+
+  const readyAbilitiesCount = availableAbilities.filter(a => a.isActivatable).length;
 
   return (
     <div className="w-full h-[calc(100vh-50px)] flex flex-col bg-[#0b0d13] select-none overflow-hidden">
@@ -2247,6 +3154,25 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
             <span className="text-rose-400 font-bold">P1: {gameState.player1Score} pts ({gameState.player1CP ?? 3} CP)</span>
             <span className="text-zinc-500">vs</span>
             <span className="text-sky-400 font-bold">P2: {gameState.player2Score} pts ({gameState.player2CP ?? 3} CP)</span>
+            
+            {/* Scoring Rules Popover */}
+            <div className="relative group cursor-help">
+              <span className="px-1.5 py-0.5 rounded bg-amber-950/60 border border-amber-500/50 text-amber-300 font-mono text-[10px] hover:bg-amber-900/60 transition flex items-center space-x-1">
+                <HelpCircle className="w-3 h-3" />
+                <span>Scoring Rules</span>
+              </span>
+              <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 hidden group-hover:block w-72 p-3 bg-zinc-950/95 border border-amber-500/60 rounded-xl shadow-2xl z-50 text-[11px] text-zinc-300 font-sans backdrop-blur pointer-events-none">
+                <div className="font-bold text-amber-300 font-mono text-xs uppercase mb-1.5 flex items-center space-x-1">
+                  <Trophy className="w-3.5 h-3.5" />
+                  <span>How You Score Points</span>
+                </div>
+                <ul className="space-y-1.5 list-disc list-inside">
+                  <li><strong className="text-white">POIs (Round End):</strong> Any unit with models inside the capture ring contests the objective. Higher CP wins: <span className="text-amber-400 font-mono">(Winner CP - Loser CP) × Multiplier (1x Basic / 2x Special)</span>.</li>
+                  <li><strong className="text-white">Unit Kills:</strong> Destroying an enemy squad grants <span className="text-rose-400 font-mono">+1 VP</span> (+2 VP for Characters/Leaders).</li>
+                  <li><strong className="text-white">Tactical Cards:</strong> Achieving active card objectives earns bonus VP.</li>
+                </ul>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -2367,6 +3293,22 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
               <ArrowRight className="w-3 h-3" />
             </button>
           )}
+
+          <div className="w-[1px] h-5 bg-zinc-700 mx-1" />
+
+          {/* UI-004: Right Sidebar Collapse Toggle */}
+          <button
+            onClick={() => setShowRightSidebar(prev => !prev)}
+            className={`px-2.5 py-1 rounded shadow text-xs font-bold font-mono flex items-center space-x-1.5 transition cursor-pointer ${
+              showRightSidebar 
+                ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700' 
+                : 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/50'
+            }`}
+            title={showRightSidebar ? "Collapse Sidebar (Full Canvas Mode)" : "Expand Sidebar (Combat Log, Chat, Cards)"}
+          >
+            <ChevronRight className={`w-3.5 h-3.5 transition-transform duration-200 ${showRightSidebar ? '' : 'rotate-180'}`} />
+            <span className="hidden sm:inline">{showRightSidebar ? 'Hide Panel' : 'Show Panel'}</span>
+          </button>
         </div>
       </div>
 
@@ -2454,26 +3396,53 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
             const p2Remaining = gameState.units.filter(u => u.owner === 'player2' && !u.position && !u.inStrategicReserve && !u.embarkedIn && !u.attachedTo && u.stats.lives > 0).length;
             const trayUnits = gameState.units.filter(u => !u.position && !u.inStrategicReserve && !u.embarkedIn && !u.attachedTo && u.stats.lives > 0 && u.owner === currentDeployer);
 
-            return (
+            return isDeployStagingMinimized ? (
+              <div className="w-full bg-[#141724]/95 border-b border-amber-800/80 px-4 py-1.5 shadow-xl flex items-center justify-between gap-2 z-10 shrink-0 text-xs">
+                <div className="flex items-center space-x-3">
+                  <span className="text-[11px] font-mono text-amber-300 font-bold">
+                    🪙 Deploying: <strong className={currentDeployer === 'player1' ? 'text-rose-400' : 'text-sky-400'}>{currentDeployer === 'player1' ? 'Player 1 (West)' : 'Player 2 (East / Bot)'}</strong>
+                  </span>
+                  <span className="text-[10px] font-mono text-zinc-400">P1: {p1Remaining} left | P2: {p2Remaining} left</span>
+                  {isBotDeploying && (
+                    <span className="text-[11px] font-mono text-sky-400 font-bold flex items-center space-x-1 animate-pulse">
+                      <span className="w-2 h-2 rounded-full bg-sky-400 animate-ping"></span>
+                      <span>🤖 Bot is positioning squad...</span>
+                    </span>
+                  )}
+                </div>
+                <button
+                  onClick={() => setIsDeployStagingMinimized(false)}
+                  className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-amber-300 border border-amber-600/40 font-mono text-[10px] flex items-center space-x-1 cursor-pointer transition"
+                >
+                  <span>Show Unit Cards ▾</span>
+                </button>
+              </div>
+            ) : (
               <div className="w-full bg-[#141724]/95 border-b border-amber-800/80 px-4 py-2 shadow-2xl flex flex-wrap items-center justify-between gap-2 z-10 shrink-0">
                 <div className="flex items-center space-x-3">
                   <div className="flex items-center space-x-1.5 px-2.5 py-1 rounded bg-amber-950/80 border border-amber-700/80 text-amber-300 font-mono text-[11px] font-bold">
-                    <span>🪙 First Deployer:</span>
+                    <span>🪙 First:</span>
                     <span className="text-white uppercase">{gameState.deploymentCoinFlipWinner === 'player1' ? 'P1 (West)' : 'P2 (East)'}</span>
                   </div>
                   <div className="text-xs font-bold text-white flex items-center space-x-1.5">
                     <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
                     <span>Turn:</span>
                     <span className={currentDeployer === 'player1' ? 'text-rose-400' : 'text-sky-400'}>
-                      {currentDeployer === 'player1' ? 'Player 1 (West: x ≤ 200px)' : 'Player 2 (East: x ≥ 1000px)'}
+                      {currentDeployer === 'player1' ? 'Player 1 (West: x ≤ 200px)' : 'Player 2 (East / Bot)'}
                     </span>
                   </div>
                   <div className="text-[11px] font-mono text-zinc-400 flex items-center space-x-2">
                     <span>Tray:</span>
-                    <span className="text-rose-400 font-bold">P1: {p1Remaining} left</span>
+                    <span className="text-rose-400 font-bold">P1: {p1Remaining}</span>
                     <span>|</span>
-                    <span className="text-sky-400 font-bold">P2: {p2Remaining} left</span>
+                    <span className="text-sky-400 font-bold">P2: {p2Remaining}</span>
                   </div>
+
+                  {isBotDeploying && (
+                    <span className="text-xs font-mono text-sky-300 font-bold flex items-center space-x-1 animate-pulse">
+                      <span>🤖 Bot placing unit...</span>
+                    </span>
+                  )}
 
                   <button
                     onClick={() => setShowArmySelectionModal(true)}
@@ -2481,14 +3450,22 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                     title="Change battle army from your saved library"
                   >
                     <FolderOpen className="w-3 h-3 text-amber-400" />
-                    <span>Change Army</span>
+                    <span>Army</span>
+                  </button>
+
+                  <button
+                    onClick={() => setIsDeployStagingMinimized(true)}
+                    className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-750 text-zinc-400 hover:text-zinc-200 border border-zinc-700 font-mono text-[10px] flex items-center space-x-0.5 cursor-pointer transition"
+                    title="Minimize deployment staging bar"
+                  >
+                    <span>Hide ▴</span>
                   </button>
                 </div>
 
-                <div className="flex items-center space-x-2 overflow-x-auto max-w-[65%] py-0.5">
+                <div className="flex items-center space-x-2 overflow-x-auto max-w-[60%] py-0.5">
                   {totalDeployerUnits === 0 ? (
                     <span className="text-xs text-amber-400 font-mono flex items-center space-x-1.5">
-                      <span>⚠️ No army loaded — click "Change Army" to select your force.</span>
+                      <span>⚠️ No army loaded — click "Army" to select your force.</span>
                     </span>
                   ) : trayUnits.length === 0 ? (
                     <span className="text-xs text-zinc-500 font-mono italic">
@@ -2525,7 +3502,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
                           <button
                             onClick={() => handleDeployReserveUnit(u.id)}
-                            className="px-2 py-0.5 bg-amber-600 hover:bg-amber-500 text-black font-bold font-mono rounded text-[10px] transition"
+                            className="px-2 py-0.5 bg-amber-600 hover:bg-amber-500 text-black font-bold font-mono rounded text-[10px] transition cursor-pointer"
                             title="Deploy unit to active player's flank"
                           >
                             Deploy Flank
@@ -2533,7 +3510,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
                           <button
                             onClick={() => handleHoldInStrategicReserve(u.id)}
-                            className="px-1.5 py-0.5 bg-zinc-800 hover:bg-zinc-750 text-amber-300 border border-amber-600/40 rounded text-[10px] font-mono transition flex items-center space-x-0.5"
+                            className="px-1.5 py-0.5 bg-zinc-800 hover:bg-zinc-750 text-amber-300 border border-amber-600/40 rounded text-[10px] font-mono transition flex items-center space-x-0.5 cursor-pointer"
                             title="Hold back in Strategic Reserves (Deployable Round 2+ Movement Phase)"
                           >
                             <Box className="w-3 h-3" />
@@ -2543,7 +3520,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                           {isLeader && (
                             <button
                               onClick={() => setAttachModalUnitId(u.id)}
-                              className="px-1.5 py-0.5 bg-purple-900/80 hover:bg-purple-800 text-purple-200 border border-purple-600/50 rounded text-[10px] font-mono transition flex items-center space-x-0.5"
+                              className="px-1.5 py-0.5 bg-purple-900/80 hover:bg-purple-800 text-purple-200 border border-purple-600/50 rounded text-[10px] font-mono transition flex items-center space-x-0.5 cursor-pointer"
                               title="Attach Leader to an Infantry squad"
                             >
                               <UserPlus className="w-3 h-3" />
@@ -2554,7 +3531,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                           {isInfantry && (
                             <button
                               onClick={() => setEmbarkModalUnitId(u.id)}
-                              className="px-1.5 py-0.5 bg-sky-900/80 hover:bg-sky-800 text-sky-200 border border-sky-600/50 rounded text-[10px] font-mono transition flex items-center space-x-0.5"
+                              className="px-1.5 py-0.5 bg-sky-900/80 hover:bg-sky-800 text-sky-200 border border-sky-600/50 rounded text-[10px] font-mono transition flex items-center space-x-0.5 cursor-pointer"
                               title="Embark inside a friendly transport vehicle"
                             >
                               <Truck className="w-3 h-3" />
@@ -2676,7 +3653,35 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
               {gameState.phase === 'Movement' && (
                 selectedUnit.owner === gameState.activePlayer ? (
-                  selectedUnit.isPendingMoveConfirm ? (
+                  selectedUnit.isPendingDisembarkConfirm ? (
+                    <div className="flex items-center space-x-2">
+                      <button
+                        onClick={() => handleConfirmDisembark(selectedUnit.id)}
+                        className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-lg flex items-center space-x-1.5 shadow-lg animate-pulse cursor-pointer"
+                        title="Validate 3-inch vehicle reach and 2-inch unit coherency, then lock in disembark placement"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        <span>Confirm Disembark</span>
+                      </button>
+                      <button
+                        onClick={() => handleCancelDisembark(selectedUnit.id)}
+                        className="px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold text-xs rounded-lg flex items-center space-x-1 shadow border border-zinc-600 cursor-pointer"
+                        title="Cancel disembark and return inside the transport vehicle"
+                      >
+                        <RotateCcw className="w-3 h-3 text-amber-400" />
+                        <span>Cancel</span>
+                      </button>
+                      <span className="text-[10px] text-amber-300 font-mono bg-amber-950/60 border border-amber-800/80 px-2 py-1 rounded hidden sm:inline-block">
+                        Drag models within 3" of transport, maintain 2" coherency
+                      </span>
+                      {selectedUnit.tokens?.some(t => t.offendingCoherency) && (
+                        <div className="px-2 py-1 bg-rose-950/90 border border-rose-600 rounded text-[10px] text-rose-300 font-mono flex items-center space-x-1 shadow animate-bounce">
+                          <AlertTriangle className="w-3 h-3 text-rose-400" />
+                          <span>Broken Coherency / Out of Range!</span>
+                        </div>
+                      )}
+                    </div>
+                  ) : selectedUnit.isPendingMoveConfirm ? (
                     <div className="flex items-center space-x-2">
                       <button
                         onClick={() => handleConfirmMove(selectedUnit.id)}
@@ -2790,29 +3795,47 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
               )}
 
               {gameState.phase === 'Shooting' && (
-                selectedUnit.owner === gameState.activePlayer ? (
-                  selectedUnit.stats.range === 0 ? (
-                    <div className="px-3 py-1.5 bg-zinc-850 border border-zinc-750 rounded-lg text-xs text-zinc-500 font-mono">
-                      Melee Only (Range 0)
-                    </div>
-                  ) : selectedUnit.hasShot ? (
-                    <button disabled className="bg-zinc-800/90 border border-zinc-700 text-zinc-500 font-bold text-xs px-3.5 py-1.5 rounded-lg flex items-center space-x-1 cursor-not-allowed">
-                      <span>✓ Already Fired</span>
-                    </button>
-                  ) : targetUnit ? (
-                    <button
-                      onClick={handleExecuteShooting}
-                      className="bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs px-3.5 py-1.5 rounded-lg flex items-center space-x-1.5 shadow"
-                    >
-                      <Target className="w-3.5 h-3.5" />
-                      <span>Fire Ranged ({selectedUnit.stats.range} sq)</span>
-                    </button>
-                  ) : (
+                selectedUnit.owner === gameState.activePlayer ? (() => {
+                  const hostSquad = selectedUnit.attachedTo ? gameState.units.find(u => u.id === selectedUnit.attachedTo) : null;
+                  const hostBlocked = hostSquad && (hostSquad.stats.range === 0 || hostSquad.hasShot);
+                  if (hostBlocked) {
+                    return (
+                      <div className="px-3 py-1.5 bg-zinc-850 border border-zinc-750 rounded-lg text-xs text-zinc-400 font-mono">
+                        Host Squad {hostSquad.stats.range === 0 ? 'Melee Only' : 'Already Fired'}
+                      </div>
+                    );
+                  }
+                  if (selectedUnit.stats.range === 0) {
+                    return (
+                      <div className="px-3 py-1.5 bg-zinc-850 border border-zinc-750 rounded-lg text-xs text-zinc-500 font-mono">
+                        Melee Only (Range 0)
+                      </div>
+                    );
+                  }
+                  if (selectedUnit.hasShot) {
+                    return (
+                      <button disabled className="bg-zinc-800/90 border border-zinc-700 text-zinc-500 font-bold text-xs px-3.5 py-1.5 rounded-lg flex items-center space-x-1 cursor-not-allowed">
+                        <span>✓ Already Fired</span>
+                      </button>
+                    );
+                  }
+                  if (targetUnit) {
+                    return (
+                      <button
+                        onClick={handleExecuteShooting}
+                        className="bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs px-3.5 py-1.5 rounded-lg flex items-center space-x-1.5 shadow"
+                      >
+                        <Target className="w-3.5 h-3.5" />
+                        <span>Fire Ranged ({selectedUnit.stats.range} sq)</span>
+                      </button>
+                    );
+                  }
+                  return (
                     <div className="px-3 py-1.5 bg-rose-950/40 border border-rose-800/50 rounded-lg text-xs text-rose-300 font-mono">
                       Click enemy target in range ({selectedUnit.stats.range} sq)
                     </div>
-                  )
-                ) : (
+                  );
+                })() : (
                   <div className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-xs text-zinc-500 font-mono">
                     Enemy / Inactive Unit
                   </div>
@@ -2861,7 +3884,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                     </button>
                   ) : (
                     <div className="px-3 py-1.5 bg-rose-950/40 border border-rose-800/50 rounded-lg text-xs text-rose-300 font-mono">
-                      Click adjacent enemy (≤ 1.8 sq)
+                      Click enemy in melee (≤ 1.0 sq or charged)
                     </div>
                   )
                 ) : (
@@ -2874,8 +3897,8 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
               {/* Leader & Transport Squad Actions */}
               {selectedUnit.owner === gameState.activePlayer && (
                 <div className="flex items-center space-x-1.5 pl-2 border-l border-zinc-700">
-                  {/* Detach Leader from Squad */}
-                  {selectedUnit.attachedUnits && selectedUnit.attachedUnits.length > 0 && (
+                  {/* Detach Leader from Squad (Strictly Deployment Phase only - BUG-020) */}
+                  {gameState.phase === 'Deployment' && selectedUnit.attachedUnits && selectedUnit.attachedUnits.length > 0 && (
                     selectedUnit.attachedUnits.map(leaderId => {
                       const leaderUnit = gameState.units.find(u => u.id === leaderId);
                       return (
@@ -2883,7 +3906,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                           key={leaderId}
                           onClick={() => handleDetachLeader(selectedUnit.id, leaderId)}
                           className="bg-purple-900/70 hover:bg-purple-800 border border-purple-600 text-purple-200 font-bold text-xs px-2.5 py-1.5 rounded-lg flex items-center space-x-1 shadow"
-                          title="Detach leader from squad"
+                          title="Detach leader from squad (Deployment Phase only)"
                         >
                           <UserMinus className="w-3.5 h-3.5" />
                           <span>Detach {leaderUnit?.name ? leaderUnit.name.split(' ')[0] : 'Leader'}</span>
@@ -2916,7 +3939,10 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
                   {/* Embark Infantry in Transport */}
                   {selectedUnit.type === 'Infantry' && !selectedUnit.embarkedIn && (() => {
-                    const canEmbark = gameState.phase === 'Deployment' || gameState.phase === 'Movement';
+                    const isFightReembark = gameState.phase === 'Fight' && selectedUnit.lastDisembarkRound === gameState.round && selectedUnit.lastDisembarkPhase !== 'Fight';
+                    const hasEmbarkedThisPhase = selectedUnit.lastEmbarkPhase === gameState.phase && selectedUnit.lastEmbarkRound === gameState.round;
+                    const hasDisembarkedThisPhase = selectedUnit.lastDisembarkPhase === gameState.phase && selectedUnit.lastDisembarkRound === gameState.round;
+                    const canEmbark = (gameState.phase === 'Deployment' || gameState.phase === 'Movement' || isFightReembark) && !hasEmbarkedThisPhase && !hasDisembarkedThisPhase;
                     return (
                       <button
                         onClick={() => {
@@ -2928,7 +3954,11 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                             ? 'bg-sky-900/60 hover:bg-sky-800 border-sky-500 text-sky-200 cursor-pointer'
                             : 'bg-zinc-800/80 border-zinc-700 text-zinc-500 cursor-not-allowed opacity-60'
                         }`}
-                        title={canEmbark ? 'Embark inside a friendly transport vehicle' : 'Embark only permitted during Deployment or Movement Phase'}
+                        title={
+                          hasEmbarkedThisPhase ? 'Cannot embark multiple times in the same phase' :
+                          hasDisembarkedThisPhase ? 'Cannot embark and disembark in the same phase' :
+                          canEmbark ? 'Embark inside a friendly transport vehicle' : 'Embark only permitted during Deployment, Movement, or Fight re-embark'
+                        }
                       >
                         <Truck className="w-3.5 h-3.5" />
                         <span>Embark</span>
@@ -2939,10 +3969,228 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
               )}
             </div>
           )}
+
+          {/* UI-003: Ability Cards Dock at bottom of Battlefield */}
+          <div className="absolute bottom-3 right-3 z-30 flex flex-col items-end pointer-events-auto">
+            {!abilitiesDockOpen ? (
+              /* Collapsed Pill Button */
+              <button
+                type="button"
+                onClick={() => setAbilitiesDockOpen(true)}
+                className={`px-3.5 py-2 rounded-xl shadow-2xl flex items-center space-x-2.5 transition cursor-pointer backdrop-blur-md border ${
+                  readyAbilitiesCount > 0
+                    ? 'bg-[#151928] border-amber-400 text-amber-300 ring-2 ring-amber-500/50 shadow-[0_0_20px_rgba(251,191,36,0.35)]'
+                    : 'bg-[#11131c]/90 border-zinc-700 text-zinc-300 hover:text-white hover:border-zinc-500'
+                }`}
+                title="Open Tactical & Faction Abilities Dock"
+              >
+                <div className="flex items-center space-x-1.5">
+                  <Zap className={`w-4 h-4 ${readyAbilitiesCount > 0 ? 'text-amber-400 fill-amber-400 animate-pulse' : 'text-zinc-400'}`} />
+                  <span className="text-xs font-bold font-mono">Abilities</span>
+                </div>
+
+                {readyAbilitiesCount > 0 ? (
+                  <span className="px-2 py-0.5 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 text-black font-black text-[10px] font-mono flex items-center space-x-1 animate-pulse shadow">
+                    <span>✨</span>
+                    <span>{readyAbilitiesCount} Ready</span>
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-zinc-500 font-mono">
+                    ({availableAbilities.length})
+                  </span>
+                )}
+
+                <ChevronUp className="w-3.5 h-3.5 text-zinc-400" />
+              </button>
+            ) : (
+              /* Expanded Playing Cards Hand Tray */
+              <div className="w-auto max-w-[calc(100vw-2rem)] md:max-w-4xl max-h-[440px] bg-[#0c0f18]/95 border-2 border-amber-500/50 rounded-2xl shadow-[0_12px_45px_rgba(0,0,0,0.85)] backdrop-blur-xl flex flex-col overflow-hidden animate-in slide-in-from-bottom-3 duration-200">
+                {/* Dock Header */}
+                <div className="flex items-center justify-between px-4 py-2.5 bg-[#141824] border-b border-zinc-800">
+                  <div className="flex items-center space-x-2.5">
+                    <span className="p-1.5 rounded-xl bg-amber-500/20 text-amber-400 text-base shadow">
+                      🃏
+                    </span>
+                    <div>
+                      <div className="flex items-center space-x-2">
+                        <h4 className="text-xs font-bold text-white font-mono tracking-wide">Playing Cards Hand</h4>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-750 font-mono uppercase font-bold">
+                          {gameState.phase} Phase
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-zinc-400 font-mono">
+                        Available CP: <strong className="text-amber-400">{currentCP}</strong> • {availableAbilities.length} cards in hand
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center space-x-2">
+                    {readyAbilitiesCount > 0 && (
+                      <span className="px-2.5 py-0.5 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 text-black font-black text-[10px] font-mono shadow animate-pulse">
+                        ✨ {readyAbilitiesCount} Playable
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setAbilitiesDockOpen(false)}
+                      className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-white transition cursor-pointer"
+                      title="Minimize Cards"
+                    >
+                      <ChevronDown className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Hand of Playing Cards (Horizontal Fan / Scroll) */}
+                <div className="flex-1 overflow-x-auto overflow-y-hidden p-3.5 flex items-stretch gap-3.5">
+                  {availableAbilities.length === 0 ? (
+                    <div className="w-full p-8 text-center border-2 border-dashed border-zinc-800/80 rounded-2xl space-y-2">
+                      <Zap className="w-8 h-8 text-zinc-600 mx-auto" />
+                      <span className="text-xs text-zinc-300 block font-bold font-mono">No Tactical Cards In Hand</span>
+                      <p className="text-[10px] text-zinc-500 max-w-sm mx-auto">
+                        Deploy units with equipped abilities or activate faction doctrines to draw cards into your hand.
+                      </p>
+                    </div>
+                  ) : (
+                    availableAbilities.map(item => {
+                      const { key, ability, sourceName, sourceAvatar, isFaction, isActivatable, disabledReason } = item;
+                      const isPassive = ability.type === 'passive';
+                      const gainsCP = ability.cost === 'gain_1_cp' || !!ability.gainsCP;
+
+                      // Theme, rarity, and customization resolution
+                      const theme: CardTheme = ability.cardTheme || (isFaction ? 'amethyst' : isPassive ? 'sapphire' : 'gold');
+                      const rarity: CardRarity = ability.cardRarity || (isFaction ? 'Epic' : 'Common');
+                      const themeStyle = CARD_THEME_STYLES[theme] || CARD_THEME_STYLES.gold;
+                      const rarityStyle = CARD_RARITY_BADGES[rarity] || CARD_RARITY_BADGES.Common;
+                      const actionLabel = ability.actionButtonText || 'PLAY CARD';
+
+                      return (
+                        <div
+                          key={key}
+                          className={`w-[195px] min-w-[195px] h-[345px] rounded-2xl flex flex-col justify-between relative overflow-hidden transition-all duration-200 select-none shadow-xl border-2 ${
+                            themeStyle.bg
+                          } ${themeStyle.border} ${
+                            isActivatable
+                              ? `${themeStyle.glow} hover:-translate-y-2 hover:scale-[1.03] cursor-pointer ring-2 ring-white/20`
+                              : isPassive
+                              ? 'opacity-90'
+                              : 'opacity-75 grayscale-[0.25]'
+                          }`}
+                        >
+                          {/* Card Top Filigree Header */}
+                          <div className="px-2.5 pt-2 pb-1 flex items-center justify-between gap-1 border-b border-white/10">
+                            <div className="flex items-center space-x-1 min-w-0">
+                              <h5 className={`font-serif font-black text-[11px] truncate tracking-wide ${themeStyle.headerText}`} title={ability.name}>
+                                {ability.name}
+                              </h5>
+                            </div>
+                            <div className="flex items-center space-x-1 shrink-0">
+                              {/* Rarity Indicator Mini Tag */}
+                              <span className={`px-1.5 py-0.2 rounded text-[7px] font-mono uppercase font-bold border ${rarityStyle.badge}`}>
+                                {rarity}
+                              </span>
+                              {gainsCP ? (
+                                <span className="px-1.5 py-0.5 rounded-full bg-emerald-950 border border-emerald-400 text-emerald-300 text-[8px] font-mono font-black animate-pulse shadow">
+                                  +1 CP ⭐
+                                </span>
+                              ) : isPassive ? (
+                                <span className="px-1.5 py-0.5 rounded-full bg-sky-950 border border-sky-400 text-sky-200 text-[8px] font-mono font-bold">
+                                  PASSIVE
+                                </span>
+                              ) : (
+                                <span className="px-1.5 py-0.5 rounded-full bg-amber-950 border border-amber-500/80 text-amber-200 text-[8px] font-mono font-bold">
+                                  FREE
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Card Art Portrait Window */}
+                          <div className="mx-2 my-1 h-24 rounded-xl bg-gradient-to-br from-black/95 via-zinc-900/80 to-black/95 border border-zinc-700/60 flex flex-col items-center justify-center relative overflow-hidden shadow-inner group">
+                            <div className={`absolute inset-0 bg-radial ${themeStyle.innerShadow} via-transparent to-transparent opacity-60 pointer-events-none`} />
+                            {ability.cardArtworkUrl ? (
+                              <img
+                                src={ability.cardArtworkUrl}
+                                alt={ability.name}
+                                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300 pointer-events-none select-none"
+                              />
+                            ) : (
+                              <span className="text-4xl filter drop-shadow-[0_4px_10px_rgba(0,0,0,0.9)] transition-transform group-hover:scale-110">
+                                {ability.icon || sourceAvatar || '⚡'}
+                              </span>
+                            )}
+                            <span className="absolute bottom-1 px-1.5 py-0.5 rounded bg-black/85 text-[8px] font-mono text-zinc-300 truncate max-w-[92%] border border-white/10 shadow backdrop-blur-xs">
+                              {sourceName}
+                            </span>
+                          </div>
+
+                          {/* Card Type & Phase Ribbon */}
+                          <div className={`mx-2 px-1.5 py-0.5 rounded flex items-center justify-between text-[8px] font-mono border ${themeStyle.ribbonBg}`}>
+                            <span className={`font-bold ${themeStyle.accentText}`}>
+                              {isFaction ? '🔮 FACTION' : isPassive ? '🛡️ PASSIVE' : '⚡ TACTIC'}
+                            </span>
+                            <span className="text-zinc-300 uppercase font-semibold">
+                              {ability.activationTiming ? ability.activationTiming.replace('_', ' ') : 'ANY TIME'}
+                            </span>
+                          </div>
+
+                          {/* Card Rules Text Box (Parchment/Obsidian Box) */}
+                          <div className="mx-2 my-1 p-2 rounded-xl bg-black/75 border border-zinc-800/80 flex-1 flex flex-col justify-center text-center shadow-inner">
+                            <p className="text-[10px] text-zinc-200 font-sans leading-tight line-clamp-3">
+                              {ability.effect}
+                            </p>
+                            {gainsCP && (
+                              <span className="text-[9px] text-emerald-400 font-bold font-mono block mt-1">
+                                ⭐ Grants +1 Free CP
+                              </span>
+                            )}
+                            {ability.triggerCondition && (
+                              <span className="text-[8px] text-amber-300/80 font-mono block mt-0.5 italic truncate">
+                                ⏱️ {ability.triggerCondition}
+                              </span>
+                            )}
+                            {ability.quote && (
+                              <span className="text-[8px] text-zinc-400 font-serif italic block mt-1 line-clamp-1 border-t border-white/10 pt-0.5">
+                                "{ability.quote}"
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Card Footer / Action Seal */}
+                          <div className="w-full">
+                            {isPassive ? (
+                              <div className="w-full py-2 bg-sky-950/90 border-t border-sky-500/40 text-sky-300 font-bold text-[10px] font-mono uppercase tracking-wider text-center flex items-center justify-center space-x-1">
+                                <span>🛡️</span>
+                                <span>ALWAYS ACTIVE</span>
+                              </div>
+                            ) : isActivatable ? (
+                              <button
+                                type="button"
+                                onClick={() => handleActivateAbility(item)}
+                                className={`w-full py-2.5 ${themeStyle.buttonBg} hover:brightness-115 font-black text-[11px] font-mono uppercase tracking-wider flex items-center justify-center space-x-1.5 shadow-lg cursor-pointer transition active:scale-95 border-t border-white/20`}
+                              >
+                                <Zap className="w-3.5 h-3.5" />
+                                <span>{actionLabel}</span>
+                              </button>
+                            ) : (
+                              <div className="w-full py-2 bg-zinc-950/90 border-t border-zinc-800 text-zinc-500 text-[9px] font-mono text-center truncate px-2">
+                                🔒 {disabledReason || 'Phase Locked'}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Right Sidebar (Roll20 Style: Chat, Journal, Ledger) */}
-        <div className="w-72 bg-[#12141c] border-l border-zinc-800 flex flex-col shrink-0 text-xs">
+        {showRightSidebar && (
+          <div className="w-72 bg-[#12141c] border-l border-zinc-800 flex flex-col shrink-0 text-xs animate-in slide-in-from-right duration-200">
           {/* Tabs header */}
           <div className="flex items-center justify-between border-b border-zinc-800 bg-[#161922] px-2 py-1.5">
             <button
@@ -3088,109 +4336,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
             </div>
           )}
         </div>
-      </div>
-
-      {/* Pull-out Right Screen Edge Quick Drawer Tabs */}
-      <div className="fixed right-0 top-1/2 -translate-y-1/2 z-40 flex flex-col space-y-2 items-end pointer-events-auto">
-        {gameState.phase === 'Deployment' && (() => {
-          const currentDeployer = gameState.deployingPlayer || gameState.activePlayer;
-          const deployableCount = gameState.units.filter(
-            u => !u.position && !u.inStrategicReserve && !u.embarkedIn && !u.attachedTo && u.stats.lives > 0 && u.owner === currentDeployer
-          ).length;
-
-          return (
-            <button
-              onClick={() => {
-                setArmyTrayDrawerOpen(prev => !prev);
-                setDiceDrawerOpen(false);
-                setCommandDrawerOpen(false);
-                setReservesDrawerOpen(false);
-                setEmbarkedDrawerOpen(false);
-              }}
-              className={`flex items-center space-x-1.5 px-3 py-2 rounded-l-xl text-xs font-bold font-mono shadow-2xl transition-all border-l border-t border-b ${
-                armyTrayDrawerOpen 
-                  ? 'bg-amber-400 text-black border-amber-300 translate-x-0 ring-2 ring-amber-300' 
-                  : 'bg-[#141722]/95 text-amber-300 border-zinc-700 hover:bg-zinc-800 hover:translate-x-[-4px]'
-              }`}
-              title="Toggle Army Tray (Deployment Unit Picker)"
-            >
-              <Users className="w-4 h-4" />
-              <span>Army Tray ({deployableCount})</span>
-            </button>
-          );
-        })()}
-
-        <button
-          onClick={() => {
-            setDiceDrawerOpen(prev => !prev);
-            setArmyTrayDrawerOpen(false);
-            setCommandDrawerOpen(false);
-            setReservesDrawerOpen(false);
-            setEmbarkedDrawerOpen(false);
-          }}
-          className={`flex items-center space-x-1.5 px-3 py-2 rounded-l-xl text-xs font-bold font-mono shadow-2xl transition-all border-l border-t border-b ${
-            diceDrawerOpen 
-              ? 'bg-amber-500 text-black border-amber-400 translate-x-0' 
-              : 'bg-[#141722]/95 text-amber-300 border-zinc-700 hover:bg-zinc-800 hover:translate-x-[-4px]'
-          }`}
-        >
-          <span className="text-base">🎲</span>
-          <span>Dice Tray</span>
-        </button>
-
-        <button
-          onClick={() => {
-            setCommandDrawerOpen(prev => !prev);
-            setArmyTrayDrawerOpen(false);
-            setDiceDrawerOpen(false);
-            setReservesDrawerOpen(false);
-            setEmbarkedDrawerOpen(false);
-          }}
-          className={`flex items-center space-x-1.5 px-3 py-2 rounded-l-xl text-xs font-bold font-mono shadow-2xl transition-all border-l border-t border-b ${
-            commandDrawerOpen 
-              ? 'bg-amber-400 text-black border-amber-300 translate-x-0' 
-              : 'bg-[#141722]/95 text-amber-400 border-zinc-700 hover:bg-zinc-800 hover:translate-x-[-4px]'
-          }`}
-        >
-          <Zap className="w-4 h-4" />
-          <span>Command ({gameState.activePlayer === 'player1' ? gameState.player1CP ?? 3 : gameState.player2CP ?? 3} CP)</span>
-        </button>
-
-        <button
-          onClick={() => {
-            setReservesDrawerOpen(prev => !prev);
-            setArmyTrayDrawerOpen(false);
-            setDiceDrawerOpen(false);
-            setCommandDrawerOpen(false);
-            setEmbarkedDrawerOpen(false);
-          }}
-          className={`flex items-center space-x-1.5 px-3 py-2 rounded-l-xl text-xs font-bold font-mono shadow-2xl transition-all border-l border-t border-b ${
-            reservesDrawerOpen 
-              ? 'bg-amber-500 text-black border-amber-400 translate-x-0' 
-              : 'bg-[#141722]/95 text-amber-300 border-zinc-700 hover:bg-zinc-800 hover:translate-x-[-4px]'
-          }`}
-        >
-          <Box className="w-4 h-4" />
-          <span>Reserves ({gameState.units.filter(u => u.inStrategicReserve).length})</span>
-        </button>
-
-        <button
-          onClick={() => {
-            setEmbarkedDrawerOpen(prev => !prev);
-            setArmyTrayDrawerOpen(false);
-            setDiceDrawerOpen(false);
-            setCommandDrawerOpen(false);
-            setReservesDrawerOpen(false);
-          }}
-          className={`flex items-center space-x-1.5 px-3 py-2 rounded-l-xl text-xs font-bold font-mono shadow-2xl transition-all border-l border-t border-b ${
-            embarkedDrawerOpen 
-              ? 'bg-sky-400 text-black border-sky-300 translate-x-0' 
-              : 'bg-[#141722]/95 text-sky-400 border-zinc-700 hover:bg-zinc-800 hover:translate-x-[-4px]'
-          }`}
-        >
-          <Truck className="w-4 h-4" />
-          <span>Embarked ({gameState.units.filter(u => !!u.embarkedIn).length})</span>
-        </button>
+        )}
       </div>
 
       {/* Drawer 0: Army Tray (Deployment Picker) Slide-out */}
@@ -3486,7 +4632,10 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                           })()}
 
                           {isInfantry && !u.embarkedIn && (() => {
-                            const canEmbark = gameState.phase === 'Deployment' || gameState.phase === 'Movement';
+                            const isFightReembark = gameState.phase === 'Fight' && u.lastDisembarkRound === gameState.round && u.lastDisembarkPhase !== 'Fight';
+                            const hasEmbarkedThisPhase = u.lastEmbarkPhase === gameState.phase && u.lastEmbarkRound === gameState.round;
+                            const hasDisembarkedThisPhase = u.lastDisembarkPhase === gameState.phase && u.lastDisembarkRound === gameState.round;
+                            const canEmbark = (gameState.phase === 'Deployment' || gameState.phase === 'Movement' || isFightReembark) && !hasEmbarkedThisPhase && !hasDisembarkedThisPhase;
                             return (
                               <button
                                 onClick={() => {
@@ -3498,7 +4647,11 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                                     ? 'bg-sky-900/80 hover:bg-sky-800 text-sky-200 border-sky-600/50 cursor-pointer'
                                     : 'bg-zinc-800/80 border-zinc-700 text-zinc-500 cursor-not-allowed opacity-60'
                                 }`}
-                                title={canEmbark ? 'Embark inside a friendly transport vehicle' : 'Embark only permitted during Deployment or Movement Phase'}
+                                title={
+                                  hasEmbarkedThisPhase ? 'Cannot embark multiple times in the same phase' :
+                                  hasDisembarkedThisPhase ? 'Cannot embark and disembark in the same phase' :
+                                  canEmbark ? 'Embark inside a friendly transport vehicle' : 'Embark only permitted during Deployment, Movement, or Fight re-embark'
+                                }
                               >
                                 <Truck className="w-3 h-3" />
                                 <span>Embark</span>
@@ -4023,12 +5176,16 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                   const vehicle = gameState.units.find(v => v.id === u.embarkedIn);
                   const isOwnerTurn = gameState.activePlayer === u.owner;
                   const isMovementPhase = gameState.phase === 'Movement';
-                  const canDisembark = isOwnerTurn && isMovementPhase && !!vehicle?.position;
+                  const hasEmbarkedThisPhase = u.lastEmbarkPhase === gameState.phase && u.lastEmbarkRound === gameState.round;
+                  const hasDisembarkedThisPhase = u.lastDisembarkPhase === gameState.phase && u.lastDisembarkRound === gameState.round;
+                  const canDisembark = isOwnerTurn && isMovementPhase && !!vehicle?.position && !hasEmbarkedThisPhase && !hasDisembarkedThisPhase;
 
                   let buttonReason = 'Disembark Adjacent to Vehicle';
                   if (!isMovementPhase) buttonReason = '🔒 Movement Phase Only';
                   else if (!isOwnerTurn) buttonReason = '🔒 Inactive Turn';
                   else if (!vehicle?.position) buttonReason = '🔒 Vehicle not on board';
+                  else if (hasEmbarkedThisPhase) buttonReason = '🔒 Already Embarked this Phase';
+                  else if (hasDisembarkedThisPhase) buttonReason = '🔒 Already Disembarked this Phase';
 
                   return (
                     <div
@@ -4197,24 +5354,47 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                   {candidates.map(cand => {
                     const embarkedCount = gameState.units.filter(u => u.embarkedIn === cand.id).length;
                     const maxCapacity = cand.transportCapacity ?? 1;
+                    const isDeployed = !!(infantry.position && cand.position);
+                    let inRange = true;
+                    let distInches = 0;
+                    if (isDeployed) {
+                      const dist = getUnitsModelDistance(infantry, cand);
+                      distInches = Math.round((dist.minEdgeDistPx / DEFAULT_GRID_SIZE) * 10) / 10;
+                      inRange = dist.minEdgeDistPx <= 150;
+                    }
 
                     return (
                       <div
                         key={cand.id}
-                        onClick={() => handleEmbarkUnit(infantry.id, cand.id)}
-                        className="p-3 bg-zinc-900 hover:bg-sky-950/40 border border-zinc-800 hover:border-sky-600 rounded-xl flex items-center justify-between cursor-pointer transition shadow"
+                        onClick={() => {
+                          if (inRange) handleEmbarkUnit(infantry.id, cand.id);
+                        }}
+                        className={`p-3 bg-zinc-900 border rounded-xl flex items-center justify-between transition shadow ${
+                          inRange
+                            ? 'hover:bg-sky-950/40 border-zinc-800 hover:border-sky-600 cursor-pointer'
+                            : 'border-zinc-800 opacity-60 cursor-not-allowed'
+                        }`}
                       >
                         <div className="flex items-center space-x-2.5">
                           <span className="text-2xl">{cand.avatar}</span>
                           <div>
                             <span className="font-bold text-white text-xs block">{cand.name}</span>
                             <span className="text-[10px] text-zinc-400 font-mono">
-                              Capacity: {embarkedCount} / {maxCapacity} squads • {cand.position ? `Pos: (${cand.position.x}, ${cand.position.y})` : 'In Reserve'}
+                              Capacity: {embarkedCount} / {maxCapacity} squads • {cand.position ? `Distance: ${distInches}" (Max 3")` : 'In Reserve'}
                             </span>
+                            {!inRange && (
+                              <span className="text-[10px] text-rose-400 font-mono block">
+                                ⚠️ Out of range ({distInches}&quot; &gt; 3.0&quot; max embark distance)
+                              </span>
+                            )}
                           </div>
                         </div>
-                        <span className="px-3 py-1 bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs rounded-lg shadow">
-                          Embark
+                        <span className={`px-3 py-1 font-bold text-xs rounded-lg shadow ${
+                          inRange
+                            ? 'bg-sky-600 hover:bg-sky-500 text-white cursor-pointer'
+                            : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
+                        }`}>
+                          {inRange ? 'Embark' : 'Too Far'}
                         </span>
                       </div>
                     );
@@ -4297,6 +5477,23 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
           </div>
         );
       })()}
+
+      {/* BUG-026: Deployment Error Notice Floating Toast */}
+      {deploymentErrorNotice && (
+        <div className="fixed top-14 left-1/2 -translate-x-1/2 z-50 bg-rose-950/95 border-2 border-rose-500 text-rose-100 px-5 py-2.5 rounded-xl shadow-2xl flex items-center space-x-2.5 animate-in fade-in slide-in-from-top-3 duration-200 font-mono text-xs font-bold">
+          <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+          <span>{deploymentErrorNotice}</span>
+          <button onClick={() => setDeploymentErrorNotice(null)} className="ml-2 text-rose-300 hover:text-white cursor-pointer">✕</button>
+        </div>
+      )}
+
+      {/* Opponent Bot Deploying Notice Toast */}
+      {isBotDeploying && gameState.phase === 'Deployment' && (
+        <div className="fixed top-14 right-6 z-50 bg-[#0f1b2b]/95 border border-sky-400 text-sky-200 px-4 py-2.5 rounded-xl shadow-2xl flex items-center space-x-2 animate-in fade-in slide-in-from-top-3 duration-200 font-mono text-xs font-bold">
+          <span className="w-2.5 h-2.5 rounded-full bg-sky-400 animate-ping"></span>
+          <span>🤖 Opponent Bot is deploying squad...</span>
+        </div>
+      )}
 
       {/* Done Deploying Notification Banner */}
       {doneDeployingNotice && (
@@ -4472,11 +5669,12 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                       <button
                         key={f.id}
                         onClick={() => setArmyFactionFilter(f.id)}
-                        className={`px-2 py-0.5 rounded transition cursor-pointer ${
+                        className={`px-2 py-0.5 rounded transition cursor-pointer inline-flex items-center space-x-1.5 ${
                           armyFactionFilter === f.id ? 'bg-rose-600 text-white font-bold' : 'bg-zinc-900 text-zinc-400 hover:text-white'
                         }`}
                       >
-                        {f.symbol} {f.shortName}
+                        <FactionLogo faction={f} size="xs" />
+                        <span>{f.shortName}</span>
                       </button>
                     ))}
                   </div>
@@ -4533,7 +5731,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                         >
                           <div className="flex items-start justify-between">
                             <div className="flex items-center space-x-2.5">
-                              <span className="text-2xl">{faction?.symbol || '⚔️'}</span>
+                              <FactionLogo faction={faction} size="md" />
                               <div>
                                 <h4 className="font-bold text-white text-xs block leading-tight">{army.name}</h4>
                                 <span className="text-[10px] text-zinc-400 font-mono">
@@ -4621,6 +5819,166 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                     <ArrowRight className="w-3.5 h-3.5" />
                   </button>
                 </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ================= MATCH CONCLUDED / VICTORY MODAL (BUG-025 & DESIGN-010) ================= */}
+      {gameState.isGameOver && (() => {
+        const isP1Winner = gameState.winner === 'player1';
+        const isP2Winner = gameState.winner === 'player2';
+        const isDraw = gameState.winner === 'draw';
+
+        const allFactions = StorageService.getFactions();
+        const p1FactionId = customRoster?.factionId || gameState.units.find(u => u.owner === 'player1')?.factionId || 'crimson_empire';
+        const p2FactionId = gameState.units.find(u => u.owner === 'player2')?.factionId || 'daughters_astraea';
+
+        const p1Faction = allFactions.find(f => f.id === p1FactionId);
+        const p2Faction = allFactions.find(f => f.id === p2FactionId);
+
+        // Calculate breakdown stats
+        const poiBreakdown = calculatePOIScores(gameState.units, gameState.pois).breakdown;
+        const p1Held = poiBreakdown.filter(b => b.player1CP > b.player2CP).length;
+        const p2Held = poiBreakdown.filter(b => b.player2CP > b.player1CP).length;
+
+        const p1SurvivingLives = gameState.units.filter(u => u.owner === 'player1').reduce((acc, u) => acc + Math.max(0, u.stats?.lives || 0), 0);
+        const p2SurvivingLives = gameState.units.filter(u => u.owner === 'player2').reduce((acc, u) => acc + Math.max(0, u.stats?.lives || 0), 0);
+
+        const p1SurvivingUnits = gameState.units.filter(u => u.owner === 'player1' && (u.stats?.lives || 0) > 0).length;
+        const p2SurvivingUnits = gameState.units.filter(u => u.owner === 'player2' && (u.stats?.lives || 0) > 0).length;
+
+        return (
+          <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in zoom-in-95 duration-300">
+            <div className={`bg-[#0d1017] border rounded-3xl max-w-xl w-full p-6 sm:p-8 shadow-2xl flex flex-col space-y-6 text-center relative overflow-hidden ${
+              isP1Winner 
+                ? 'border-amber-500/70 ring-1 ring-amber-500/40 shadow-amber-950/50' 
+                : isP2Winner 
+                  ? 'border-rose-600/70 ring-1 ring-rose-600/40 shadow-rose-950/50' 
+                  : 'border-sky-500/70 ring-1 ring-sky-500/40 shadow-sky-950/50'
+            }`}>
+              {/* Header Title Badge */}
+              <div className="space-y-1.5">
+                <div className="inline-flex items-center justify-center space-x-2 px-3.5 py-1 rounded-full text-xs font-mono font-bold tracking-wider uppercase border shadow-sm mx-auto">
+                  {isP1Winner && (
+                    <span className="bg-amber-950/80 text-amber-300 border border-amber-500/50 flex items-center space-x-1.5 px-3 py-0.5 rounded-full">
+                      <Trophy className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Decisive Victory</span>
+                    </span>
+                  )}
+                  {isP2Winner && (
+                    <span className="bg-rose-950/80 text-rose-300 border border-rose-500/50 flex items-center space-x-1.5 px-3 py-0.5 rounded-full">
+                      <Shield className="w-3.5 h-3.5 text-rose-400" />
+                      <span>Defeat in Sector</span>
+                    </span>
+                  )}
+                  {isDraw && (
+                    <span className="bg-sky-950/80 text-sky-300 border border-sky-500/50 flex items-center space-x-1.5 px-3 py-0.5 rounded-full">
+                      <Swords className="w-3.5 h-3.5 text-sky-400" />
+                      <span>Tactical Stalemate</span>
+                    </span>
+                  )}
+                </div>
+
+                <h1 className="text-3xl sm:text-4xl font-black tracking-tight text-white font-serif uppercase">
+                  {isP1Winner ? 'Victory Achieved' : isP2Winner ? 'Opponent Victorious' : 'Honorable Draw'}
+                </h1>
+                <p className="text-xs sm:text-sm text-zinc-300 font-sans px-4">
+                  {gameState.winReason || (gameState.round >= 10 ? `Match concluded at Round 10 Hard Cap with score ${gameState.player1Score} - ${gameState.player2Score}.` : 'The battle has concluded.')}
+                </p>
+              </div>
+
+              {/* Force & Score Comparison Grid */}
+              <div className="grid grid-cols-2 gap-3 sm:gap-4 bg-zinc-950/70 p-4 rounded-2xl border border-zinc-800/80">
+                {/* Player 1 Column */}
+                <div className={`p-4 rounded-xl border flex flex-col items-center space-y-2.5 ${
+                  isP1Winner 
+                    ? 'bg-amber-950/25 border-amber-500/60 ring-1 ring-amber-500/30' 
+                    : 'bg-zinc-900/50 border-zinc-800'
+                }`}>
+                  <FactionLogo faction={p1Faction} size="lg" />
+                  <div>
+                    <h3 className="font-bold text-white text-sm">{p1Faction?.name || 'Player 1 Force'}</h3>
+                    <span className="text-[10px] text-zinc-400 font-mono">Commander (West)</span>
+                  </div>
+                  <div className="text-3xl font-black font-mono text-amber-400">
+                    {gameState.player1Score} <span className="text-xs text-zinc-400 font-normal">VP</span>
+                  </div>
+                  <div className="w-full space-y-1 text-[11px] font-mono border-t border-zinc-800 pt-2 text-zinc-400 text-left">
+                    <div className="flex justify-between">
+                      <span>POIs Controlled:</span>
+                      <strong className="text-white">{p1Held}</strong>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Squads Eliminated:</span>
+                      <strong className="text-rose-400">+{gameState.player1Kills}</strong>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Surviving Squads:</span>
+                      <strong className="text-emerald-400">{p1SurvivingUnits} ({p1SurvivingLives} HP)</strong>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Player 2 Column */}
+                <div className={`p-4 rounded-xl border flex flex-col items-center space-y-2.5 ${
+                  isP2Winner 
+                    ? 'bg-rose-950/25 border-rose-500/60 ring-1 ring-rose-500/30' 
+                    : 'bg-zinc-900/50 border-zinc-800'
+                }`}>
+                  <FactionLogo faction={p2Faction} size="lg" />
+                  <div>
+                    <h3 className="font-bold text-white text-sm">{p2Faction?.name || 'Player 2 Force'}</h3>
+                    <span className="text-[10px] text-zinc-400 font-mono">Opponent (East / Bot)</span>
+                  </div>
+                  <div className="text-3xl font-black font-mono text-sky-400">
+                    {gameState.player2Score} <span className="text-xs text-zinc-400 font-normal">VP</span>
+                  </div>
+                  <div className="w-full space-y-1 text-[11px] font-mono border-t border-zinc-800 pt-2 text-zinc-400 text-left">
+                    <div className="flex justify-between">
+                      <span>POIs Controlled:</span>
+                      <strong className="text-white">{p2Held}</strong>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Squads Eliminated:</span>
+                      <strong className="text-rose-400">+{gameState.player2Kills}</strong>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Surviving Squads:</span>
+                      <strong className="text-emerald-400">{p2SurvivingUnits} ({p2SurvivingLives} HP)</strong>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Match Meta Badge */}
+              <div className="flex items-center justify-center space-x-3 text-[11px] font-mono text-zinc-400">
+                <span>Rounds Fought: <strong className="text-white">{Math.min(10, gameState.round)} / 10</strong></span>
+                <span>•</span>
+                <span>Sector: <strong className="text-white">{gameState.currentMap?.name || 'Standard Crucible'}</strong></span>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={handleRestartMatch}
+                  className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs font-mono rounded-xl shadow-lg flex items-center space-x-2 transition cursor-pointer"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  <span>Rematch / Play Again</span>
+                </button>
+
+                {onReturnHome && (
+                  <button
+                    type="button"
+                    onClick={onReturnHome}
+                    className="px-5 py-2.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-700 font-bold text-xs font-mono rounded-xl shadow transition cursor-pointer"
+                  >
+                    <span>Return to War Room</span>
+                  </button>
+                )}
               </div>
             </div>
           </div>

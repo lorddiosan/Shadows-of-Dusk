@@ -17,7 +17,21 @@ export const FACTIONS: FactionInfo[] = [
     symbol: '⚙️🩸',
     loreSummary: 'Industrial conquerors powered by crimson crystals (crystallized divine blood). Believing they are the prime version of humanity, their steam-armored legion and mechanized engines harvest realities.',
     leaderName: 'Grand Warmaster Kaelen Vane',
-    strengths: ['High Armor & Def', 'Heavy Vehicle Artillery', 'Self-Repair passives']
+    strengths: ['High Armor & Def', 'Heavy Vehicle Artillery', 'Self-Repair passives'],
+    factionAbility: {
+      id: 'crimson_blood_forge',
+      name: 'Blood-Alchemical Overdrive',
+      icon: '🩸',
+      type: 'active',
+      affects: 'all_friendly',
+      activationTiming: 'command',
+      cost: 'once_per_round',
+      vfxType: 'blood',
+      effectType: 'stat_modifier',
+      duration: 'end_of_round',
+      summary: 'Infuse blood-steam engines to push beyond mortal limits (0 CP).',
+      effect: 'All friendly units gain +1 to Movement and ignore difficult terrain penalty this round.'
+    }
   },
   {
     id: 'daughters_astraea',
@@ -34,7 +48,21 @@ export const FACTIONS: FactionInfo[] = [
     symbol: '🦅✨',
     loreSummary: 'Founded thousands of years ago on hidden storm-veiled isles by a goddess preparing for the final darkness. A united multi-species sisterhood with unmatched discipline, agility, and high Control Power.',
     leaderName: 'High Marshal Lyssandra',
-    strengths: ['High Mobility (Mv)', 'Objective Control (High CP)', 'Debuff Resistance']
+    strengths: ['High Mobility (Mv)', 'Objective Control (High CP)', 'Debuff Resistance'],
+    factionAbility: {
+      id: 'astraea_dawn_vigil',
+      name: 'Dawn Aegis Aura',
+      icon: '✨',
+      type: 'active',
+      affects: 'all_friendly',
+      activationTiming: 'shooting',
+      cost: 'once_per_round',
+      vfxType: 'holy',
+      effectType: 'defense',
+      duration: 'end_of_phase',
+      summary: 'A golden veil shields the sisterhood from incoming volleys (0 CP).',
+      effect: 'Friendly units gain +1 to Defence saving throws against ranged attacks this phase.'
+    }
   },
   {
     id: 'infernal_crusades',
@@ -51,7 +79,21 @@ export const FACTIONS: FactionInfo[] = [
     symbol: '🔥⚔️',
     loreSummary: 'Disciplined military legions marching from Infernal Rifts in the Below Realms. Hell with supply lines, cruel tactical doctrine, terrifying brute shock troops, and crushing melee AM.',
     leaderName: 'Arch-General Malakor',
-    strengths: ['Devastating Charge AM', 'Terrifying Monsters', 'Aggressive Melee Advantage']
+    strengths: ['Devastating Charge AM', 'Terrifying Monsters', 'Aggressive Melee Advantage'],
+    factionAbility: {
+      id: 'infernal_hellfire_rush',
+      name: 'Hellfire Shockwave',
+      icon: '🔥',
+      type: 'active',
+      affects: 'all_friendly',
+      activationTiming: 'charge',
+      cost: 'once_per_round',
+      vfxType: 'plasma',
+      effectType: 'stat_modifier',
+      duration: 'end_of_phase',
+      summary: 'Ignites weapons with infernal wrath upon charging (0 CP).',
+      effect: 'All friendly charging units gain +1 Attack Modifier on melee attacks this turn.'
+    }
   },
   {
     id: 'chronarch_conclave',
@@ -68,7 +110,21 @@ export const FACTIONS: FactionInfo[] = [
     symbol: '⏳🔮',
     loreSummary: 'Wardens protecting the sacred Time Crystal. Seeking neither territory nor gold, they manipulate temporal fields, distort enemy movement, and reset lethal strikes before they land.',
     leaderName: 'Chronarch Prime Oros',
-    strengths: ['Range Dominance', 'Movement Manipulation', 'Temporal Survival Rerolls']
+    strengths: ['Range Dominance', 'Movement Manipulation', 'Temporal Survival Rerolls'],
+    factionAbility: {
+      id: 'chronarch_temporal_warp',
+      name: 'Temporal Loom Surge',
+      icon: '⏳',
+      type: 'active',
+      affects: 'all_friendly',
+      activationTiming: 'movement',
+      cost: 'once_per_round',
+      vfxType: 'arcane',
+      effectType: 'movement',
+      duration: 'end_of_phase',
+      summary: 'Warps the battlefield fabric to slip through space (0 CP).',
+      effect: 'Friendly units may move through terrain obstacles and ignore distance penalties this phase.'
+    }
   },
   {
     id: 'court_of_nocturne',
@@ -85,7 +141,21 @@ export const FACTIONS: FactionInfo[] = [
     symbol: '🦇🍷',
     loreSummary: 'Aristocratic blood-nobles who view death not as tragedy, but as abandonment. Defeating mortality itself with dread poise, regenerative thralls, and devastating dark aristocrats.',
     leaderName: 'Countess Carmilla von Draken',
-    strengths: ['Life Steal / Reanimation', 'High AM Characters', 'Psychological Aura']
+    strengths: ['Life Steal / Reanimation', 'High AM Characters', 'Psychological Aura'],
+    factionAbility: {
+      id: 'nocturne_vampiric_feast',
+      name: 'Crimson Eclipse Feast',
+      icon: '🦇',
+      type: 'active',
+      affects: 'all_friendly',
+      activationTiming: 'fight',
+      cost: 'once_per_round',
+      vfxType: 'blood',
+      effectType: 'stat_modifier',
+      duration: 'end_of_phase',
+      summary: 'Drains the life force of fallen foes in close quarters (0 CP).',
+      effect: 'Friendly melee units heal 1 life when destroying an opposing model in combat.'
+    }
   },
   {
     id: 'iron_clad_holds',
@@ -102,7 +172,21 @@ export const FACTIONS: FactionInfo[] = [
     symbol: '🛡️🔨',
     loreSummary: 'Master engineers and runic smiths who reject fickle sorcery. Their thick steam golems, fortified shieldwalls, and relentless discipline anchor any battlefield.',
     leaderName: 'High Thane Torvald Deepdelver',
-    strengths: ['Supreme Base Defence', 'Heavy Weapon Squads', 'Immovable POI Control']
+    strengths: ['Supreme Base Defence', 'Heavy Weapon Squads', 'Immovable POI Control'],
+    factionAbility: {
+      id: 'ironclad_rune_phalanx',
+      name: 'Runic Phalanx Bastion',
+      icon: '🛡️',
+      type: 'active',
+      affects: 'all_friendly',
+      activationTiming: 'command',
+      cost: 'once_per_round',
+      vfxType: 'command',
+      effectType: 'defense',
+      duration: 'end_of_round',
+      summary: 'Chants impenetrable mountain runes across the battle line (0 CP).',
+      effect: 'All friendly units holding objectives or cover gain +1 to Defence saving throws until round end.'
+    }
   }
 ];
 
@@ -134,6 +218,38 @@ export const UNIT_TEMPLATES: Unit[] = [
       size: 'Large'
     },
     passives: ['Leader Survival (1d6 > Attack saves model)', 'Prime Authority (+1 AM to adjacent allies)'],
+    traits: ['Leader', 'Unyielding'],
+    abilities: [
+      {
+        id: 'kaelen_battle_cry',
+        name: 'Prime Authority Cry',
+        icon: '🚩',
+        type: 'active',
+        affects: 'all_friendly',
+        activationTiming: 'command',
+        cost: 'gain_1_cp',
+        gainsCP: true,
+        vfxType: 'holy',
+        effectType: 'stat_modifier',
+        duration: 'end_of_round',
+        summary: 'Commands the front line to press aggressively (+1 Free CP).',
+        effect: 'Generates +1 Free CP ⭐. Adjacent friendly units gain +1 AM on attack rolls this round.'
+      },
+      {
+        id: 'kaelen_adrenaline',
+        name: 'Blood Engine Strike',
+        icon: '⚡',
+        type: 'active',
+        affects: 'self',
+        activationTiming: 'fight',
+        cost: 'once_per_round',
+        vfxType: 'blood',
+        effectType: 'stat_modifier',
+        duration: 'end_of_phase',
+        summary: 'Pours alchemical fuel into power cleaver (0 CP).',
+        effect: 'Gain +2 AM and gain 1 Advantage stack during this Fight Phase.'
+      }
+    ],
     owner: 'player1',
     position: null,
     hasMoved: false,
@@ -169,6 +285,23 @@ export const UNIT_TEMPLATES: Unit[] = [
       size: 'Medium'
     },
     passives: ['Type Advantage: Beats Monsters', 'Phalanx (+1 Def against ranged shots)'],
+    traits: ['Shieldwall'],
+    abilities: [
+      {
+        id: 'crimson_phalanx_lock',
+        name: 'Riot Phalanx Lock',
+        icon: '🛡️',
+        type: 'active',
+        affects: 'self',
+        activationTiming: 'command',
+        cost: 'free',
+        vfxType: 'command',
+        effectType: 'defense',
+        duration: 'end_of_round',
+        summary: 'Locks pneumatic shields into an immovable barrier (0 CP).',
+        effect: 'Unit gains +1 Defence modifier against all attacks until the end of the round.'
+      }
+    ],
     owner: 'player1',
     position: null,
     hasMoved: false,
@@ -204,6 +337,23 @@ export const UNIT_TEMPLATES: Unit[] = [
       size: 'Small'
     },
     passives: ['DEPLOY_OUTSIDE_ZONE', 'Infiltrator (Can deploy anywhere outside normal deployment zones)'],
+    traits: ['Infiltrator', 'Scout'],
+    abilities: [
+      {
+        id: 'crimson_smoke_cloak',
+        name: 'Alchemic Smoke Screen',
+        icon: '💨',
+        type: 'active',
+        affects: 'self',
+        activationTiming: 'movement',
+        cost: 'once_per_activation',
+        vfxType: 'arcane',
+        effectType: 'movement',
+        duration: 'end_of_phase',
+        summary: 'Puffs dense alchemical smoke obscuring positioning (0 CP).',
+        effect: 'Cannot be targeted by ranged attacks over 4 squares away until next turn.'
+      }
+    ],
     canDeployOutsideZone: true,
     owner: 'player1',
     position: null,
@@ -240,6 +390,23 @@ export const UNIT_TEMPLATES: Unit[] = [
       size: 'Huge'
     },
     passives: ['Type Advantage: Beats Infantry', 'Siege Barrage (Ignores Low Cover)'],
+    traits: ['Heavy Armour', 'Unyielding'],
+    abilities: [
+      {
+        id: 'crimson_siege_salvo',
+        name: 'Overpressurized Salvo',
+        icon: '💥',
+        type: 'active',
+        affects: 'target',
+        activationTiming: 'shooting',
+        cost: 'once_per_round',
+        vfxType: 'plasma',
+        effectType: 'damage',
+        duration: 'instant',
+        summary: 'Overpressurizes crystal boiler for heavy bombardment (0 CP).',
+        effect: 'Ranged attack gains +2 AM and destroys target cover.'
+      }
+    ],
     owner: 'player1',
     position: null,
     hasMoved: false,
@@ -273,6 +440,23 @@ export const UNIT_TEMPLATES: Unit[] = [
       range: 0
     },
     passives: ['Type Advantage: Beats Vehicles', 'Frenzy (+1 stack of Advantage on Charge)'],
+    traits: ['Berserk', 'Regeneration'],
+    abilities: [
+      {
+        id: 'crimson_apex_frenzy',
+        name: 'Apex Blood Frenzy',
+        icon: '🩸',
+        type: 'active',
+        affects: 'self',
+        activationTiming: 'charge',
+        cost: 'free',
+        vfxType: 'blood',
+        effectType: 'stat_modifier',
+        duration: 'end_of_phase',
+        summary: 'Unleashes feral fury upon charge contact (0 CP).',
+        effect: 'Adds +2 to charge roll and grants 1 stack of Advantage.'
+      }
+    ],
     owner: 'player1',
     position: null,
     hasMoved: false,
@@ -306,6 +490,23 @@ export const UNIT_TEMPLATES: Unit[] = [
       range: 4
     },
     passives: ['Overwatch (Free shot if enemy enters 3 squares during Movement)'],
+    traits: ['Sniper', 'Rapid Fire'],
+    abilities: [
+      {
+        id: 'crimson_precision_drill',
+        name: 'Precision Drill Volley',
+        icon: '🎯',
+        type: 'active',
+        affects: 'target',
+        activationTiming: 'shooting',
+        cost: 'once_per_round',
+        vfxType: 'ballistic',
+        effectType: 'damage',
+        duration: 'instant',
+        summary: 'Concentrated sniper fire on critical targets (0 CP).',
+        effect: 'Ranged attack ignores target cover modifiers.'
+      }
+    ],
     owner: 'player1',
     position: null,
     hasMoved: false,
@@ -343,6 +544,38 @@ export const UNIT_TEMPLATES: Unit[] = [
       size: 'Large'
     },
     passives: ['Leader Survival (1d6 > Attack saves model)', 'Dawn Aura (Allies within 3 sq get +1 CP)'],
+    traits: ['Leader', 'Flying'],
+    abilities: [
+      {
+        id: 'lyssandra_dawn_rally',
+        name: 'Dawn Clarion Rally',
+        icon: '📯',
+        type: 'active',
+        affects: 'all_friendly',
+        activationTiming: 'command',
+        cost: 'gain_1_cp',
+        gainsCP: true,
+        vfxType: 'holy',
+        effectType: 'stat_modifier',
+        duration: 'end_of_round',
+        summary: 'Sounds the sacred dawn clarion horn (+1 Free CP).',
+        effect: 'Active player generates +1 Free CP ⭐. All friendly units within 3 squares gain +1 Movement.'
+      },
+      {
+        id: 'lyssandra_solar_strike',
+        name: 'Solar Cleave',
+        icon: '☀️',
+        type: 'active',
+        affects: 'self',
+        activationTiming: 'fight',
+        cost: 'once_per_round',
+        vfxType: 'holy',
+        effectType: 'stat_modifier',
+        duration: 'end_of_phase',
+        summary: 'Blinds enemy with solar flash (0 CP).',
+        effect: 'Melee attacks gain +2 AM and target suffers -1 Defence.'
+      }
+    ],
     owner: 'player1',
     position: null,
     hasMoved: false,
@@ -378,6 +611,23 @@ export const UNIT_TEMPLATES: Unit[] = [
       size: 'Medium'
     },
     passives: ['Type Advantage: Beats Monsters', 'POI Guardian (+2 CP when within POI radius)'],
+    traits: ['Shieldwall'],
+    abilities: [
+      {
+        id: 'astraea_sanctuary_lock',
+        name: 'Sanctuary Bastion',
+        icon: '🛡️',
+        type: 'active',
+        affects: 'self',
+        activationTiming: 'command',
+        cost: 'free',
+        vfxType: 'holy',
+        effectType: 'defense',
+        duration: 'end_of_round',
+        summary: 'Locks halberds into protective sanctuary ward (0 CP).',
+        effect: 'Gain +1 Defence modifier against all attacks until the end of the round.'
+      }
+    ],
     owner: 'player1',
     position: null,
     hasMoved: false,
@@ -413,6 +663,23 @@ export const UNIT_TEMPLATES: Unit[] = [
       size: 'Small'
     },
     passives: ['DEPLOY_OUTSIDE_ZONE', 'Infiltrator (Can deploy anywhere outside normal deployment zones)'],
+    traits: ['Infiltrator', 'Flying', 'Scout'],
+    abilities: [
+      {
+        id: 'astraea_gale_step',
+        name: 'Gale Step Reposition',
+        icon: '💨',
+        type: 'active',
+        affects: 'self',
+        activationTiming: 'movement',
+        cost: 'once_per_activation',
+        vfxType: 'arcane',
+        effectType: 'movement',
+        duration: 'instant',
+        summary: 'Dashes along thermal updrafts to reposition (0 CP).',
+        effect: 'Make an immediate 2 square bonus movement even after advancing.'
+      }
+    ],
     canDeployOutsideZone: true,
     owner: 'player1',
     position: null,
@@ -447,6 +714,23 @@ export const UNIT_TEMPLATES: Unit[] = [
       range: 3
     },
     passives: ['Type Advantage: Beats Infantry', 'Skimmer (Moves through water & rough terrain with no penalty)'],
+    traits: ['Cavalry', 'Rapid Fire'],
+    abilities: [
+      {
+        id: 'astraea_strafe_salvo',
+        name: 'Sun-Lance Strafe Run',
+        icon: '⚡',
+        type: 'active',
+        affects: 'target',
+        activationTiming: 'shooting',
+        cost: 'free',
+        vfxType: 'laser',
+        effectType: 'damage',
+        duration: 'instant',
+        summary: 'Fires high-intensity beam array on the move (0 CP).',
+        effect: 'May fire without accuracy penalty even after making a maximum move.'
+      }
+    ],
     owner: 'player1',
     position: null,
     hasMoved: false,
@@ -480,6 +764,23 @@ export const UNIT_TEMPLATES: Unit[] = [
       range: 0
     },
     passives: ['Type Advantage: Beats Vehicles', 'Dive Attack (Guaranteed Advantage on Charge)'],
+    traits: ['Flying', 'Berserk'],
+    abilities: [
+      {
+        id: 'astraea_dawn_screech',
+        name: 'Dawn Screech',
+        icon: '🔊',
+        type: 'active',
+        affects: 'target',
+        activationTiming: 'charge',
+        cost: 'once_per_round',
+        vfxType: 'holy',
+        effectType: 'stat_modifier',
+        duration: 'end_of_phase',
+        summary: 'Piercing war screech disorients enemy defenders (0 CP).',
+        effect: 'Target unit loses 1 Advantage stack and suffers -1 to Def saving throws.'
+      }
+    ],
     owner: 'player1',
     position: null,
     hasMoved: false,
@@ -515,6 +816,38 @@ export const UNIT_TEMPLATES: Unit[] = [
       range: 1
     },
     passives: ['Leader Survival (1d6 > Attack saves model)', 'Infernal March (Nearby units ignore first charge penalty)'],
+    traits: ['Leader', 'Berserk'],
+    abilities: [
+      {
+        id: 'malakor_hellfire_tithe',
+        name: 'Brimstone Tithe Demand',
+        icon: '🔥',
+        type: 'active',
+        affects: 'all_friendly',
+        activationTiming: 'command',
+        cost: 'gain_1_cp',
+        gainsCP: true,
+        vfxType: 'plasma',
+        effectType: 'stat_modifier',
+        duration: 'end_of_round',
+        summary: 'Extracts infernal power from the realm (+1 Free CP).',
+        effect: 'Active player gains +1 Free CP ⭐. Friendly charging units gain +1 AM this round.'
+      },
+      {
+        id: 'malakor_molten_cleave',
+        name: 'Molten Cleave',
+        icon: '⚔️',
+        type: 'active',
+        affects: 'self',
+        activationTiming: 'fight',
+        cost: 'once_per_round',
+        vfxType: 'slash',
+        effectType: 'stat_modifier',
+        duration: 'end_of_phase',
+        summary: 'Ignites blade with magma flames (0 CP).',
+        effect: 'Melee attacks gain +2 AM for the fight phase.'
+      }
+    ],
     owner: 'player1',
     position: null,
     hasMoved: false,
@@ -548,6 +881,23 @@ export const UNIT_TEMPLATES: Unit[] = [
       range: 0
     },
     passives: ['Type Advantage: Beats Monsters', 'Hellfire Strike (Inflicts -1 Def on successful hit)'],
+    traits: ['Shieldwall'],
+    abilities: [
+      {
+        id: 'infernal_spike_wall',
+        name: 'Barbed Spikes Wall',
+        icon: '🛡️',
+        type: 'active',
+        affects: 'self',
+        activationTiming: 'command',
+        cost: 'free',
+        vfxType: 'crush',
+        effectType: 'defense',
+        duration: 'end_of_round',
+        summary: 'Braces barbed shields against oncoming charges (0 CP).',
+        effect: 'Increases Defence save by +1 against melee attacks this round.'
+      }
+    ],
     owner: 'player1',
     position: null,
     hasMoved: false,
@@ -581,6 +931,23 @@ export const UNIT_TEMPLATES: Unit[] = [
       range: 0
     },
     passives: ['Type Advantage: Beats Vehicles', 'Crushing Weight (Always causes -1 Def penalty on hit)'],
+    traits: ['Heavy Armour', 'Unyielding'],
+    abilities: [
+      {
+        id: 'infernal_tectonic_slam',
+        name: 'Tectonic Slam',
+        icon: '💥',
+        type: 'active',
+        affects: 'target',
+        activationTiming: 'fight',
+        cost: 'once_per_round',
+        vfxType: 'crush',
+        effectType: 'damage',
+        duration: 'instant',
+        summary: 'Slams fists into the ground shattering target lines (0 CP).',
+        effect: 'Causes +1 automatic life damage to target squad in melee.'
+      }
+    ],
     owner: 'player1',
     position: null,
     hasMoved: false,
@@ -616,6 +983,38 @@ export const UNIT_TEMPLATES: Unit[] = [
       range: 3
     },
     passives: ['Leader Survival (1d6 > Attack saves model)', 'Time Rewind (Once per battle, cancel an enemy attack result)'],
+    traits: ['Leader', 'Psionic', 'Teleport'],
+    abilities: [
+      {
+        id: 'oros_chrono_surge',
+        name: 'Chrono-Reserve Surge',
+        icon: '⏳',
+        type: 'active',
+        affects: 'all_friendly',
+        activationTiming: 'command',
+        cost: 'gain_1_cp',
+        gainsCP: true,
+        vfxType: 'arcane',
+        effectType: 'stat_modifier',
+        duration: 'end_of_round',
+        summary: 'Taps temporal reservoir to grant command foresight (+1 Free CP).',
+        effect: 'Generates +1 Free CP ⭐. Re-rolls one failed attack roll this round.'
+      },
+      {
+        id: 'oros_stasis_beam',
+        name: 'Temporal Stasis Beam',
+        icon: '🔮',
+        type: 'active',
+        affects: 'target',
+        activationTiming: 'shooting',
+        cost: 'once_per_round',
+        vfxType: 'laser',
+        effectType: 'stat_modifier',
+        duration: 'end_of_round',
+        summary: 'Envelops target unit in slowing temporal field (0 CP).',
+        effect: 'Target unit suffers -2 to Movement speed on their next activation.'
+      }
+    ],
     owner: 'player1',
     position: null,
     hasMoved: false,
@@ -649,6 +1048,23 @@ export const UNIT_TEMPLATES: Unit[] = [
       range: 2
     },
     passives: ['Type Advantage: Beats Monsters', 'Phase Shift (Resists debuffs on CP threshold 3)'],
+    traits: ['Teleport', 'Psionic'],
+    abilities: [
+      {
+        id: 'chronarch_paradox_blink',
+        name: 'Paradox Blink',
+        icon: '✨',
+        type: 'active',
+        affects: 'self',
+        activationTiming: 'movement',
+        cost: 'once_per_activation',
+        vfxType: 'arcane',
+        effectType: 'movement',
+        duration: 'instant',
+        summary: 'Flickers across dimensions ignoring obstacles (0 CP).',
+        effect: 'Teleports up to 3 squares ignoring all intervening models and terrain.'
+      }
+    ],
     owner: 'player1',
     position: null,
     hasMoved: false,

@@ -38,6 +38,38 @@ export interface WorldPoint {
 
 export type FormationType = 'auto' | 'circle' | 'line' | 'grid' | 'stack';
 
+// DESIGN-007 & CODE-026: Ability Builder Schema
+export type AbilityAffects = 'self' | 'attached' | 'target' | 'area' | 'all_friendly' | 'all_enemy';
+export type AbilityType = 'passive' | 'active';
+export type AbilityTiming = 'any_time' | 'deployment' | 'command' | 'movement' | 'shooting' | 'charge' | 'fight' | 'round_end';
+export type AbilityCost = 'free' | 'gain_1_cp' | 'once_per_game' | 'once_per_round' | 'once_per_activation' | '1_cp' | '2_cp';
+export type AbilityDuration = 'instant' | 'end_of_phase' | 'end_of_round' | 'permanent';
+
+export type CardTheme = 'gold' | 'crimson' | 'amethyst' | 'sapphire' | 'emerald' | 'void' | 'steel';
+export type CardRarity = 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary';
+
+export interface UnitAbility {
+  id: string;
+  name: string;
+  type: AbilityType;
+  affects: AbilityAffects;
+  activationTiming?: AbilityTiming;
+  cost: AbilityCost;
+  effect: string;
+  effectType?: 'stat_modifier' | 'damage' | 'movement' | 'reroll' | 'defense' | 'custom';
+  duration: AbilityDuration;
+  triggerCondition?: string;
+  summary?: string;
+  icon?: string;
+  gainsCP?: boolean;
+  vfxType?: 'ballistic' | 'laser' | 'plasma' | 'slash' | 'crush' | 'arcane' | 'blood' | 'holy' | 'command';
+  cardTheme?: CardTheme;
+  cardRarity?: CardRarity;
+  cardArtworkUrl?: string;
+  actionButtonText?: string;
+  quote?: string;
+}
+
 export interface Token {
   id: string;              // Unique token instance id (e.g. 'tok_u1_0')
   unitId: string;          // Parent Unit ID
@@ -79,6 +111,8 @@ export interface Unit {
   tokenImageUrl?: string;         // Custom uploaded token image (PNG/JPG/WebP base64/URL)
   description: string;
   passives: string[];
+  abilities?: UnitAbility[];      // Configured Unit Abilities (DESIGN-007 / CODE-026)
+  traits?: string[];              // Tactical traits (e.g. 'Infiltrator', 'Flying', 'Leader', 'Transport', 'Scout')
   canDeployOutsideZone?: boolean; // Trait: allows deployment outside deployment zone
   inStrategicReserve?: boolean;   // Placed in Strategic Reserves (Round 2+ Movement deploy)
   embarkedIn?: string | null;     // ID of the vehicle/transport this unit is loaded inside
@@ -102,7 +136,14 @@ export interface Unit {
   isPendingMoveConfirm?: boolean; // In staged movement awaiting Confirm Move
   isPendingDeploymentConfirm?: boolean; // In staged deployment awaiting Confirm Placement
   pendingOriginalPosition?: WorldPoint | null; // Starting position before pending move
-  pendingOriginalTokens?: Token[] | null; // Starting tokens before pending move
+  pendingOriginalTokens?: Token[] | null; // Starting token positions before pending move
+  hasCustomTokenPositions?: boolean; // True if tokens were positioned via manual placement mode
+  isPendingDisembarkConfirm?: boolean; // In staged disembark placement awaiting Confirm Disembark (RULE-002)
+  disembarkingFromVehicleId?: string | null; // ID of vehicle unit is currently disembarking from
+  lastEmbarkPhase?: Phase | null; // Last phase this unit embarked (RULE-001)
+  lastEmbarkRound?: number | null; // Round number when unit embarked
+  lastDisembarkPhase?: Phase | null; // Last phase this unit disembarked (RULE-001)
+  lastDisembarkRound?: number | null; // Round number when unit disembarked
 }
 
 export type Phase = 'Deployment' | 'Command' | 'Movement' | 'Shooting' | 'Charge' | 'Fight';
@@ -300,4 +341,153 @@ export interface BattleMap {
   isCustom?: boolean;
   isPreset?: boolean;
 }
+
+export interface TraitDefinition {
+  id: string;
+  name: string;
+  icon: string;
+  category: 'Deployment' | 'Movement' | 'Command' | 'Combat' | 'Special';
+  summary: string;
+  mechanicalRule: string;
+  isMVP: boolean;
+}
+
+export const CORE_TRAIT_DEFINITIONS: Record<string, TraitDefinition> = {
+  Infiltrator: {
+    id: 'Infiltrator',
+    name: 'Infiltrator',
+    icon: '🕵️',
+    category: 'Deployment',
+    summary: 'Forward deployment anywhere outside opponent zones',
+    mechanicalRule: 'Bypasses friendly deployment zone limits. Can deploy anywhere on the continuous VTT canvas beyond standard deployment flanks.',
+    isMVP: true
+  },
+  Flying: {
+    id: 'Flying',
+    name: 'Flying',
+    icon: '🦅',
+    category: 'Movement',
+    summary: 'Ignores intervening units & ground terrain during move/charge',
+    mechanicalRule: 'Can move across intervening friendly and enemy models without being blocked by swept base collision. Does not trigger ground structure traversal blocks.',
+    isMVP: true
+  },
+  Leader: {
+    id: 'Leader',
+    name: 'Leader',
+    icon: '👑',
+    category: 'Command',
+    summary: 'Attaches to and commands compatible infantry squads',
+    mechanicalRule: 'Eligible to attach to a friendly bodyguard infantry squad during the Deployment Phase, sharing wounds and making commander strikes.',
+    isMVP: true
+  },
+  Transport: {
+    id: 'Transport',
+    name: 'Transport',
+    icon: '🚜',
+    category: 'Special',
+    summary: 'Carries infantry squads across the battlefield',
+    mechanicalRule: 'Provides embarkation capacity for up to 6 models (or 1 full infantry squad). Allows staged disembarkation within 3" during Movement phase.',
+    isMVP: true
+  },
+  Scout: {
+    id: 'Scout',
+    name: 'Scout',
+    icon: '🔭',
+    category: 'Deployment',
+    summary: 'Early reconnaissance positioning advantage',
+    mechanicalRule: 'Gains free 3" forward repositioning during Round 1 Command Phase.',
+    isMVP: true
+  },
+  Stealth: {
+    id: 'Stealth',
+    name: 'Stealth',
+    icon: '👤',
+    category: 'Combat',
+    summary: 'Concealment against ranged target acquisition',
+    mechanicalRule: '+1 Defense against enemy ranged attacks originating from more than 6 grid squares (300px) away.',
+    isMVP: false
+  },
+  'Heavy Armor': {
+    id: 'Heavy Armor',
+    name: 'Heavy Armor',
+    icon: '🛡️',
+    category: 'Combat',
+    summary: 'Reinforced bulk resistant to light armor-piercing damage',
+    mechanicalRule: 'Reduces incoming Armor Penetration penalties by 1 (minimum 0).',
+    isMVP: false
+  },
+  'Rapid Fire': {
+    id: 'Rapid Fire',
+    name: 'Rapid Fire',
+    icon: '⚡',
+    category: 'Combat',
+    summary: 'High projectile volume allowing re-rolls of hit misses',
+    mechanicalRule: 'When conducting ranged attacks, the unit may re-roll ranged hit rolls of 1.',
+    isMVP: true
+  },
+  Berserk: {
+    id: 'Berserk',
+    name: 'Berserk',
+    icon: '🪓',
+    category: 'Combat',
+    summary: 'Ferocious frenzy when taking casualties or damage',
+    mechanicalRule: 'Gains +1 Attack Modifier (AM) in melee when below maximum lives or model count.',
+    isMVP: true
+  },
+  Teleport: {
+    id: 'Teleport',
+    name: 'Teleport',
+    icon: '🌀',
+    category: 'Movement',
+    summary: 'Phase-shifts across the battlefield bypassing all obstacles',
+    mechanicalRule: 'Once per match during the Movement phase, can instantly reposition up to 6" without traversing intervening terrain.',
+    isMVP: false
+  },
+  Psionic: {
+    id: 'Psionic',
+    name: 'Psionic',
+    icon: '🔮',
+    category: 'Special',
+    summary: 'Channels etheric warp energy to buff allies or generate CP',
+    mechanicalRule: 'Can channel warp resonance abilities to bolster allied defense or generate +1 bonus Command Power.',
+    isMVP: true
+  },
+  Regeneration: {
+    id: 'Regeneration',
+    name: 'Regeneration',
+    icon: '🩸',
+    category: 'Special',
+    summary: 'Restores lost lives automatically at the start of battle rounds',
+    mechanicalRule: 'At the start of the friendly Command Phase, unit restores 1 lost life up to its starting maximum.',
+    isMVP: false
+  },
+  Sniper: {
+    id: 'Sniper',
+    name: 'Sniper',
+    icon: '🎯',
+    category: 'Combat',
+    summary: 'Precision targeting that can bypass bodyguard escorts',
+    mechanicalRule: 'When firing at an attached squad within line of sight, can allocate attacks directly against the Leader model.',
+    isMVP: true
+  },
+  Cavalry: {
+    id: 'Cavalry',
+    name: 'Cavalry / Mounted',
+    icon: '🐎',
+    category: 'Movement',
+    summary: 'Swift momentum providing speed and crushing charge bonuses',
+    mechanicalRule: 'Gains +2 base Movement and adds +1 to charge distance rolls.',
+    isMVP: false
+  },
+  Unyielding: {
+    id: 'Unyielding',
+    name: 'Unyielding',
+    icon: '🗿',
+    category: 'Command',
+    summary: 'Undaunted garrison presence that dominates control zones',
+    mechanicalRule: 'Provides +1 bonus Control Power (CP) when contesting Points of Interest (POIs).',
+    isMVP: true
+  }
+};
+
 

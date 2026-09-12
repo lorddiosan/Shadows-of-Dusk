@@ -1,13 +1,16 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   Plus, Trash2, Shield, Settings, Check, AlertCircle, 
   BarChart3, Users, Crown, Swords, Database, Activity,
-  Compass, Upload, Image as ImageIcon
+  Compass, Upload, Image as ImageIcon, Edit2, X,
+  ChevronDown, ChevronUp, Search, Tag, Zap
 } from 'lucide-react';
 import { FactionInfo } from '../../types/army';
-import { Unit, UnitType, UnitRole, BaseShape } from '../../types/game';
+import { Unit, UnitType, UnitRole, BaseShape, UnitAbility, CORE_TRAIT_DEFINITIONS } from '../../types/game';
 import { StorageService } from '../../services/storageService';
 import { MapCreator } from './MapCreator';
+import { FactionLogo } from '../common/FactionLogo';
+import { AbilityEditorModal } from '../builder/AbilityEditorModal';
 
 interface AdminPanelProps {
   onDataChanged: () => void;
@@ -20,8 +23,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onDataChanged }) => {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'units' | 'factions' | 'maps'>('dashboard');
   const [notification, setNotification] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const factionLogoInputRef = useRef<HTMLInputElement>(null);
 
   // Faction Form State
+  const [editingFactionId, setEditingFactionId] = useState<string | null>(null);
+  const [factionLogoPreview, setFactionLogoPreview] = useState<string | null>(null);
+  const [factionAbility, setFactionAbility] = useState<UnitAbility | undefined>(undefined);
+  const [isFactionAbilityModalOpen, setIsFactionAbilityModalOpen] = useState<boolean>(false);
   const [newFaction, setNewFaction] = useState({
     id: '',
     name: '',
@@ -29,6 +37,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onDataChanged }) => {
     title: '',
     quote: '',
     symbol: '⚔️',
+    logoUrl: '',
     loreSummary: '',
     leaderName: '',
     color: '#e11d48',
@@ -36,6 +45,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onDataChanged }) => {
   });
 
   // Unit Form State
+  const [editingUnitId, setEditingUnitId] = useState<string | null>(null);
+  const [selectedTraits, setSelectedTraits] = useState<string[]>([]);
+  const [traitDropdownOpen, setTraitDropdownOpen] = useState<boolean>(false);
+  const [traitSearchTerm, setTraitSearchTerm] = useState<string>('');
+  const traitDropdownRef = useRef<HTMLDivElement>(null);
+
+  const [unitAbilities, setUnitAbilities] = useState<UnitAbility[]>([]);
+  const [editingUnitAbilityIndex, setEditingUnitAbilityIndex] = useState<number | null>(null);
+  const [isUnitAbilityModalOpen, setIsUnitAbilityModalOpen] = useState<boolean>(false);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (traitDropdownRef.current && !traitDropdownRef.current.contains(e.target as Node)) {
+        setTraitDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   const [newUnit, setNewUnit] = useState({
     templateId: '',
     name: '',
@@ -72,6 +101,63 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onDataChanged }) => {
     reader.readAsDataURL(file);
   };
 
+  const handleFactionLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.match(/^image\/(png|jpeg|jpg|webp|svg\+xml)$/i)) {
+      notify('Please select a valid PNG, JPG, WebP, or SVG file.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      setFactionLogoPreview(result);
+      setNewFaction(prev => ({ ...prev, logoUrl: result }));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleStartEditFaction = (f: FactionInfo) => {
+    setEditingFactionId(f.id);
+    setNewFaction({
+      id: f.id,
+      name: f.name,
+      shortName: f.shortName,
+      title: f.title,
+      quote: f.quote,
+      symbol: f.symbol || '⚔️',
+      logoUrl: f.logoUrl || '',
+      loreSummary: f.loreSummary || '',
+      leaderName: f.leaderName || '',
+      color: f.colors?.primary || '#e11d48',
+      traits: f.strengths?.join(', ') || ''
+    });
+    setFactionLogoPreview(f.logoUrl || null);
+    setFactionAbility(f.factionAbility);
+  };
+
+  const handleCancelEditFaction = () => {
+    setEditingFactionId(null);
+    setFactionAbility(undefined);
+    setNewFaction({
+      id: '',
+      name: '',
+      shortName: '',
+      title: '',
+      quote: '',
+      symbol: '⚔️',
+      logoUrl: '',
+      loreSummary: '',
+      leaderName: '',
+      color: '#e11d48',
+      traits: 'High Firepower, Fortified Bastions'
+    });
+    setFactionLogoPreview(null);
+    if (factionLogoInputRef.current) {
+      factionLogoInputRef.current.value = '';
+    }
+  };
+
   const notify = (msg: string) => {
     setNotification(msg);
     setTimeout(() => setNotification(null), 3000);
@@ -81,7 +167,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onDataChanged }) => {
     e.preventDefault();
     if (!newFaction.name) return;
 
-    const id = newFaction.id.trim() || newFaction.name.toLowerCase().replace(/\s+/g, '_');
+    const id = editingFactionId || newFaction.id.trim() || newFaction.name.toLowerCase().replace(/\s+/g, '_');
     const factionObj: FactionInfo = {
       id,
       name: newFaction.name,
@@ -95,29 +181,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onDataChanged }) => {
         border: newFaction.color
       },
       symbol: newFaction.symbol || '⚔️',
+      logoUrl: newFaction.logoUrl?.trim() || undefined,
       loreSummary: newFaction.loreSummary || 'A newly recorded force emerging from a fracture in reality.',
       leaderName: newFaction.leaderName || 'Unknown Commander',
-      strengths: newFaction.traits.split(',').map(s => s.trim()).filter(Boolean)
+      strengths: newFaction.traits.split(',').map(s => s.trim()).filter(Boolean),
+      factionAbility: factionAbility || undefined
     };
 
     StorageService.saveFaction(factionObj);
     const updated = StorageService.getFactions();
     setFactions(updated);
     setSelectedFactionId(id);
-    setNewFaction({
-      id: '',
-      name: '',
-      shortName: '',
-      title: '',
-      quote: '',
-      symbol: '⚔️',
-      loreSummary: '',
-      leaderName: '',
-      color: '#e11d48',
-      traits: 'High Firepower, Fortified Bastions'
-    });
+    handleCancelEditFaction();
     onDataChanged();
-    notify(`Faction "${factionObj.name}" created!`);
+    notify(editingFactionId ? `Faction "${factionObj.name}" updated!` : `Faction "${factionObj.name}" created!`);
   };
 
   const handleDeleteFaction = (factionId: string) => {
@@ -131,11 +208,96 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onDataChanged }) => {
     notify(`Faction deleted.`);
   };
 
+  const toggleTrait = (traitId: string) => {
+    setSelectedTraits(prev => 
+      prev.includes(traitId) ? prev.filter(t => t !== traitId) : [...prev, traitId]
+    );
+  };
+
+  const handleOpenAddUnitAbility = () => {
+    setEditingUnitAbilityIndex(null);
+    setIsUnitAbilityModalOpen(true);
+  };
+
+  const handleOpenEditUnitAbility = (index: number) => {
+    setEditingUnitAbilityIndex(index);
+    setIsUnitAbilityModalOpen(true);
+  };
+
+  const handleDeleteUnitAbility = (index: number) => {
+    setUnitAbilities(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleSaveUnitAbility = (ability: UnitAbility) => {
+    if (editingUnitAbilityIndex !== null) {
+      setUnitAbilities(prev => prev.map((a, i) => i === editingUnitAbilityIndex ? ability : a));
+    } else {
+      if (unitAbilities.length < 3) {
+        setUnitAbilities(prev => [...prev, ability]);
+      }
+    }
+  };
+
+  const handleStartEditUnit = (u: Unit) => {
+    setEditingUnitId(u.templateId || u.id);
+    setNewUnit({
+      templateId: u.templateId || u.id,
+      name: u.name,
+      type: u.type,
+      role: u.role,
+      baseShape: u.baseShape || (u.type === 'Vehicle' ? 'rectangle' : 'circle'),
+      points: u.points,
+      avatar: u.avatar || '🛡️',
+      tokenImageUrl: u.tokenImageUrl || '',
+      carryCapacity: u.carryCapacity || 6,
+      description: u.description || '',
+      mv: u.stats.mv,
+      def: u.stats.def,
+      am: u.stats.am,
+      lives: u.stats.lives,
+      modelCount: u.stats.modelCount || 1,
+      cp: u.stats.cp,
+      range: u.stats.range,
+      passives: (u.passives || []).join(', ')
+    });
+    setSelectedTraits(u.traits || (u.canDeployOutsideZone ? ['Infiltrator'] : []));
+    setUnitAbilities(u.abilities || []);
+  };
+
+  const handleCancelEditUnit = () => {
+    setEditingUnitId(null);
+    setSelectedTraits([]);
+    setUnitAbilities([]);
+    setNewUnit({
+      templateId: '',
+      name: '',
+      type: 'Infantry',
+      role: 'Battleline',
+      baseShape: 'circle',
+      points: 75,
+      avatar: '🛡️',
+      tokenImageUrl: '',
+      carryCapacity: 6,
+      description: '',
+      mv: 5,
+      def: 5,
+      am: 5,
+      lives: 5,
+      modelCount: 5,
+      cp: 3,
+      range: 0,
+      passives: 'Type Advantage: Beats Monsters, Veteran Phalanx'
+    });
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
   const handleCreateUnit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newUnit.name) return;
 
-    const templateId = newUnit.templateId.trim() || `${selectedFactionId}_${newUnit.name.toLowerCase().replace(/\s+/g, '_')}`;
+    const templateId = editingUnitId || newUnit.templateId.trim() || `${selectedFactionId}_${newUnit.name.toLowerCase().replace(/\s+/g, '_')}`;
     const livesNum = Number(newUnit.lives) || 4;
     const modelNum = Math.max(1, Number(newUnit.modelCount) || 1);
     const hpPerModel = Math.max(1, Math.floor(livesNum / modelNum));
@@ -170,6 +332,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onDataChanged }) => {
         carryCapacity: newUnit.type === 'Vehicle' ? Number(newUnit.carryCapacity) : undefined
       },
       passives: newUnit.passives.split(',').map(p => p.trim()).filter(Boolean),
+      traits: selectedTraits,
+      canDeployOutsideZone: selectedTraits.includes('Infiltrator'),
+      abilities: unitAbilities.length > 0 ? unitAbilities : undefined,
       owner: 'player1',
       position: null,
       hasMoved: false,
@@ -183,28 +348,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onDataChanged }) => {
     StorageService.saveUnitTemplate(unitObj);
     const updated = StorageService.getUnitTemplates();
     setUnits(updated);
-    setNewUnit({
-      templateId: '',
-      name: '',
-      type: 'Infantry',
-      role: 'Battleline',
-      baseShape: 'circle',
-      points: 75,
-      avatar: '🛡️',
-      tokenImageUrl: '',
-      carryCapacity: 6,
-      description: '',
-      mv: 5,
-      def: 5,
-      am: 5,
-      lives: 5,
-      modelCount: 5,
-      cp: 3,
-      range: 0,
-      passives: 'Type Advantage: Beats Monsters, Veteran Phalanx'
-    });
+    handleCancelEditUnit();
     onDataChanged();
-    notify(`Unit "${unitObj.name}" created with ${modelNum} models (${hpPerModel} HP each)!`);
+    notify(editingUnitId ? `Unit "${unitObj.name}" updated!` : `Unit "${unitObj.name}" created with ${modelNum} models (${hpPerModel} HP each)!`);
   };
 
   const handleDeleteUnit = (templateId: string) => {
@@ -332,7 +478,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onDataChanged }) => {
                 return (
                   <div key={f.id} className="bg-zinc-950 p-4 rounded-xl border border-zinc-800 space-y-2">
                     <div className="flex items-center space-x-3">
-                      <span className="text-2xl">{f.symbol}</span>
+                      <FactionLogo faction={f} size="md" />
                       <div>
                         <h4 className="font-bold text-white text-sm">{f.name}</h4>
                         <span className="text-[11px] text-zinc-400 font-mono">{facUnits.length} units enrolled</span>
@@ -367,7 +513,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onDataChanged }) => {
                   : 'bg-zinc-900/60 border-zinc-800 text-zinc-400 hover:text-white'
               }`}
             >
-              <span>{f.symbol}</span>
+              <FactionLogo faction={f} size="xs" />
               <span>{f.name}</span>
             </button>
           ))}
@@ -377,14 +523,28 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onDataChanged }) => {
       {/* ================= UNIT ARCHITECT TAB ================= */}
       {activeTab === 'units' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Create Unit Form */}
+          {/* Create / Edit Unit Form */}
           <div className="lg:col-span-5 bg-zinc-900/90 border border-zinc-800 rounded-2xl p-5 shadow-2xl">
-            <h2 className="text-base font-bold text-white mb-1 flex items-center space-x-2">
-              <Plus className="w-4 h-4 text-rose-500" />
-              <span>Forge New Unit ({activeFaction?.name})</span>
-            </h2>
+            <div className="flex items-center justify-between mb-1">
+              <h2 className="text-base font-bold text-white flex items-center space-x-2">
+                <Plus className="w-4 h-4 text-rose-500" />
+                <span>{editingUnitId ? `Edit Unit: ${newUnit.name || 'Selected'}` : `Forge New Unit (${activeFaction?.name})`}</span>
+              </h2>
+              {editingUnitId && (
+                <button
+                  type="button"
+                  onClick={handleCancelEditUnit}
+                  className="text-xs text-zinc-400 hover:text-white flex items-center space-x-1 px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 transition cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>Cancel Edit</span>
+                </button>
+              )}
+            </div>
             <p className="text-xs text-zinc-400 mb-4">
-              Set role category, total pool of lives, and pre-defined model count (HP is distributed across squad members).
+              {editingUnitId 
+                ? 'Modify unit combat attributes, traits, tactical abilities, and card customizations.'
+                : 'Set role category, total pool of lives, tactical traits, and equip playing card abilities.'}
             </p>
 
             <form onSubmit={handleCreateUnit} className="space-y-3">
@@ -647,13 +807,252 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onDataChanged }) => {
                 </div>
               </div>
 
+              {/* Tactical Traits (Multi-Select Dropdown & Tag List) */}
+              <div className="bg-zinc-950 p-3 rounded-xl border border-zinc-800 space-y-2.5" ref={traitDropdownRef}>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="text-[10px] uppercase font-bold text-zinc-300 block font-mono">
+                      🏷️ Tactical Traits
+                    </label>
+                    <span className="text-[9px] text-zinc-500">
+                      Assign traits (Infiltrator, Leader, Scout, Sniper, Berserk, etc.)
+                    </span>
+                  </div>
+                  <div className="flex items-center space-x-1.5">
+                    {selectedTraits.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedTraits([])}
+                        className="text-[9px] font-mono text-zinc-500 hover:text-rose-400 transition cursor-pointer"
+                      >
+                        Clear
+                      </button>
+                    )}
+                    <span className="text-[9px] font-mono text-amber-400 bg-amber-950/60 border border-amber-800/80 px-1.5 py-0.5 rounded">
+                      {selectedTraits.length} selected
+                    </span>
+                  </div>
+                </div>
+
+                {/* Selected Traits as Removable Chips */}
+                <div className="flex flex-wrap gap-1.5 min-h-[32px] p-2 bg-zinc-900/80 rounded-lg border border-zinc-800 items-center">
+                  {selectedTraits.length === 0 ? (
+                    <span className="text-[11px] text-zinc-500 italic">No traits assigned yet. Select from the dropdown below.</span>
+                  ) : (
+                    selectedTraits.map(tid => {
+                      const def = (CORE_TRAIT_DEFINITIONS as any)[tid] || { id: tid, name: tid, icon: '🏷️' };
+                      return (
+                        <span
+                          key={tid}
+                          className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md bg-amber-950/60 border border-amber-500/50 text-amber-200 text-xs font-mono shadow-sm"
+                        >
+                          <span>{def.icon}</span>
+                          <span className="font-bold">{def.name}</span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleTrait(tid);
+                            }}
+                            className="text-amber-400 hover:text-white rounded p-0.5 hover:bg-amber-800/50 transition cursor-pointer"
+                            title={`Remove ${def.name}`}
+                          >
+                            <X className="w-2.5 h-2.5" />
+                          </button>
+                        </span>
+                      );
+                    })
+                  )}
+                </div>
+
+                {/* Multi-Select Dropdown Trigger & Popover */}
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setTraitDropdownOpen(prev => !prev)}
+                    className="w-full flex items-center justify-between px-3 py-1.5 bg-zinc-900 border border-zinc-700 hover:border-amber-400 rounded-lg text-xs text-zinc-300 font-mono transition cursor-pointer shadow-sm"
+                  >
+                    <span className="flex items-center space-x-2">
+                      <Tag className="w-3.5 h-3.5 text-amber-400" />
+                      <span>{traitDropdownOpen ? 'Close Traits Selector' : 'Add / Select Traits from Dropdown...'}</span>
+                    </span>
+                    {traitDropdownOpen ? (
+                      <ChevronUp className="w-4 h-4 text-zinc-400" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4 text-zinc-400" />
+                    )}
+                  </button>
+
+                  {traitDropdownOpen && (() => {
+                    const filteredTraits = Object.values(CORE_TRAIT_DEFINITIONS).filter(trait => {
+                      if (!traitSearchTerm.trim()) return true;
+                      const q = traitSearchTerm.toLowerCase();
+                      return trait.name.toLowerCase().includes(q) ||
+                        trait.summary.toLowerCase().includes(q) ||
+                        trait.id.toLowerCase().includes(q);
+                    });
+
+                    return (
+                      <div className="absolute top-full left-0 right-0 mt-1.5 bg-[#0f111a] border border-zinc-700 rounded-xl shadow-2xl z-50 p-2 space-y-2 animate-in fade-in zoom-in-95 duration-150">
+                        <div className="relative">
+                          <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                          <input
+                            type="text"
+                            value={traitSearchTerm}
+                            onChange={e => setTraitSearchTerm(e.target.value)}
+                            placeholder="Filter traits by keyword..."
+                            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white placeholder-zinc-500 focus:border-amber-500 focus:outline-none font-mono"
+                            autoFocus
+                          />
+                        </div>
+
+                        <div className="max-h-52 overflow-y-auto space-y-1 pr-1">
+                          {filteredTraits.length === 0 ? (
+                            <div className="p-3 text-center text-xs text-zinc-500 font-mono">
+                              No matching traits found
+                            </div>
+                          ) : (
+                            filteredTraits.map(trait => {
+                              const isSelected = selectedTraits.includes(trait.id);
+                              return (
+                                <div
+                                  key={trait.id}
+                                  onClick={() => toggleTrait(trait.id)}
+                                  className={`p-2 rounded-lg border text-left transition cursor-pointer flex items-center justify-between space-x-2 ${
+                                    isSelected
+                                      ? 'bg-amber-950/40 border-amber-500/80 text-white'
+                                      : 'bg-zinc-900/60 border-zinc-800/80 text-zinc-300 hover:bg-zinc-850 hover:border-zinc-700'
+                                  }`}
+                                >
+                                  <div className="flex items-start space-x-2 min-w-0 flex-1">
+                                    <span className="text-base leading-none pt-0.5">{trait.icon}</span>
+                                    <div className="min-w-0">
+                                      <div className="flex items-center space-x-1.5">
+                                        <span className="text-xs font-bold font-mono">{trait.name}</span>
+                                        {trait.isMVP && (
+                                          <span className="text-[8px] font-mono font-bold uppercase px-1 py-0.2 bg-emerald-950 text-emerald-300 border border-emerald-700 rounded">
+                                            MVP
+                                          </span>
+                                        )}
+                                      </div>
+                                      <p className="text-[10px] text-zinc-400 leading-tight truncate">
+                                        {trait.summary}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition ${
+                                    isSelected
+                                      ? 'bg-amber-500 border-amber-400 text-black'
+                                      : 'border-zinc-600 bg-zinc-950'
+                                  }`}>
+                                    {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              </div>
+
+              {/* Tactical Abilities Maker (Card Builder) */}
+              <div className="bg-zinc-950 p-3 rounded-xl border border-zinc-800 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="text-[10px] uppercase font-bold text-zinc-300 block font-mono">
+                      ⚡ Tactical Abilities / Cards ({unitAbilities.length}/3)
+                    </label>
+                    <span className="text-[9px] text-zinc-500">
+                      Equip custom playing card abilities (Zero CP cost, customizable theme/artwork/rarity)
+                    </span>
+                  </div>
+                  {unitAbilities.length < 3 && (
+                    <button
+                      type="button"
+                      onClick={handleOpenAddUnitAbility}
+                      className="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/50 text-amber-300 text-xs font-mono rounded-lg flex items-center space-x-1 transition cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Ability</span>
+                    </button>
+                  )}
+                </div>
+
+                {unitAbilities.length === 0 ? (
+                  <div className="p-3 bg-zinc-900/60 border border-zinc-850 rounded-lg text-center text-xs text-zinc-500 font-mono">
+                    No custom abilities equipped. Click "+ Add Ability" to design playing cards for this unit.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {unitAbilities.map((ab, idx) => (
+                      <div
+                        key={ab.id || idx}
+                        className="bg-zinc-900/80 border border-zinc-800 hover:border-amber-500/40 rounded-xl p-2.5 flex items-start justify-between gap-2.5 transition"
+                      >
+                        <div className="flex items-start space-x-2.5 min-w-0">
+                          {ab.cardArtworkUrl ? (
+                            <img src={ab.cardArtworkUrl} alt={ab.name} className="w-8 h-8 rounded-lg object-cover border border-amber-500/50 shrink-0" />
+                          ) : (
+                            <span className="text-lg p-1 rounded bg-zinc-950 border border-zinc-800 shrink-0">{ab.icon || '⚡'}</span>
+                          )}
+                          <div className="min-w-0">
+                            <div className="flex items-center space-x-1.5 flex-wrap gap-y-0.5">
+                              <h5 className="text-xs font-bold font-mono text-white">{ab.name}</h5>
+                              <span className={`text-[9px] px-1 py-0.2 rounded font-mono font-bold uppercase ${
+                                ab.type === 'active' ? 'bg-amber-950 text-amber-300 border border-amber-800' : 'bg-sky-950 text-sky-300 border border-sky-800'
+                              }`}>
+                                {ab.type}
+                              </span>
+                              {ab.cardTheme && (
+                                <span className="text-[9px] px-1 py-0.2 rounded font-mono bg-zinc-800 text-zinc-300 border border-zinc-700 capitalize">
+                                  {ab.cardTheme}
+                                </span>
+                              )}
+                              {ab.cardRarity && (
+                                <span className="text-[9px] px-1 py-0.2 rounded font-mono text-amber-300 bg-amber-950/60 border border-amber-800/80">
+                                  {ab.cardRarity}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[10px] text-zinc-400 line-clamp-1 mt-0.5">{ab.effect}</p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center space-x-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditUnitAbility(idx)}
+                            className="p-1 text-zinc-400 hover:text-amber-400 hover:bg-zinc-800 rounded transition cursor-pointer"
+                            title="Edit Ability"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteUnitAbility(idx)}
+                            className="p-1 text-zinc-400 hover:text-rose-400 hover:bg-zinc-800 rounded transition cursor-pointer"
+                            title="Delete Ability"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* General Passives text */}
               <div>
-                <label className="text-[10px] uppercase font-bold text-zinc-400 block mb-1">Passives &amp; Abilities</label>
+                <label className="text-[10px] uppercase font-bold text-zinc-400 block mb-1">Passives &amp; Flavor Notes</label>
                 <input
                   type="text"
                   value={newUnit.passives}
                   onChange={e => setNewUnit({ ...newUnit, passives: e.target.value })}
-                  placeholder="e.g. Type Advantage: Beats Monsters, Heavy Armor"
+                  placeholder="e.g. Type Advantage: Beats Monsters, Veteran Phalanx"
                   className="w-full bg-zinc-950 border border-zinc-800 px-3 py-1.5 rounded-lg text-xs text-white focus:border-rose-500 focus:outline-none"
                 />
               </div>
@@ -663,7 +1062,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onDataChanged }) => {
                 className="w-full py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl shadow-lg transition flex items-center justify-center space-x-1.5 cursor-pointer mt-2"
               >
                 <Plus className="w-4 h-4" />
-                <span>Save Unit Template</span>
+                <span>{editingUnitId ? 'Update Unit Template' : 'Save Unit Template'}</span>
               </button>
             </form>
           </div>
@@ -697,15 +1096,42 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onDataChanged }) => {
                       <p className="text-xs text-zinc-400 mt-0.5">
                         {unit.stats.modelCount} models • {unit.stats.hpPerModel || 1} HP/model ({unit.stats.lives} Total Lives)
                       </p>
+                      {/* Traits & Abilities Badges */}
+                      <div className="flex items-center space-x-1.5 flex-wrap gap-y-1 mt-1.5">
+                        {(unit.traits || (unit.canDeployOutsideZone ? ['Infiltrator'] : [])).map(t => {
+                          const def = (CORE_TRAIT_DEFINITIONS as any)[t];
+                          return (
+                            <span key={t} className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-amber-950/60 border border-amber-700/60 text-amber-300 flex items-center space-x-0.5">
+                              <span>{def?.icon || '🏷️'}</span>
+                              <span>{t}</span>
+                            </span>
+                          );
+                        })}
+                        {unit.abilities && unit.abilities.length > 0 && (
+                          <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-purple-950/60 border border-purple-700/60 text-purple-300">
+                            ⚡ {unit.abilities.length} Cards
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
 
-                  <button
-                    onClick={() => handleDeleteUnit(unit.templateId)}
-                    className="p-1.5 text-zinc-400 hover:text-rose-400 hover:bg-zinc-800 rounded transition"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  <div className="flex items-center space-x-1 shrink-0">
+                    <button
+                      onClick={() => handleStartEditUnit(unit)}
+                      className="p-1.5 text-zinc-400 hover:text-amber-400 hover:bg-zinc-800 rounded transition cursor-pointer"
+                      title="Edit unit template"
+                    >
+                      <Edit2 className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteUnit(unit.templateId)}
+                      className="p-1.5 text-zinc-400 hover:text-rose-400 hover:bg-zinc-800 rounded transition cursor-pointer"
+                      title="Delete unit template"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -713,15 +1139,33 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onDataChanged }) => {
         </div>
       )}
 
-      {/* ================= FACTION CREATOR TAB ================= */}
+      {/* ================= FACTION CREATOR / EDITOR TAB ================= */}
       {activeTab === 'factions' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           <div className="lg:col-span-5 bg-zinc-900/90 border border-zinc-800 rounded-2xl p-5 shadow-2xl">
-            <h2 className="text-base font-bold text-white mb-1 flex items-center space-x-2">
-              <Shield className="w-4 h-4 text-rose-500" />
-              <span>Create New Faction</span>
-            </h2>
-            <form onSubmit={handleCreateFaction} className="space-y-3 mt-3">
+            <div className="flex items-center justify-between mb-1">
+              <h2 className="text-base font-bold text-white flex items-center space-x-2">
+                <Shield className="w-4 h-4 text-rose-500" />
+                <span>{editingFactionId ? `Edit Faction: ${newFaction.name || 'Selected'}` : 'Create New Faction'}</span>
+              </h2>
+              {editingFactionId && (
+                <button
+                  type="button"
+                  onClick={handleCancelEditFaction}
+                  className="text-xs text-zinc-400 hover:text-white flex items-center space-x-1 px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 transition"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>Cancel Edit</span>
+                </button>
+              )}
+            </div>
+            <p className="text-xs text-zinc-400 mb-3">
+              {editingFactionId 
+                ? 'Update faction credentials, crest image, or lore parameters.'
+                : 'Define a custom faction, upload custom crest art, and configure lore.'}
+            </p>
+
+            <form onSubmit={handleCreateFaction} className="space-y-3">
               <div>
                 <label className="text-[10px] uppercase font-bold text-zinc-400 block mb-1">Faction Name</label>
                 <input
@@ -733,14 +1177,111 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onDataChanged }) => {
                   className="w-full bg-zinc-950 border border-zinc-800 px-3 py-1.5 rounded-lg text-xs text-white focus:border-rose-500 focus:outline-none"
                 />
               </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-[10px] uppercase font-bold text-zinc-400 block mb-1">Emoji Symbol</label>
+                  <label className="text-[10px] uppercase font-bold text-zinc-400 block mb-1">Short Name</label>
+                  <input
+                    type="text"
+                    value={newFaction.shortName}
+                    onChange={e => setNewFaction({ ...newFaction, shortName: e.target.value })}
+                    placeholder="e.g. Legion"
+                    className="w-full bg-zinc-950 border border-zinc-800 px-3 py-1.5 rounded-lg text-xs text-white focus:border-rose-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-zinc-400 block mb-1">Primary Color</label>
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="color"
+                      value={newFaction.color}
+                      onChange={e => setNewFaction({ ...newFaction, color: e.target.value })}
+                      className="w-8 h-8 rounded border border-zinc-750 cursor-pointer bg-transparent"
+                    />
+                    <span className="text-xs font-mono text-zinc-300">{newFaction.color}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Faction Crest / Logo Image Upload & URL */}
+              <div>
+                <label className="text-[10px] uppercase font-bold text-zinc-400 block mb-1">
+                  Faction Crest / Logo Image
+                </label>
+                <div className="bg-zinc-950 p-2.5 rounded-lg border border-zinc-800 space-y-2">
+                  <div className="flex items-center space-x-3">
+                    <div className="w-12 h-12 rounded-lg bg-zinc-900 border border-zinc-750 flex items-center justify-center shrink-0 overflow-hidden relative">
+                      {newFaction.logoUrl || factionLogoPreview ? (
+                        <img
+                          src={factionLogoPreview || newFaction.logoUrl}
+                          alt="Crest Preview"
+                          className="w-full h-full object-contain"
+                        />
+                      ) : (
+                        <span className="text-2xl">{newFaction.symbol || '⚔️'}</span>
+                      )}
+                    </div>
+                    <div className="flex-1 space-y-1.5 min-w-0">
+                      <div className="flex items-center space-x-2">
+                        <input
+                          type="file"
+                          ref={factionLogoInputRef}
+                          accept="image/png,image/jpeg,image/jpg,image/webp,image/svg+xml"
+                          onChange={handleFactionLogoChange}
+                          className="hidden"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => factionLogoInputRef.current?.click()}
+                          className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-750 text-zinc-200 text-xs font-mono rounded flex items-center space-x-1.5 transition cursor-pointer"
+                        >
+                          <Upload className="w-3.5 h-3.5 text-rose-400" />
+                          <span>Upload Image</span>
+                        </button>
+                        {(newFaction.logoUrl || factionLogoPreview) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setFactionLogoPreview(null);
+                              setNewFaction(prev => ({ ...prev, logoUrl: '' }));
+                              if (factionLogoInputRef.current) factionLogoInputRef.current.value = '';
+                            }}
+                            className="px-2 py-1 text-[11px] text-zinc-400 hover:text-rose-400 transition cursor-pointer"
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </div>
+                      <input
+                        type="text"
+                        placeholder="Or enter image URL (https://...)"
+                        value={newFaction.logoUrl}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setNewFaction(prev => ({ ...prev, logoUrl: val }));
+                          setFactionLogoPreview(val || null);
+                        }}
+                        className="w-full bg-zinc-900 border border-zinc-800 px-2 py-1 rounded text-[11px] text-white focus:outline-none focus:border-rose-500 font-mono"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-zinc-500">
+                    Supports PNG, JPG, WebP, SVG. Stored in local faction vault.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-zinc-400 block mb-1">
+                    Fallback Emoji Symbol
+                  </label>
                   <input
                     type="text"
                     value={newFaction.symbol}
                     onChange={e => setNewFaction({ ...newFaction, symbol: e.target.value })}
-                    className="w-full bg-zinc-950 border border-zinc-800 px-3 py-1.5 rounded-lg text-xs text-white"
+                    placeholder="⚔️"
+                    className="w-full bg-zinc-950 border border-zinc-800 px-3 py-1.5 rounded-lg text-xs text-white focus:border-rose-500 focus:outline-none"
                   />
                 </div>
                 <div>
@@ -749,15 +1290,128 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onDataChanged }) => {
                     type="text"
                     value={newFaction.leaderName}
                     onChange={e => setNewFaction({ ...newFaction, leaderName: e.target.value })}
-                    className="w-full bg-zinc-950 border border-zinc-800 px-3 py-1.5 rounded-lg text-xs text-white"
+                    placeholder="e.g. Warmaster"
+                    className="w-full bg-zinc-950 border border-zinc-800 px-3 py-1.5 rounded-lg text-xs text-white focus:border-rose-500 focus:outline-none"
                   />
                 </div>
               </div>
+
+              <div>
+                <label className="text-[10px] uppercase font-bold text-zinc-400 block mb-1">Title / Motto</label>
+                <input
+                  type="text"
+                  value={newFaction.title}
+                  onChange={e => setNewFaction({ ...newFaction, title: e.target.value })}
+                  placeholder="e.g. Wardens of the Iron Spire"
+                  className="w-full bg-zinc-950 border border-zinc-800 px-3 py-1.5 rounded-lg text-xs text-white focus:border-rose-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] uppercase font-bold text-zinc-400 block mb-1">Faction Quote</label>
+                <input
+                  type="text"
+                  value={newFaction.quote}
+                  onChange={e => setNewFaction({ ...newFaction, quote: e.target.value })}
+                  placeholder="e.g. Iron breaks before we yield."
+                  className="w-full bg-zinc-950 border border-zinc-800 px-3 py-1.5 rounded-lg text-xs text-white focus:border-rose-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] uppercase font-bold text-zinc-400 block mb-1">Faction Strengths (comma-separated)</label>
+                <input
+                  type="text"
+                  value={newFaction.traits}
+                  onChange={e => setNewFaction({ ...newFaction, traits: e.target.value })}
+                  placeholder="e.g. High Firepower, Fortified Bastions"
+                  className="w-full bg-zinc-950 border border-zinc-800 px-3 py-1.5 rounded-lg text-xs text-white focus:border-rose-500 focus:outline-none"
+                />
+              </div>
+
+              {/* Faction Ability Builder (FEATURE-003 & CODE-027) */}
+              <div className="bg-zinc-950 p-3 rounded-xl border border-zinc-800 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="text-[10px] uppercase font-bold text-zinc-300 flex items-center space-x-1.5">
+                      <span>🔮 Faction Ability (Army-Wide)</span>
+                    </label>
+                    <span className="text-[10px] text-zinc-500 block">
+                      Unique faction-level active or passive doctrine
+                    </span>
+                  </div>
+                  {!factionAbility ? (
+                    <button
+                      type="button"
+                      onClick={() => setIsFactionAbilityModalOpen(true)}
+                      className="px-2 py-1 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 text-[11px] font-mono rounded flex items-center space-x-1 transition cursor-pointer"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>Configure Ability</span>
+                    </button>
+                  ) : (
+                    <div className="flex items-center space-x-1">
+                      <button
+                        type="button"
+                        onClick={() => setIsFactionAbilityModalOpen(true)}
+                        className="p-1 text-zinc-400 hover:text-amber-400 rounded transition cursor-pointer"
+                        title="Edit Ability"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFactionAbility(undefined)}
+                        className="p-1 text-zinc-400 hover:text-rose-400 rounded transition cursor-pointer"
+                        title="Remove Ability"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {factionAbility ? (
+                  <div className="p-2.5 rounded-lg bg-zinc-900 border border-amber-500/40 flex items-start space-x-2.5">
+                    <span className="text-xl p-1 rounded bg-zinc-950 border border-zinc-800 shrink-0">
+                      {factionAbility.icon || '🔮'}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center space-x-2 flex-wrap">
+                        <span className="text-xs font-bold text-white font-mono">{factionAbility.name}</span>
+                        <span className={`text-[8px] px-1 py-0.2 rounded font-mono uppercase font-bold ${
+                          factionAbility.type === 'active' ? 'bg-amber-950 text-amber-300 border border-amber-800' : 'bg-sky-950 text-sky-300 border border-sky-800'
+                        }`}>
+                          {factionAbility.type}
+                        </span>
+                        {factionAbility.cost && factionAbility.type === 'active' && (
+                          <span className="text-[8px] px-1 py-0.2 rounded font-mono bg-zinc-800 text-zinc-300">
+                            {factionAbility.cost.replace('_', ' ').toUpperCase()}
+                          </span>
+                        )}
+                        {factionAbility.activationTiming && (
+                          <span className="text-[8px] px-1 py-0.2 rounded font-mono bg-zinc-950 text-amber-400">
+                            {factionAbility.activationTiming.replace('_', ' ').toUpperCase()}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-zinc-300 mt-1 leading-snug">
+                        {factionAbility.effect}
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-zinc-500 italic">
+                    No army-wide faction ability configured. Click "Configure Ability" to add one.
+                  </p>
+                )}
+              </div>
+
               <button
                 type="submit"
-                className="w-full py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl shadow transition"
+                className="w-full py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl shadow transition cursor-pointer"
               >
-                Publish Faction
+                {editingFactionId ? 'Save Changes' : 'Publish Faction'}
               </button>
             </form>
           </div>
@@ -767,16 +1421,44 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onDataChanged }) => {
             <div className="space-y-2.5 max-h-[600px] overflow-y-auto pr-1">
               {factions.map(f => (
                 <div key={f.id} className="bg-zinc-900/80 border border-zinc-800 rounded-xl p-4 flex items-center justify-between">
-                  <div className="flex items-center space-x-3">
-                    <span className="text-3xl">{f.symbol}</span>
+                  <div className="flex items-center space-x-3.5">
+                    <FactionLogo faction={f} size="lg" />
                     <div>
-                      <h4 className="font-bold text-white text-sm">{f.name}</h4>
-                      <span className="text-xs text-zinc-400">{f.leaderName}</span>
+                      <div className="flex items-center space-x-2">
+                        <h4 className="font-bold text-white text-sm">{f.name}</h4>
+                        {f.logoUrl && (
+                          <span className="px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-700 text-[9px] font-mono">
+                            Crest Art
+                          </span>
+                        )}
+                        {f.factionAbility && (
+                          <span className="px-1.5 py-0.5 rounded bg-amber-950/80 text-amber-300 border border-amber-700/80 text-[9px] font-mono flex items-center space-x-1">
+                            <span>{f.factionAbility.icon || '🔮'}</span>
+                            <span>{f.factionAbility.name}</span>
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-xs text-zinc-400">{f.leaderName} • {f.shortName}</span>
                     </div>
                   </div>
-                  <button onClick={() => handleDeleteFaction(f.id)} className="p-1.5 text-zinc-400 hover:text-rose-400">
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  <div className="flex items-center space-x-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handleStartEditFaction(f)}
+                      title="Edit faction credentials & crest"
+                      className="p-1.5 text-zinc-400 hover:text-amber-400 hover:bg-zinc-800 rounded transition cursor-pointer"
+                    >
+                      <Edit2 className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteFaction(f.id)}
+                      title="Delete faction"
+                      className="p-1.5 text-zinc-400 hover:text-rose-400 hover:bg-zinc-800 rounded transition cursor-pointer"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -788,6 +1470,29 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onDataChanged }) => {
       {activeTab === 'maps' && (
         <MapCreator onMapSaved={onDataChanged} />
       )}
+
+      {/* Faction Ability Editor Modal */}
+      <AbilityEditorModal
+        isOpen={isFactionAbilityModalOpen}
+        onClose={() => setIsFactionAbilityModalOpen(false)}
+        onSaveAbility={(ab) => setFactionAbility(ab)}
+        initialAbility={factionAbility || null}
+        contextType="faction"
+        title="Configure Faction Ability"
+      />
+
+      {/* Unit Tactical Ability Editor Modal */}
+      <AbilityEditorModal
+        isOpen={isUnitAbilityModalOpen}
+        onClose={() => {
+          setIsUnitAbilityModalOpen(false);
+          setEditingUnitAbilityIndex(null);
+        }}
+        onSaveAbility={handleSaveUnitAbility}
+        initialAbility={editingUnitAbilityIndex !== null ? unitAbilities[editingUnitAbilityIndex] : null}
+        contextType="unit"
+        title={editingUnitAbilityIndex !== null ? 'Edit Tactical Ability' : 'Design Tactical Ability'}
+      />
     </div>
   );
 };

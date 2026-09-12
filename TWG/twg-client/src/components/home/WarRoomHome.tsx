@@ -6,6 +6,7 @@ import {
 import { StorageService } from '../../services/storageService';
 import { FACTIONS } from '../../data/factions';
 import { ArmyRoster } from '../../types/army';
+import { FactionLogo } from '../common/FactionLogo';
 
 interface WarRoomHomeProps {
   onNavigate: (tab: 'play' | 'builder' | 'shop' | 'battlepass' | 'lore' | 'admin') => void;
@@ -133,8 +134,8 @@ export const WarRoomHome: React.FC<WarRoomHomeProps> = ({
                     : 'bg-[#140e0a] border-[#2e2117] hover:border-[#4a3522]'
                 }`}
               >
-                <div className="w-11 h-11 rounded-lg bg-[#241710] border border-[#593d28] flex items-center justify-center text-2xl shadow-inner">
-                  {f.symbol}
+                <div className="w-11 h-11 rounded-lg bg-[#241710] border border-[#593d28] flex items-center justify-center text-2xl shadow-inner overflow-hidden p-1">
+                  <FactionLogo faction={f} size="md" />
                 </div>
                 <div className="flex-1 overflow-hidden">
                   <div className="flex items-center justify-between">

@@ -5,6 +5,7 @@ import {
   Circle, LayoutGrid, AlignJustify, Layers, AlertTriangle
 } from 'lucide-react';
 import { Unit, Token, FormationType, WorldPoint, POI, SpecialTile, Phase, TerrainFeature, DeploymentZoneConfig, PaintedZone, MultiLevelStructure } from '../../types/game';
+import { VfxOverlay } from './VfxOverlay';
 import { 
   DEFAULT_GRID_SIZE, 
   worldDistance, 
@@ -18,13 +19,16 @@ import {
   getUnitSize,
   getUnitBaseRadius,
   getUnitBaseDiameter,
+  getUnitBaseDimensions,
   getUnitCollisionRadius,
   checkUnitCollision,
   checkUnitCollisionsWithAll,
   findNearestNonOverlappingPosition,
   validateUnitCoherency,
-  moveIndividualToken,
-  checkUniversalTokenCollisions
+  checkUniversalTokenCollisions,
+  validateNormalMovementEnemyProximity,
+  checkPathCrossesUnits,
+  ENGAGEMENT_PROXIMITY_PX
 } from '../../engine/formationEngine';
 import { vttDragBridge, DragDebugEntry } from '../../services/dragBridge';
 
@@ -134,6 +138,7 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
   const [isMarqueeDragging, setIsMarqueeDragging] = useState<boolean>(false);
   const [isGroupDragging, setIsGroupDragging] = useState<boolean>(false);
   const [groupDragInitialPositions, setGroupDragInitialPositions] = useState<Record<string, WorldPoint>>({});
+  const [deploymentMode, setDeploymentMode] = useState<'formation' | 'manual'>('formation');
 
   // Custom Ruler Measurement State
   const [measureStart, setMeasureStart] = useState<WorldPoint | null>(null);
@@ -418,7 +423,7 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
         return;
       }
 
-      // Case 2: Moving an individual model/token in Movement phase
+      // Case 2: Moving an individual model/token in Deployment or Movement phase
       if (draggingTokenId && onMoveIndividualModel) {
         let targetX = dragTokenInitialPos.x + deltaX;
         let targetY = dragTokenInitialPos.y + deltaY;
@@ -430,10 +435,40 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
         targetX = Math.max(16, Math.min(WORLD_WIDTH - 16, targetX));
         targetY = Math.max(16, Math.min(WORLD_HEIGHT - 16, targetY));
 
-        // Universal Collision Check (No base overlap, touching allowed)
         const movingToken = unit.tokens?.find(t => t.id === draggingTokenId);
         if (movingToken) {
           const candidate = [{ ...movingToken, x: targetX, y: targetY }];
+
+          // Deployment phase zone check
+          if (activePhase === 'Deployment') {
+            const zoneDepth = unit.owner === 'player1' ? p1ZoneWidth : p2ZoneWidth;
+            const inZone = isInsideDeploymentZone({ x: targetX, y: targetY }, unit.owner, WORLD_WIDTH, zoneDepth);
+            if (!canUnitDeployOutsideZone(unit) && !inZone) {
+              setRejectedPlacementNotice(
+                `⚠️ Placement Rejected: Model cannot deploy outside your designated deployment zone!`
+              );
+              setTimeout(() => setRejectedPlacementNotice(null), 4500);
+              setDraggingUnitId(null);
+              setDraggingTokenId(null);
+              return;
+            }
+          }
+
+          // Movement phase: 1" enemy proximity check (BUG-019)
+          if (activePhase === 'Movement') {
+            const proxCheck = validateNormalMovementEnemyProximity(unit, candidate, units);
+            if (!proxCheck.valid) {
+              setRejectedPlacementNotice(
+                `⛔ Placement Rejected: Model cannot end within 1" (50px) of enemy ${proxCheck.offendingEnemyUnit?.name}! (Only Charge can enter engagement range).`
+              );
+              setTimeout(() => setRejectedPlacementNotice(null), 4500);
+              setDraggingUnitId(null);
+              setDraggingTokenId(null);
+              return;
+            }
+          }
+
+          // Universal Collision Check (No base overlap, touching allowed)
           const colCheck = checkUniversalTokenCollisions(candidate, units, unit.id, draggingTokenId);
           if (colCheck.hasCollision) {
             setRejectedPlacementNotice(
@@ -443,6 +478,26 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
             setDraggingUnitId(null);
             setDraggingTokenId(null);
             return;
+          }
+
+          // Swept path collision check (BUG-024): Cannot cross through other units unless FLY
+          if (activePhase === 'Movement' && !unit.isPendingDisembarkConfirm) {
+            const pathCheck = checkPathCrossesUnits(
+              unit,
+              dragTokenInitialPos,
+              { x: targetX, y: targetY },
+              units,
+              { ignoreUnitId: unit.id }
+            );
+            if (pathCheck.hasCollision) {
+              setRejectedPlacementNotice(
+                `⛔ Move Blocked: Model path cuts through ${pathCheck.collidingUnit?.name || 'another unit'}! Units cannot move through other models without the FLY trait.`
+              );
+              setTimeout(() => setRejectedPlacementNotice(null), 4500);
+              setDraggingUnitId(null);
+              setDraggingTokenId(null);
+              return;
+            }
           }
         }
 
@@ -488,25 +543,51 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
       }
 
       // Universal Collision Check for entire squad
-      const candidateTokens: Token[] = calculateFormationOffsets(
-        unit.tokens?.length || unit.stats.modelCount || 1,
-        unit.formation || 'circle',
-        getUnitBaseRadius(unit)
-      ).map((off, idx) => ({
-        id: unit.tokens?.[idx]?.id || `tok_${idx}`,
-        unitId: unit.id,
-        x: targetX + off.offsetX,
-        y: targetY + off.offsetY,
-        offsetX: off.offsetX,
-        offsetY: off.offsetY,
-        rotation: 0,
-        size: getUnitBaseDiameter(unit),
-        baseShape: unit.baseShape || 'circle',
-        baseWidth: unit.baseWidth || getUnitBaseDiameter(unit),
-        baseHeight: unit.baseHeight || getUnitBaseDiameter(unit),
-        currentLives: 1,
-        maxLives: 1
-      }));
+      let candidateTokens: Token[];
+      if (unit.hasCustomTokenPositions && unit.tokens && unit.tokens.length > 0) {
+        candidateTokens = unit.tokens.map(t => ({
+          ...t,
+          x: targetX + (t.offsetX || 0),
+          y: targetY + (t.offsetY || 0)
+        }));
+      } else {
+        const { width, height, radius, shape } = getUnitBaseDimensions(unit);
+        candidateTokens = calculateFormationOffsets(
+          unit.tokens?.length || unit.stats.modelCount || 1,
+          unit.formation || 'circle',
+          radius,
+          width,
+          height
+        ).map((off, idx) => ({
+          id: unit.tokens?.[idx]?.id || `tok_${idx}`,
+          unitId: unit.id,
+          x: targetX + off.offsetX,
+          y: targetY + off.offsetY,
+          offsetX: off.offsetX,
+          offsetY: off.offsetY,
+          rotation: 0,
+          size: Math.max(width, height),
+          baseShape: unit.baseShape || shape,
+          baseWidth: unit.baseWidth || width,
+          baseHeight: unit.baseHeight || height,
+          currentLives: 1,
+          maxLives: 1
+        }));
+      }
+
+      // Movement phase: 1" enemy proximity check (BUG-019)
+      if (activePhase === 'Movement') {
+        const proxCheck = validateNormalMovementEnemyProximity(unit, candidateTokens, units);
+        if (!proxCheck.valid) {
+          setRejectedPlacementNotice(
+            `⛔ Placement Rejected: Normal move cannot end within 1" (50px) of enemy ${proxCheck.offendingEnemyUnit?.name}! (Only Charge can enter engagement range).`
+          );
+          setTimeout(() => setRejectedPlacementNotice(null), 4500);
+          setDraggingUnitId(null);
+          setDraggingTokenId(null);
+          return;
+        }
+      }
 
       const squadColCheck = checkUniversalTokenCollisions(candidateTokens, units, unit.id);
       if (squadColCheck.hasCollision) {
@@ -517,6 +598,20 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
         setDraggingUnitId(null);
         setDraggingTokenId(null);
         return;
+      }
+
+      // Swept path collision check (BUG-024): Cannot cross through other units unless FLY
+      if (activePhase === 'Movement') {
+        const pathCheck = checkPathCrossesUnits(unit, dragInitialUnitPos, { x: targetX, y: targetY }, units);
+        if (pathCheck.hasCollision) {
+          setRejectedPlacementNotice(
+            `⛔ Move Blocked: Path cuts through ${pathCheck.collidingUnit?.name || 'an intervening unit'}! Units cannot move through other models without the FLY trait.`
+          );
+          setTimeout(() => setRejectedPlacementNotice(null), 4500);
+          setDraggingUnitId(null);
+          setDraggingTokenId(null);
+          return;
+        }
       }
 
       onMoveUnit(draggingUnitId, { x: targetX, y: targetY });
@@ -545,9 +640,9 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
     onSelectUnit(unit.id);
     setSelectedTokenIds((unit.tokens || []).map(t => t.id));
 
-    const canDrag = (unit.owner === activePlayer || (activePhase === 'Deployment' && unit.isPendingDeploymentConfirm)) && (
+    const canDrag = (unit.owner === activePlayer || (activePhase === 'Deployment' && unit.isPendingDeploymentConfirm) || unit.isPendingDisembarkConfirm) && (
       activePhase === 'Deployment' || 
-      (activePhase === 'Movement' && (!unit.hasMoved || unit.isPendingMoveConfirm))
+      (activePhase === 'Movement' && (!unit.hasMoved || unit.isPendingMoveConfirm || unit.isPendingDisembarkConfirm))
     );
 
     if (canDrag && unit.position) {
@@ -588,9 +683,9 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
     onSelectUnit(unit.id);
 
     // Can only drag own units during Deployment or Movement phase
-    const canDrag = (unit.owner === activePlayer || (activePhase === 'Deployment' && unit.isPendingDeploymentConfirm)) && (
+    const canDrag = (unit.owner === activePlayer || (activePhase === 'Deployment' && unit.isPendingDeploymentConfirm) || unit.isPendingDisembarkConfirm) && (
       activePhase === 'Deployment' || 
-      (activePhase === 'Movement' && (!unit.hasMoved || unit.isPendingMoveConfirm))
+      (activePhase === 'Movement' && (!unit.hasMoved || unit.isPendingMoveConfirm || unit.isPendingDisembarkConfirm))
     );
 
     // Double-click on any token selects the whole squad for group movement!
@@ -607,12 +702,20 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
       setDragCurrentWorld(worldPt);
       setDragInitialUnitPos(unit.position);
 
-      // In Deployment phase, dragging ANY token in a formed squad repositions the entire squad formation (BUG-007)
+      // In Deployment phase: check deploymentMode ('formation' vs 'manual')
       if (activePhase === 'Deployment') {
-        setIsGroupDragging(false);
-        setGroupDragInitialPositions({});
-        setDraggingTokenId(null);
-        setSelectedTokenIds((unit.tokens || []).map(t => t.id));
+        if (deploymentMode === 'manual' && unit.tokens && unit.tokens.length > 1) {
+          setIsGroupDragging(false);
+          setGroupDragInitialPositions({});
+          setDraggingTokenId(token.id);
+          setDragTokenInitialPos({ x: token.x, y: token.y });
+          setSelectedTokenIds([token.id]);
+        } else {
+          setIsGroupDragging(false);
+          setGroupDragInitialPositions({});
+          setDraggingTokenId(null);
+          setSelectedTokenIds((unit.tokens || []).map(t => t.id));
+        }
       } else if (selectedTokenIds.includes(token.id) && selectedTokenIds.length > 1) {
         // If clicking a token that is already part of a multi-token selection, group drag!
         setIsGroupDragging(true);
@@ -987,8 +1090,9 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
           {pois.map(poi => {
             const poiX = poi.x > 30 ? poi.x : poi.x * GRID_SIZE + GRID_SIZE / 2;
             const poiY = poi.y > 30 ? poi.y : poi.y * GRID_SIZE + GRID_SIZE / 2;
-            const r = typeof poi.radius === 'number' ? poi.radius : 1.5;
-            const radiusPx = r * GRID_SIZE; // 1.5 * 50 = 75px capture radius
+            const radiusPx = (typeof poi.radius === 'number' && poi.radius > 10)
+              ? poi.radius
+              : (poi.radius || 1.5) * GRID_SIZE;
 
             return (
               <div 
@@ -1122,6 +1226,89 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
         {/* ========================================================= */}
         <div className="absolute inset-0 pointer-events-none z-10">
           <svg className="w-full h-full">
+            {/* FEATURE-001: 1" (50px) No-End-Movement Hazard Zone around all enemy units (Movement Phase Only) */}
+            {activePhase === 'Movement' && units
+              .filter(u => u.owner !== activePlayer && u.position && u.stats.lives > 0 && !u.embarkedIn && !u.inStrategicReserve)
+              .map(enemy => {
+                const livingTokens = (enemy.tokens || []).filter(t => t.currentLives > 0);
+                const eDims = getUnitBaseDimensions(enemy);
+                const tokensToRender = livingTokens.length > 0
+                  ? livingTokens
+                  : [{
+                      id: `${enemy.id}-base`,
+                      x: enemy.position!.x,
+                      y: enemy.position!.y,
+                      baseShape: eDims.shape,
+                      baseWidth: eDims.width,
+                      baseHeight: eDims.height,
+                      radius: eDims.radius,
+                      size: Math.max(eDims.width, eDims.height)
+                    }];
+
+                return (
+                  <g key={`enemy-hazard-zone-${enemy.id}`} pointerEvents="none" className="enemy-engagement-zone">
+                    {tokensToRender.map(t => {
+                      const shape = t.baseShape || enemy.baseShape || eDims.shape || 'circle';
+                      const w = t.baseWidth || enemy.baseWidth || eDims.width || 40;
+                      const h = t.baseHeight || enemy.baseHeight || eDims.height || 40;
+                      const r = t.radius || (t.size ? t.size / 2 : eDims.radius);
+
+                      if (shape === 'rectangle' || shape === 'square') {
+                        const padW = w + ENGAGEMENT_PROXIMITY_PX * 2;
+                        const padH = h + ENGAGEMENT_PROXIMITY_PX * 2;
+                        return (
+                          <rect
+                            key={`hazard-tok-${t.id}`}
+                            x={t.x - padW / 2}
+                            y={t.y - padH / 2}
+                            width={padW}
+                            height={padH}
+                            rx={ENGAGEMENT_PROXIMITY_PX}
+                            ry={ENGAGEMENT_PROXIMITY_PX}
+                            fill="rgba(239, 68, 68, 0.07)"
+                            stroke="#ef4444"
+                            strokeWidth="1.5"
+                            strokeDasharray="4 4"
+                          />
+                        );
+                      } else if (shape === 'oval') {
+                        const rx = (w / 2) + ENGAGEMENT_PROXIMITY_PX;
+                        const ry = (h / 2) + ENGAGEMENT_PROXIMITY_PX;
+                        return (
+                          <ellipse
+                            key={`hazard-tok-${t.id}`}
+                            cx={t.x}
+                            cy={t.y}
+                            rx={rx}
+                            ry={ry}
+                            fill="rgba(239, 68, 68, 0.07)"
+                            stroke="#ef4444"
+                            strokeWidth="1.5"
+                            strokeDasharray="4 4"
+                          />
+                        );
+                      } else {
+                        // Circle
+                        const zoneR = r + ENGAGEMENT_PROXIMITY_PX;
+                        return (
+                          <circle
+                            key={`hazard-tok-${t.id}`}
+                            cx={t.x}
+                            cy={t.y}
+                            r={zoneR}
+                            fill="rgba(239, 68, 68, 0.07)"
+                            stroke="#ef4444"
+                            strokeWidth="1.5"
+                            strokeDasharray="4 4"
+                          />
+                        );
+                      }
+                    })}
+                  </g>
+                );
+              })
+            }
+
             {/* Selected Unit Range Spheres */}
             {selectedUnit && selectedUnit.position && (
               <>
@@ -1170,7 +1357,7 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
                       />
 
                       {/* Multi-Model Squad Reach per Model from start positions */}
-                      {originTokens.length > 1 && originTokens.map((tok, i) => (
+                      {originTokens.length > 1 && originTokens.map((tok: Token, i: number) => (
                         <g key={`tok_reach_${tok.id || i}`}>
                           <circle
                             cx={tok.x}
@@ -1218,18 +1405,83 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
                   );
                 })()}
 
-                {/* Shooting Range Sphere */}
-                {activePhase === 'Shooting' && selectedUnit.stats.range > 0 && !selectedUnit.hasShot && (
-                  <circle
-                    cx={selectedUnit.position.x}
-                    cy={selectedUnit.position.y}
-                    r={selectedUnit.stats.range * GRID_SIZE}
-                    fill="rgba(244, 63, 94, 0.10)"
-                    stroke="#f43f5e"
-                    strokeWidth="2"
-                    strokeDasharray="4 4"
-                  />
-                )}
+                {/* 3" Disembark Zone Annular Ring around Transport Vehicle (Movement Phase) */}
+                {activePhase === 'Movement' && (selectedUnit.type === 'Vehicle' || selectedUnit.role === 'Vehicle / Monster') && (
+                  units.some(u => u.embarkedIn === selectedUnit.id)
+                ) && (() => {
+                  const vRadius = getUnitCollisionRadius(selectedUnit);
+                  const disembarkOuterRadius = vRadius + 150; // 3 inches = 150px
+                  return (
+                    <g pointerEvents="none">
+                      <circle
+                        cx={selectedUnit.position.x}
+                        cy={selectedUnit.position.y}
+                        r={disembarkOuterRadius}
+                        fill="rgba(14, 165, 233, 0.08)"
+                        stroke="#0ea5e9"
+                        strokeWidth="2"
+                        strokeDasharray="6 4"
+                      />
+                      <circle
+                        cx={selectedUnit.position.x}
+                        cy={selectedUnit.position.y}
+                        r={vRadius + 8}
+                        fill="none"
+                        stroke="#0ea5e9"
+                        strokeWidth="1.5"
+                        strokeDasharray="3 3"
+                        opacity={0.6}
+                      />
+                      <text
+                        x={selectedUnit.position.x}
+                        y={selectedUnit.position.y - disembarkOuterRadius - 6}
+                        textAnchor="middle"
+                        fill="#38bdf8"
+                        fontSize="10"
+                        fontWeight="bold"
+                        className="select-none filter drop-shadow"
+                      >
+                        3″ DISEMBARK ZONE
+                      </text>
+                    </g>
+                  );
+                })()}
+
+                {/* Shooting Range Sphere (BUG-018: Blocked if attached leader's host squad is melee-only or has already shot) */}
+                {activePhase === 'Shooting' && selectedUnit.stats.range > 0 && !selectedUnit.hasShot && (() => {
+                  if (selectedUnit.attachedTo) {
+                    const hostSquad = units.find(u => u.id === selectedUnit.attachedTo);
+                    if (hostSquad && (hostSquad.stats.range === 0 || hostSquad.hasShot)) {
+                      return null;
+                    }
+                  }
+                  return (
+                    <g pointerEvents="none">
+                      <circle
+                        cx={selectedUnit.position.x}
+                        cy={selectedUnit.position.y}
+                        r={selectedUnit.stats.range * GRID_SIZE}
+                        fill="rgba(244, 63, 94, 0.08)"
+                        stroke="#f43f5e"
+                        strokeWidth="2"
+                        strokeDasharray="4 4"
+                      />
+                      {selectedUnit.tokens && selectedUnit.tokens.length > 1 && selectedUnit.tokens.map(tok => (
+                        <circle
+                          key={`tok_range_${tok.id}`}
+                          cx={tok.x}
+                          cy={tok.y}
+                          r={selectedUnit.stats.range * GRID_SIZE}
+                          fill="none"
+                          stroke="#f43f5e"
+                          strokeWidth="1"
+                          strokeDasharray="2 4"
+                          opacity={0.35}
+                        />
+                      ))}
+                    </g>
+                  );
+                })()}
 
                 {/* Charge Reach Sphere */}
                 {activePhase === 'Charge' && !selectedUnit.hasCharged && (
@@ -1727,6 +1979,9 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
               </span>
             </div>
           )}
+
+          {/* Canvas VFX Layer (Projectiles, slashes, aura ripples, CP sparkle) */}
+          <VfxOverlay />
         </div>
       </div>
 
@@ -1781,72 +2036,111 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
         </button>
       </div>
 
-      {/* Squad Formation Quick Selector (Strictly Deployment Phase Only) */}
-      {activePhase === 'Deployment' && selectedUnit && onChangeFormation && (
-        <div className="absolute top-3 right-3 bg-[#161922]/90 border border-zinc-800 backdrop-blur rounded-xl p-1.5 shadow-2xl flex items-center space-x-1.5 z-40 text-xs">
-          <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider px-1">
-            Formation:
-          </span>
-          <button
-            onClick={() => onChangeFormation(selectedUnit.id, 'auto')}
-            title="Auto Adaptive Formation (Reflows models to fit within deployment zone)"
-            className={`px-2 py-1 rounded flex items-center space-x-1 text-xs font-mono transition ${
-              (selectedUnit.formation || 'circle') === 'auto'
-                ? 'bg-amber-600 text-white font-bold shadow'
-                : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
-            }`}
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>Auto</span>
-          </button>
-          <button
-            onClick={() => onChangeFormation(selectedUnit.id, 'circle')}
-            title="Circle Formation"
-            className={`px-2 py-1 rounded flex items-center space-x-1 text-xs font-mono transition ${
-              (selectedUnit.formation || 'circle') === 'circle'
-                ? 'bg-amber-600 text-white font-bold shadow'
-                : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
-            }`}
-          >
-            <Circle className="w-3.5 h-3.5" />
-            <span>Circle</span>
-          </button>
-          <button
-            onClick={() => onChangeFormation(selectedUnit.id, 'line')}
-            title="Line Rank Formation"
-            className={`px-2 py-1 rounded flex items-center space-x-1 text-xs font-mono transition ${
-              selectedUnit.formation === 'line'
-                ? 'bg-amber-600 text-white font-bold shadow'
-                : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
-            }`}
-          >
-            <AlignJustify className="w-3.5 h-3.5" />
-            <span>Line</span>
-          </button>
-          <button
-            onClick={() => onChangeFormation(selectedUnit.id, 'grid')}
-            title="Skirmish Grid Formation"
-            className={`px-2 py-1 rounded flex items-center space-x-1 text-xs font-mono transition ${
-              selectedUnit.formation === 'grid'
-                ? 'bg-amber-600 text-white font-bold shadow'
-                : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
-            }`}
-          >
-            <LayoutGrid className="w-3.5 h-3.5" />
-            <span>Grid</span>
-          </button>
-          <button
-            onClick={() => onChangeFormation(selectedUnit.id, 'stack')}
-            title="Stacked Formation"
-            className={`px-2 py-1 rounded flex items-center space-x-1 text-xs font-mono transition ${
-              selectedUnit.formation === 'stack'
-                ? 'bg-amber-600 text-white font-bold shadow'
-                : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
-            }`}
-          >
-            <Layers className="w-3.5 h-3.5" />
-            <span>Stack</span>
-          </button>
+      {/* Deployment Mode & Formation Dock (Strictly Deployment Phase Only) */}
+      {activePhase === 'Deployment' && (
+        <div className="absolute top-3 right-3 bg-[#161922]/90 border border-zinc-800 backdrop-blur rounded-xl p-1.5 shadow-2xl flex items-center space-x-2 z-40 text-xs">
+          {/* Mode Switcher: Formation Preset vs Manual Placement */}
+          <div className="flex items-center space-x-1 bg-zinc-900/90 p-0.5 rounded-lg border border-zinc-750">
+            <button
+              onClick={() => setDeploymentMode('formation')}
+              className={`px-2.5 py-1 rounded text-xs font-bold transition flex items-center space-x-1.5 ${
+                deploymentMode === 'formation'
+                  ? 'bg-amber-600 text-white shadow'
+                  : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+              title="Formation Mode: Drag whole squad as a preset formation"
+            >
+              <LayoutGrid className="w-3.5 h-3.5" />
+              <span>Formation</span>
+            </button>
+            <button
+              onClick={() => setDeploymentMode('manual')}
+              className={`px-2.5 py-1 rounded text-xs font-bold transition flex items-center space-x-1.5 ${
+                deploymentMode === 'manual'
+                  ? 'bg-purple-600 text-white shadow'
+                  : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+              title="Manual Mode: Freely drag individual models (enforces coherency rule)"
+            >
+              <Move className="w-3.5 h-3.5" />
+              <span>Manual</span>
+            </button>
+          </div>
+
+          {/* If squad selected and in formation mode, show presets */}
+          {selectedUnit && onChangeFormation && deploymentMode === 'formation' && (
+            <>
+              <div className="w-[1px] h-4 bg-zinc-700 my-auto" />
+              <div className="flex items-center space-x-1">
+                <button
+                  onClick={() => onChangeFormation(selectedUnit.id, 'auto')}
+                  title="Auto Adaptive Formation"
+                  className={`px-2 py-1 rounded flex items-center space-x-1 text-xs font-mono transition ${
+                    (selectedUnit.formation || 'circle') === 'auto'
+                      ? 'bg-amber-600 text-white font-bold shadow'
+                      : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
+                  }`}
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Auto</span>
+                </button>
+                <button
+                  onClick={() => onChangeFormation(selectedUnit.id, 'circle')}
+                  title="Circle Formation"
+                  className={`px-2 py-1 rounded flex items-center space-x-1 text-xs font-mono transition ${
+                    (selectedUnit.formation || 'circle') === 'circle'
+                      ? 'bg-amber-600 text-white font-bold shadow'
+                      : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
+                  }`}
+                >
+                  <Circle className="w-3.5 h-3.5" />
+                  <span>Circle</span>
+                </button>
+                <button
+                  onClick={() => onChangeFormation(selectedUnit.id, 'line')}
+                  title="Line Rank Formation"
+                  className={`px-2 py-1 rounded flex items-center space-x-1 text-xs font-mono transition ${
+                    selectedUnit.formation === 'line'
+                      ? 'bg-amber-600 text-white font-bold shadow'
+                      : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
+                  }`}
+                >
+                  <AlignJustify className="w-3.5 h-3.5" />
+                  <span>Line</span>
+                </button>
+                <button
+                  onClick={() => onChangeFormation(selectedUnit.id, 'grid')}
+                  title="Skirmish Grid Formation"
+                  className={`px-2 py-1 rounded flex items-center space-x-1 text-xs font-mono transition ${
+                    selectedUnit.formation === 'grid'
+                      ? 'bg-amber-600 text-white font-bold shadow'
+                      : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
+                  }`}
+                >
+                  <LayoutGrid className="w-3.5 h-3.5" />
+                  <span>Grid</span>
+                </button>
+                <button
+                  onClick={() => onChangeFormation(selectedUnit.id, 'stack')}
+                  title="Stacked Formation"
+                  className={`px-2 py-1 rounded flex items-center space-x-1 text-xs font-mono transition ${
+                    selectedUnit.formation === 'stack'
+                      ? 'bg-amber-600 text-white font-bold shadow'
+                      : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
+                  }`}
+                >
+                  <Layers className="w-3.5 h-3.5" />
+                  <span>Stack</span>
+                </button>
+              </div>
+            </>
+          )}
+
+          {deploymentMode === 'manual' && (
+            <span className="text-[11px] text-purple-300 font-mono px-1">
+              🖐️ Drag any model individually
+            </span>
+          )}
         </div>
       )}
 

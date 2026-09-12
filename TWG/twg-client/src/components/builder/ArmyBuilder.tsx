@@ -8,6 +8,7 @@ import { StorageService } from '../../services/storageService';
 import { ArmyRoster, FactionInfo } from '../../types/army';
 import { Unit, UnitRole } from '../../types/game';
 import { UnitCreatorModal } from './UnitCreatorModal';
+import { FactionLogo } from '../common/FactionLogo';
 
 interface ArmyBuilderProps {
   onDeployRosterToBattle: (roster: ArmyRoster) => void;
@@ -278,7 +279,7 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
               <span className="text-xs font-mono text-zinc-400">Army ID: {currentArmyId.slice(-8)}</span>
             </div>
             <h1 className="text-2xl font-black text-white flex items-center space-x-2 mt-0.5">
-              <span>{selectedFaction.symbol}</span>
+              <FactionLogo faction={selectedFaction} size="md" />
               <span>{selectedFaction.name}</span>
             </h1>
             <p className="text-xs text-zinc-400 italic font-serif mt-0.5">"{selectedFaction.quote}"</p>
@@ -440,7 +441,7 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
                   : 'bg-zinc-900/60 text-zinc-400 border-zinc-800 hover:text-white'
               }`}
             >
-              <span>{f.symbol}</span>
+              <FactionLogo faction={f} size="xs" />
               <span>{f.shortName}</span>
             </button>
           ))}
@@ -723,11 +724,12 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
                   <button
                     key={f.id}
                     onClick={() => setLibraryFactionFilter(f.id)}
-                    className={`px-2 py-0.5 rounded transition cursor-pointer ${
+                    className={`px-2 py-0.5 rounded transition cursor-pointer inline-flex items-center space-x-1.5 ${
                       libraryFactionFilter === f.id ? 'bg-amber-400 text-black font-bold' : 'bg-zinc-900 text-zinc-400 hover:text-white'
                     }`}
                   >
-                    {f.symbol} {f.shortName}
+                    <FactionLogo faction={f} size="xs" />
+                    <span>{f.shortName}</span>
                   </button>
                 ))}
               </div>
@@ -754,7 +756,7 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center space-x-3">
-                          <span className="text-2xl">{faction?.symbol || '⚔️'}</span>
+                          <FactionLogo faction={faction} size="md" />
                           <div>
                             <div className="flex items-center space-x-2">
                               <h4 className="font-bold text-white text-sm">{army.name}</h4>

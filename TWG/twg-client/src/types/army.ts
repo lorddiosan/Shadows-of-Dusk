@@ -1,4 +1,4 @@
-import { Unit } from './game';
+import { Unit, UnitAbility } from './game';
 
 export interface FactionInfo {
   id: string;
@@ -13,9 +13,11 @@ export interface FactionInfo {
     border: string;
   };
   symbol: string;
+  logoUrl?: string;
   loreSummary: string;
   leaderName: string;
   strengths: string[];
+  factionAbility?: UnitAbility; // FEATURE-003 / CODE-027: Army-wide Faction Ability
 }
 
 export interface ArmyRoster {

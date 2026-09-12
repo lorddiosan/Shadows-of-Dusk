@@ -13,17 +13,29 @@ export interface POIScoreBreakdown {
 }
 
 /**
- * Checks if unit is within 3-square Chebyshev/Euclidean radius of POI.
- * Rulebook: "any unit within a 3-square radius of the POI counts as contesting it"
+ * Checks if unit is within the capture radius of a POI.
+ * In tabletop wargaming, a squad contests an objective if any alive model in the squad
+ * is within the capture zone (default 1.5 grid squares / 75px radius, or poi.radius).
  */
 export function isUnitContestingPOI(unit: Unit, poi: POI, gridSize: number = 50): boolean {
   if (!unit.position || unit.stats.lives <= 0) return false;
-  // If coordinates are in pixels (> 30) vs normalized grid cells
-  const isPixelCoord = unit.position.x > 30 || unit.position.y > 30 || poi.x > 30 || poi.y > 30;
+  // If poi.radius > 10, it is already in pixels (e.g. 60px, 70px, 75px). If <= 10, it's in grid cells (e.g. 1.5 sq).
+  const effectiveRadius = (typeof poi.radius === 'number' && poi.radius > 10)
+    ? poi.radius
+    : (poi.radius || 1.5) * gridSize;
+
+  // Check individual model tokens if available
+  if (unit.tokens && unit.tokens.length > 0) {
+    return unit.tokens.some(t => {
+      if (t.currentLives <= 0) return false;
+      const d = Math.hypot(t.x - poi.x, t.y - poi.y);
+      const tokenR = t.radius || (t.size ? t.size / 2 : 20);
+      return (d - tokenR) <= effectiveRadius;
+    });
+  }
+
   const dist = Math.hypot(unit.position.x - poi.x, unit.position.y - poi.y);
-  const r = typeof poi.radius === 'number' ? poi.radius : 1.5;
-  const effectiveRadius = isPixelCoord ? r * gridSize : r;
-  return dist <= effectiveRadius;
+  return dist <= effectiveRadius + 20;
 }
 
 /**
@@ -63,11 +75,15 @@ export function calculatePOIScores(units: Unit[], pois: POI[]): {
     let p2Gained = 0;
     const diff = Math.abs(p1CP - p2CP);
 
+    // Multiplier: 1x for Basic POIs, 2x for Special / Core POIs.
+    // Clamps bloated multipliers (e.g. 10x) so round scores remain balanced and authentic.
+    const mult = poi.multiplier > 2 ? (poi.type === 'Special' ? 2 : 1) : Math.max(1, poi.multiplier || 1);
+
     if (p1CP > p2CP) {
-      p1Gained = diff * poi.multiplier;
+      p1Gained = diff * mult;
       p1TotalPoiScore += p1Gained;
     } else if (p2CP > p1CP) {
-      p2Gained = diff * poi.multiplier;
+      p2Gained = diff * mult;
       p2TotalPoiScore += p2Gained;
     }
 
@@ -87,13 +103,16 @@ export function calculatePOIScores(units: Unit[], pois: POI[]): {
 }
 
 /**
- * Section 8: Win Conditions
- * 1. Elimination: All of a player's units are destroyed.
- * 2. Dominant Knockout: Starting round 15 onward, if one player's score is >= 1.5x the other's,
- *    that player may force the match to end immediately without agreement.
- * 3. Vote to End: Starting round 15, and every odd round after (15, 17, 19, 21, 23),
- *    both players may vote to end immediately (higher score wins).
- * 4. Hard Cap: Round 25 is the hard cap (always ends).
+ * Section 8 & DESIGN-010: Win Conditions & Match Resolution
+ * 1. Elimination: All of a player's units are destroyed (immediate victory).
+ * 2. Dominant Knockout: Starting round 6 onward, if one player leads by >= 2.0x
+ *    the opponent's score with at least a 15 VP margin, match ends immediately.
+ * 3. Mutual Vote to End: Starting round 6, on odd rounds (7, 9), players may vote to conclude early.
+ * 4. Hard Cap (Round 10 Resolution — DESIGN-010):
+ *    - Primary: Highest total Victory Points (VP).
+ *    - Tiebreaker 1: Highest count of Points of Interest (POIs) contested/held.
+ *    - Tiebreaker 2: Highest total remaining squad lives across surviving units.
+ *    - Tiebreaker 3: Tactical Draw / Stalemate.
  */
 export function checkWinConditions(
   round: number,
@@ -101,15 +120,16 @@ export function checkWinConditions(
   player2Score: number,
   player1Units: Unit[],
   player2Units: Unit[],
-  player1Vote: boolean,
-  player2Vote: boolean
+  pois: POI[] = [],
+  player1Vote: boolean = false,
+  player2Vote: boolean = false
 ): { isOver: boolean; winner: 'player1' | 'player2' | 'draw' | null; reason: string } {
-  const p1Alive = player1Units.some(u => u.stats.lives > 0);
-  const p2Alive = player2Units.some(u => u.stats.lives > 0);
+  const p1Alive = player1Units.some(u => (u.stats?.lives || 0) > 0);
+  const p2Alive = player2Units.some(u => (u.stats?.lives || 0) > 0);
 
   // 1. Elimination
   if (!p1Alive && !p2Alive) {
-    return { isOver: true, winner: 'draw', reason: 'Mutual Elimination: All forces destroyed!' };
+    return { isOver: true, winner: 'draw', reason: 'Mutual Elimination: All forces destroyed in battle!' };
   }
   if (!p1Alive) {
     return { isOver: true, winner: 'player2', reason: 'Elimination: Player 1 forces completely wiped out!' };
@@ -118,26 +138,100 @@ export function checkWinConditions(
     return { isOver: true, winner: 'player1', reason: 'Elimination: Player 2 forces completely wiped out!' };
   }
 
-  // 2. Dominant Knockout (Round >= 15)
-  if (round >= 15) {
-    if (player1Score >= 1.5 * Math.max(1, player2Score)) {
-      return { isOver: true, winner: 'player1', reason: `Dominant Knockout! Round ${round}: Player 1 score (${player1Score}) is >= 1.5x opponent (${player2Score}).` };
+  // 2. Dominant Knockout (Round >= 6)
+  if (round >= 6) {
+    if (player1Score >= 2.0 * Math.max(1, player2Score) && (player1Score - player2Score) >= 15) {
+      return { 
+        isOver: true, 
+        winner: 'player1', 
+        reason: `Dominant Knockout! Round ${round}: Player 1 (${player1Score} VP) leads by 2x with 15+ VP lead over Player 2 (${player2Score} VP).` 
+      };
     }
-    if (player2Score >= 1.5 * Math.max(1, player1Score)) {
-      return { isOver: true, winner: 'player2', reason: `Dominant Knockout! Round ${round}: Player 2 score (${player2Score}) is >= 1.5x opponent (${player1Score}).` };
+    if (player2Score >= 2.0 * Math.max(1, player1Score) && (player2Score - player1Score) >= 15) {
+      return { 
+        isOver: true, 
+        winner: 'player2', 
+        reason: `Dominant Knockout! Round ${round}: Player 2 (${player2Score} VP) leads by 2x with 15+ VP lead over Player 1 (${player1Score} VP).` 
+      };
     }
   }
 
-  // 3. Mutual Vote to End (odd rounds >= 15)
-  if (round >= 15 && round % 2 === 1 && player1Vote && player2Vote) {
+  // 3. Mutual Vote to End (odd rounds >= 6)
+  if (round >= 6 && round % 2 === 1 && player1Vote && player2Vote) {
     const winner = player1Score > player2Score ? 'player1' : player2Score > player1Score ? 'player2' : 'draw';
-    return { isOver: true, winner, reason: `Mutual Agreement: Both players voted to conclude at Round ${round}. Final Score: ${player1Score} - ${player2Score}` };
+    return { 
+      isOver: true, 
+      winner, 
+      reason: `Mutual Agreement: Both players voted to conclude at Round ${round}. Final Score: ${player1Score} - ${player2Score}` 
+    };
   }
 
-  // 4. Hard cap round 25
-  if (round >= 25) {
-    const winner = player1Score > player2Score ? 'player1' : player2Score > player1Score ? 'player2' : 'draw';
-    return { isOver: true, winner, reason: `Match concluded at Round 25 Hard Cap. Final Score: ${player1Score} - ${player2Score}` };
+  // 4. Hard Cap at Round 10 (BUG-025 & DESIGN-010 Resolution Rule)
+  if (round >= 10) {
+    // Primary: Victory Points
+    if (player1Score > player2Score) {
+      return { 
+        isOver: true, 
+        winner: 'player1', 
+        reason: `Round 10 Cap Reached: Player 1 secures victory on Victory Points (${player1Score} to ${player2Score} VP).` 
+      };
+    }
+    if (player2Score > player1Score) {
+      return { 
+        isOver: true, 
+        winner: 'player2', 
+        reason: `Round 10 Cap Reached: Player 2 secures victory on Victory Points (${player2Score} to ${player1Score} VP).` 
+      };
+    }
+
+    // Tiebreaker 1: Objectives Held (POIs)
+    if (pois && pois.length > 0) {
+      const allUnits = [...player1Units, ...player2Units];
+      const poiScoreData = calculatePOIScores(allUnits, pois);
+      const p1PoisHeld = poiScoreData.breakdown.filter(b => b.player1CP > b.player2CP).length;
+      const p2PoisHeld = poiScoreData.breakdown.filter(b => b.player2CP > b.player1CP).length;
+
+      if (p1PoisHeld > p2PoisHeld) {
+        return {
+          isOver: true,
+          winner: 'player1',
+          reason: `Round 10 Cap Reached: Score tied at ${player1Score} VP! Player 1 breaks the tie by controlling ${p1PoisHeld} Objectives (vs ${p2PoisHeld}).`
+        };
+      }
+      if (p2PoisHeld > p1PoisHeld) {
+        return {
+          isOver: true,
+          winner: 'player2',
+          reason: `Round 10 Cap Reached: Score tied at ${player2Score} VP! Player 2 breaks the tie by controlling ${p2PoisHeld} Objectives (vs ${p1PoisHeld}).`
+        };
+      }
+    }
+
+    // Tiebreaker 2: Remaining Squad Lives
+    const p1Lives = player1Units.reduce((sum, u) => sum + Math.max(0, u.stats?.lives || 0), 0);
+    const p2Lives = player2Units.reduce((sum, u) => sum + Math.max(0, u.stats?.lives || 0), 0);
+
+    if (p1Lives > p2Lives) {
+      return {
+        isOver: true,
+        winner: 'player1',
+        reason: `Round 10 Cap Reached: Score and Objectives tied! Player 1 breaks the tie with ${p1Lives} surviving model lives (vs ${p2Lives}).`
+      };
+    }
+    if (p2Lives > p1Lives) {
+      return {
+        isOver: true,
+        winner: 'player2',
+        reason: `Round 10 Cap Reached: Score and Objectives tied! Player 2 breaks the tie with ${p2Lives} surviving model lives (vs ${p1Lives}).`
+      };
+    }
+
+    // Tiebreaker 3: Tactical Draw
+    return { 
+      isOver: true, 
+      winner: 'draw', 
+      reason: `Round 10 Cap Reached: Tactical Stalemate! Scores (${player1Score} VP), Objectives, and Remaining Force Power are perfectly equal.` 
+    };
   }
 
   return { isOver: false, winner: null, reason: '' };

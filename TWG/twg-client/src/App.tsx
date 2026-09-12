@@ -104,6 +104,7 @@ export function App() {
             key={`battle_${dataVersion}`}
             customRoster={activeBattleRoster}
             boardSkin={user.equippedBoardSkin}
+            onReturnHome={() => setCurrentTab('home')}
           />
         )}
 

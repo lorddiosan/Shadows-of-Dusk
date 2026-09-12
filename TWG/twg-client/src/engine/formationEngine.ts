@@ -104,14 +104,15 @@ export function calculateFormationOffsets(
   if (count <= 0) return [];
   if (count === 1) return [{ offsetX: 0, offsetY: 0 }];
 
-  const spacingX = baseWidth ?? baseRadius * 2;
-  const spacingY = baseHeight ?? baseRadius * 2;
-  const spacingMax = Math.max(spacingX, spacingY);
+  const baseSpacingX = baseWidth ?? baseRadius * 2;
+  const baseSpacingY = baseHeight ?? baseRadius * 2;
+  const spacingMax = Math.max(baseSpacingX, baseSpacingY);
   const offsets: { offsetX: number; offsetY: number }[] = [];
 
   switch (formation) {
     case 'line': {
-      // Linear rank: horizontally centered with tangent base spacing
+      // Linear rank: horizontally centered with tangent base spacing + 2px clearance
+      const spacingX = baseSpacingX + 2;
       for (let i = 0; i < count; i++) {
         const offsetX = (i - (count - 1) / 2) * spacingX;
         offsets.push({ offsetX: Math.round(offsetX), offsetY: 0 });
@@ -120,7 +121,9 @@ export function calculateFormationOffsets(
     }
 
     case 'grid': {
-      // Skirmish staggered grid with tangent base spacing in both axes
+      // Skirmish staggered grid with tangent base spacing + 4px clearance buffer (BUG-027 fix)
+      const spacingX = baseSpacingX + 4;
+      const spacingY = baseSpacingY + 4;
       const cols = Math.min(count, Math.max(2, Math.ceil(Math.sqrt(count))));
       const rows = Math.ceil(count / cols);
       for (let i = 0; i < count; i++) {
@@ -144,6 +147,8 @@ export function calculateFormationOffsets(
     case 'auto': {
       // Auto picks compact grid for larger squads (>=4) or circle for smaller squads
       if (count >= 4) {
+        const spacingX = baseSpacingX + 4;
+        const spacingY = baseSpacingY + 4;
         const cols = Math.min(count, Math.max(2, Math.ceil(Math.sqrt(count))));
         for (let i = 0; i < count; i++) {
           const col = i % cols;
@@ -230,6 +235,39 @@ export function fitFormationToZone(
   if (canBypassZone) {
     const placed = moveUnit({ ...unit, formation: requestedFormation }, anchor);
     return { success: true, unit: placed, chosenFormation: requestedFormation };
+  }
+
+  // If unit has custom model placements (e.g. manual deployment), preserve relative offsets
+  if (unit.hasCustomTokenPositions && unit.tokens && unit.tokens.length > 0) {
+    const { width, height, radius } = getUnitBaseDimensions(unit);
+    const w = width || radius * 2;
+    const h = height || radius * 2;
+    const customOffsets = unit.tokens.map(t => ({
+      offsetX: typeof t.offsetX === 'number' ? t.offsetX : (t.x - (unit.position?.x ?? anchor.x)),
+      offsetY: typeof t.offsetY === 'number' ? t.offsetY : (t.y - (unit.position?.y ?? anchor.y))
+    }));
+
+    let allFit = true;
+    for (const off of customOffsets) {
+      const tx = anchor.x + off.offsetX;
+      const ty = anchor.y + off.offsetY;
+      const halfW = w / 2;
+      const halfH = h / 2;
+      if (
+        tx - halfW < zoneBounds.minX ||
+        tx + halfW > zoneBounds.maxX ||
+        ty - halfH < zoneBounds.minY ||
+        ty + halfH > zoneBounds.maxY
+      ) {
+        allFit = false;
+        break;
+      }
+    }
+
+    if (allFit) {
+      const placed = moveUnit(unit, anchor);
+      return { success: true, unit: placed, chosenFormation: unit.formation || 'circle' };
+    }
   }
 
   const modelCount = unit.tokens?.length || unit.stats.modelCount || 1;
@@ -573,7 +611,8 @@ export function syncUnitTokens(unit: Unit, allUnits?: Unit[]): Unit {
   const offsets = calculateFormationOffsets(activeTokens.length, formation, radius, width, height);
 
   const nextTokens: Token[] = activeTokens.map((tok, i) => {
-    const off = offsets[i] || { offsetX: 0, offsetY: 0 };
+    const hasCustomOffset = unit.hasCustomTokenPositions && typeof tok.offsetX === 'number' && typeof tok.offsetY === 'number';
+    const off = hasCustomOffset ? { offsetX: tok.offsetX, offsetY: tok.offsetY } : (offsets[i] || { offsetX: 0, offsetY: 0 });
     return {
       ...tok,
       offsetX: off.offsetX,
@@ -688,7 +727,8 @@ export function moveUnit(unit: Unit, newPosition: WorldPoint, allUnits?: Unit[])
 export function setUnitFormation(unit: Unit, newFormation: FormationType): Unit {
   const updatedUnit: Unit = {
     ...unit,
-    formation: newFormation
+    formation: newFormation,
+    hasCustomTokenPositions: false
   };
   return syncUnitTokens(updatedUnit);
 }
@@ -718,6 +758,8 @@ export function isInsideDeploymentZone(
 export function canUnitDeployOutsideZone(unit: Unit): boolean {
   return !!(
     unit.canDeployOutsideZone ||
+    unit.traits?.includes('Infiltrator') ||
+    unit.traits?.includes('DEPLOY_OUTSIDE_ZONE') ||
     unit.passives?.some(p => 
       p.toUpperCase().includes('DEPLOY_OUTSIDE_ZONE') ||
       p.toUpperCase().includes('INFILTRATOR')
@@ -752,6 +794,135 @@ export function snapToGrid(
     x: Math.floor(point.x / gridSize) * gridSize + half,
     y: Math.floor(point.y / gridSize) * gridSize + half
   };
+}
+
+/**
+ * Accurately measures the distance between two units based on their individual model tokens and base sizes.
+ * Returns:
+ * - minModelDistPx: Minimum center-to-center distance between any model in unitA and any model in unitB.
+ * - minEdgeDistPx: Minimum edge-to-edge distance between bases of any model in unitA and any model in unitB (0 if touching/tangent).
+ * - centerDistPx: Centroid-to-centroid distance.
+ */
+export function getUnitsModelDistance(unitA: Unit, unitB: Unit): { minModelDistPx: number; minEdgeDistPx: number; centerDistPx: number } {
+  const centerA = unitA.position || { x: 0, y: 0 };
+  const centerB = unitB.position || { x: 0, y: 0 };
+  const centerDistPx = Math.hypot(centerA.x - centerB.x, centerA.y - centerB.y);
+
+  const tokensA = (unitA.tokens && unitA.tokens.length > 0)
+    ? unitA.tokens.filter(t => t.currentLives > 0)
+    : [{ x: centerA.x, y: centerA.y, radius: getUnitBaseRadius(unitA), size: getUnitBaseDiameter(unitA) }];
+  const tokensB = (unitB.tokens && unitB.tokens.length > 0)
+    ? unitB.tokens.filter(t => t.currentLives > 0)
+    : [{ x: centerB.x, y: centerB.y, radius: getUnitBaseRadius(unitB), size: getUnitBaseDiameter(unitB) }];
+
+  let minModelDistPx = Infinity;
+  let minEdgeDistPx = Infinity;
+
+  for (const tA of tokensA) {
+    const rA = tA.radius || (tA.size ? tA.size / 2 : 20);
+    for (const tB of tokensB) {
+      const rB = tB.radius || (tB.size ? tB.size / 2 : 20);
+      const d = Math.hypot(tA.x - tB.x, tA.y - tB.y);
+      if (d < minModelDistPx) {
+        minModelDistPx = d;
+      }
+      const edgeD = Math.max(0, d - (rA + rB));
+      if (edgeD < minEdgeDistPx) {
+        minEdgeDistPx = edgeD;
+      }
+    }
+  }
+
+  if (minModelDistPx === Infinity) minModelDistPx = centerDistPx;
+  if (minEdgeDistPx === Infinity) minEdgeDistPx = Math.max(0, centerDistPx - (getUnitCollisionRadius(unitA) + getUnitCollisionRadius(unitB)));
+
+  return { minModelDistPx, minEdgeDistPx, centerDistPx };
+}
+
+/**
+ * Checks if targetUnit is in shooting range of attackerUnit.
+ * In tabletop wargaming, if any model in the attacking squad can reach any model in the target squad
+ * within range squares (including slight base size tolerance), the shot is valid.
+ */
+export function isUnitInShootingRange(attacker: Unit, target: Unit, gridSize: number = DEFAULT_GRID_SIZE): boolean {
+  if (attacker.stats.range <= 0) return false;
+  const { minModelDistPx, minEdgeDistPx } = getUnitsModelDistance(attacker, target);
+  const rangePx = attacker.stats.range * gridSize;
+  return minEdgeDistPx <= rangePx || minModelDistPx <= rangePx + 15;
+}
+
+/**
+ * Checks if targetUnit is in melee range with attackerUnit.
+ * In tabletop wargaming, units are in melee if they are in base-to-base contact (tangent)
+ * OR within 1 grid square (50px / 1 inch) engagement range, OR if they successfully charged that turn.
+ */
+export function isUnitInMeleeRange(attacker: Unit, target: Unit, gridSize: number = DEFAULT_GRID_SIZE): boolean {
+  const { minEdgeDistPx, minModelDistPx } = getUnitsModelDistance(attacker, target);
+  if (attacker.hasCharged) {
+    if (minEdgeDistPx <= 35 || minModelDistPx <= 110) return true;
+  }
+  return minEdgeDistPx <= gridSize || minModelDistPx <= 95;
+}
+
+/**
+ * Finds a safe, non-overlapping destination for bot unit movement.
+ * Enforces maximum step limit, stays on board, and tests candidates to guarantee no token intersections.
+ */
+export function findValidMovePositionForBot(
+  unit: Unit,
+  desiredPos: WorldPoint,
+  allUnits: Unit[],
+  maxStepPx: number = 120,
+  worldWidth: number = 1200,
+  worldHeight: number = 800
+): WorldPoint {
+  if (!unit.position) return desiredPos;
+  const origin = unit.position;
+  const fullDx = desiredPos.x - origin.x;
+  const fullDy = desiredPos.y - origin.y;
+  const fullDist = Math.hypot(fullDx, fullDy);
+
+  if (fullDist < 1) return origin;
+
+  const stepDist = Math.min(fullDist, maxStepPx);
+  const angle = Math.atan2(fullDy, fullDx);
+  const radius = getUnitCollisionRadius(unit);
+
+  const candidateFractions = [1.0, 0.85, 0.7, 0.55, 0.4, 0.25];
+  const anglePerturbations = [0, 0.25, -0.25, 0.5, -0.5, 0.75, -0.75, 1.0, -1.0, 1.3, -1.3];
+
+  for (const frac of candidateFractions) {
+    const dist = stepDist * frac;
+    for (const dTheta of anglePerturbations) {
+      const candAngle = angle + dTheta;
+      const testX = Math.max(radius + 10, Math.min(worldWidth - radius - 10, Math.round(origin.x + Math.cos(candAngle) * dist)));
+      const testY = Math.max(radius + 10, Math.min(worldHeight - radius - 10, Math.round(origin.y + Math.sin(candAngle) * dist)));
+
+      const testUnit = moveUnit(unit, { x: testX, y: testY }, allUnits);
+      const colCheck = checkUniversalTokenCollisions(testUnit.tokens || [], allUnits, unit.id);
+      if (!colCheck.hasCollision) {
+        return { x: testX, y: testY };
+      }
+    }
+  }
+
+  const directTarget = {
+    x: Math.max(radius + 10, Math.min(worldWidth - radius - 10, Math.round(origin.x + Math.cos(angle) * stepDist))),
+    y: Math.max(radius + 10, Math.min(worldHeight - radius - 10, Math.round(origin.y + Math.sin(angle) * stepDist)))
+  };
+  const tangentSpot = findNearestNonOverlappingPosition(unit, directTarget, allUnits, worldWidth, worldHeight);
+  if (tangentSpot) {
+    const distToTangent = Math.hypot(tangentSpot.x - origin.x, tangentSpot.y - origin.y);
+    if (distToTangent <= maxStepPx * 1.15) {
+      const testUnit = moveUnit(unit, tangentSpot, allUnits);
+      const colCheck = checkUniversalTokenCollisions(testUnit.tokens || [], allUnits, unit.id);
+      if (!colCheck.hasCollision) {
+        return tangentSpot;
+      }
+    }
+  }
+
+  return origin;
 }
 
 /**
@@ -931,19 +1102,22 @@ export function checkShapeOverlap(
 ): boolean {
   const dx = Math.abs(posA.x - posB.x);
   const dy = Math.abs(posA.y - posB.y);
+  // BUG-014 & BUG-027: EPSILON tolerance permits touching/tangent bases without false-positive intersection
+  const EPSILON = 0.75;
 
   // 1. Circle vs Circle
   if (shapeA === 'circle' && shapeB === 'circle') {
     const rA = wA / 2;
     const rB = wB / 2;
-    return dx * dx + dy * dy < (rA + rB) * (rA + rB);
+    const minCenterDist = rA + rB - EPSILON;
+    return dx * dx + dy * dy < minCenterDist * minCenterDist;
   }
 
   // 2. Rect/Square vs Rect/Square
   const isRectA = shapeA === 'square' || shapeA === 'rectangle';
   const isRectB = shapeB === 'square' || shapeB === 'rectangle';
   if (isRectA && isRectB) {
-    return dx < (wA + wB) / 2 && dy < (hA + hB) / 2;
+    return dx < ((wA + wB) / 2 - EPSILON) && dy < ((hA + hB) / 2 - EPSILON);
   }
 
   // 3. Circle vs Rect/Square
@@ -955,7 +1129,8 @@ export function checkShapeOverlap(
     const clampedX = Math.max(rPos.x - rW / 2, Math.min(cPos.x, rPos.x + rW / 2));
     const clampedY = Math.max(rPos.y - rH / 2, Math.min(cPos.y, rPos.y + rH / 2));
     const distSq = (cPos.x - clampedX) * (cPos.x - clampedX) + (cPos.y - clampedY) * (cPos.y - clampedY);
-    return distSq < cRadius * cRadius;
+    const minR = cRadius - EPSILON;
+    return distSq < minR * minR;
   }
 
   // 4. Oval vs any other shape (Elliptical boundary approximation)
@@ -966,7 +1141,7 @@ export function checkShapeOverlap(
 
   const a = (effectiveWA + effectiveWB) / 2;
   const b = (effectiveHA + effectiveHB) / 2;
-  return (dx * dx) / (a * a) + (dy * dy) / (b * b) < 1.0;
+  return (dx * dx) / (a * a) + (dy * dy) / (b * b) < (1.0 - 0.01);
 }
 
 export interface UniversalCollisionResult {
@@ -1059,7 +1234,7 @@ export function checkUniversalTokenCollisions(
 export function canAttachLeader(leader: Unit, bodyguard: Unit): boolean {
   if (leader.owner !== bodyguard.owner) return false;
   if (leader.id === bodyguard.id) return false;
-  const isLeader = leader.role === 'Leader' || leader.role === 'Legendary Leader' || leader.type === 'Character';
+  const isLeader = leader.traits?.includes('Leader') || leader.role === 'Leader' || leader.role === 'Legendary Leader' || leader.type === 'Character';
   const isInfantry = bodyguard.type === 'Infantry';
   if (!isLeader || !isInfantry) return false;
   if (leader.attachedTo || leader.embarkedIn || leader.inStrategicReserve) return false;
@@ -1076,13 +1251,179 @@ export function canEmbark(infantry: Unit, vehicle: Unit, currentLoadModels: numb
   if (infantry.owner !== vehicle.owner) return false;
   if (infantry.id === vehicle.id) return false;
   if (infantry.type !== 'Infantry') return false;
-  if (vehicle.type !== 'Vehicle' && vehicle.role !== 'Vehicle / Monster') return false;
+  const isTransport = vehicle.traits?.includes('Transport') || vehicle.type === 'Vehicle' || vehicle.role === 'Vehicle / Monster';
+  if (!isTransport) return false;
   if (infantry.embarkedIn || infantry.inStrategicReserve || infantry.attachedTo) return false;
 
   const maxCapacity = vehicle.carryCapacity ?? vehicle.stats?.carryCapacity ?? (vehicle.transportCapacity ? vehicle.transportCapacity * 5 : 6);
   const incomingModels = (infantry.stats?.modelCount || 1) + (infantry.attachedUnits?.length || 0);
 
   return (currentLoadModels + incomingModels) <= maxCapacity;
+}
+
+/**
+ * Checks if an infantry squad can embark inside a transport vehicle, enforcing both capacity
+ * and a 3" (150px) proximity requirement if the infantry unit is on the battlefield.
+ */
+export function canEmbarkWithDistance(
+  infantry: Unit,
+  vehicle: Unit,
+  currentLoadModels: number = 0,
+  maxDistancePx: number = 150
+): { canEmbark: boolean; reason?: string; distancePx?: number } {
+  if (!canEmbark(infantry, vehicle, currentLoadModels)) {
+    return { canEmbark: false, reason: 'Capacity exceeded or invalid unit types.' };
+  }
+
+  // If infantry is deployed on the board, check proximity to vehicle
+  if (infantry.position && vehicle.position) {
+    const dist = getUnitsModelDistance(infantry, vehicle);
+    if (dist.minEdgeDistPx > maxDistancePx) {
+      const inches = Math.round((dist.minEdgeDistPx / DEFAULT_GRID_SIZE) * 10) / 10;
+      return {
+        canEmbark: false,
+        reason: `Unit is ${inches}″ (${Math.round(dist.minEdgeDistPx)}px) away. Must be within 3″ (150px) of transport.`,
+        distancePx: dist.minEdgeDistPx
+      };
+    }
+    return { canEmbark: true, distancePx: dist.minEdgeDistPx };
+  }
+
+  return { canEmbark: true };
+}
+
+/**
+ * Calculates a valid disembark position in an annular ring around a transport vehicle:
+ * - Outside the vehicle's footprint (minDist = vehicleRadius + infantryRadius + 8px buffer)
+ * - Within 3" of the vehicle (maxDist = vehicleRadius + 150px)
+ * - Free of base collision with the vehicle, other units, and within board bounds.
+ */
+export function findValidDisembarkPosition(
+  infantry: Unit,
+  vehicle: Unit,
+  allUnits: Unit[],
+  worldWidth: number = 1200,
+  worldHeight: number = 800
+): WorldPoint | null {
+  const vPos = vehicle.position || { x: 300, y: 300 };
+  const vDims = getUnitBaseDimensions(vehicle);
+  const vRadius = vDims.radius;
+  const iDims = getUnitBaseDimensions(infantry);
+  const iRadius = iDims.radius;
+
+  // Min separation: clearance outside vehicle base
+  const minDist = vRadius + iRadius + 8;
+  // Max separation: 3 inches = 150px from vehicle base
+  const maxDist = vRadius + 150;
+
+  // Search angles around vehicle: 12 radial directions
+  const angles = [0, Math.PI / 4, Math.PI / 2, (3 * Math.PI) / 4, Math.PI, -(3 * Math.PI) / 4, -Math.PI / 2, -Math.PI / 4,
+                  Math.PI / 6, (5 * Math.PI) / 6, -(5 * Math.PI) / 6, -Math.PI / 6];
+  // Search distances within the annular ring: close, mid, outer
+  const distSteps = [minDist, minDist + 25, minDist + 55, minDist + 85, maxDist - 15];
+
+  for (const dist of distSteps) {
+    if (dist > maxDist) continue;
+    for (const angle of angles) {
+      const testX = Math.round(vPos.x + Math.cos(angle) * dist);
+      const testY = Math.round(vPos.y + Math.sin(angle) * dist);
+
+      // 1. Boundary check
+      if (testX < iRadius || testX > worldWidth - iRadius || testY < iRadius || testY > worldHeight - iRadius) {
+        continue;
+      }
+
+      // 2. Generate candidate tokens for infantry at (testX, testY)
+      const offsets = calculateFormationOffsets(
+        infantry.tokens?.length || infantry.stats.modelCount || 1,
+        infantry.formation || 'circle',
+        iRadius,
+        iDims.width,
+        iDims.height
+      );
+
+      const candidateTokens: Token[] = offsets.map((off, idx) => ({
+        id: infantry.tokens?.[idx]?.id || `disembark_tok_${idx}`,
+        unitId: infantry.id,
+        x: testX + off.offsetX,
+        y: testY + off.offsetY,
+        offsetX: off.offsetX,
+        offsetY: off.offsetY,
+        rotation: 0,
+        size: Math.max(iDims.width, iDims.height),
+        radius: iRadius,
+        baseShape: iDims.shape,
+        baseWidth: iDims.width,
+        baseHeight: iDims.height,
+        currentLives: 1,
+        maxLives: 1
+      }));
+
+      // 3. Collision check against all placed units (including vehicle)
+      const colCheck = checkUniversalTokenCollisions(
+        candidateTokens,
+        allUnits,
+        infantry.id
+      );
+
+      if (!colCheck.hasCollision) {
+        return { x: testX, y: testY };
+      }
+    }
+  }
+
+  return null;
+}
+
+export const ENGAGEMENT_PROXIMITY_PX = 50; // 1 inch = 50px
+
+/**
+ * Validates normal movement enemy proximity (Engagement Range rule).
+ * Normal moves cannot end within 1" (50px) of ANY enemy model. Only Charge moves can enter this range.
+ */
+export function validateNormalMovementEnemyProximity(
+  unit: Unit,
+  candidateTokens: Token[],
+  allUnits: Unit[],
+  minProximityPx: number = ENGAGEMENT_PROXIMITY_PX
+): { valid: boolean; offendingEnemyUnit?: Unit; minDistancePx: number } {
+  const enemyOwner = unit.owner === 'player1' ? 'player2' : 'player1';
+  const enemyUnits = allUnits.filter(u => u.owner === enemyOwner && u.position && u.stats.lives > 0);
+
+  let closestDist = Infinity;
+  let closestEnemy: Unit | undefined;
+
+  for (const enemy of enemyUnits) {
+    const enemyLivingTokens = (enemy.tokens || []).filter(t => t.currentLives > 0);
+    const eDims = getUnitBaseDimensions(enemy);
+    const tokensToCheck = enemyLivingTokens.length > 0
+      ? enemyLivingTokens
+      : [{ x: enemy.position!.x, y: enemy.position!.y, radius: eDims.radius, size: Math.max(eDims.width, eDims.height) }];
+
+    for (const candTok of candidateTokens) {
+      const candRadius = candTok.radius || (candTok.size ? candTok.size / 2 : 20);
+      for (const eTok of tokensToCheck) {
+        const eRadius = eTok.radius || (eTok.size ? eTok.size / 2 : 20);
+        const centerDist = Math.hypot(candTok.x - eTok.x, candTok.y - eTok.y);
+        const edgeDist = Math.max(0, centerDist - (candRadius + eRadius));
+
+        if (edgeDist < closestDist) {
+          closestDist = edgeDist;
+          closestEnemy = enemy;
+        }
+
+        if (edgeDist < minProximityPx) {
+          return {
+            valid: false,
+            offendingEnemyUnit: enemy,
+            minDistancePx: edgeDist
+          };
+        }
+      }
+    }
+  }
+
+  return { valid: true, minDistancePx: closestDist, offendingEnemyUnit: closestEnemy };
 }
 
 /**
@@ -1271,7 +1612,8 @@ export function moveIndividualToken(
   return {
     ...unit,
     position: { x: centroidX, y: centroidY },
-    tokens: finalizedTokens
+    tokens: finalizedTokens,
+    hasCustomTokenPositions: true
   };
 }
 
@@ -1430,5 +1772,222 @@ export function checkPathCrossesStructure(
 
   return { allowed: true, consumesFullMove: false };
 }
+
+/**
+ * Checks whether a unit possesses the FLY trait/keyword/ability.
+ */
+export function unitHasFlyTrait(unit: Unit): boolean {
+  const checkStr = [
+    unit.name,
+    unit.type,
+    unit.role,
+    unit.description || '',
+    ...(unit.passives || []),
+    ...((unit as any).traits || []),
+    ...((unit as any).keywords || []),
+  ].join(' ').toLowerCase();
+
+  return checkStr.includes('fly') || checkStr.includes('flying') || checkStr.includes('skimmer') || checkStr.includes('jump pack');
+}
+
+export interface PathCollisionResult {
+  hasCollision: boolean;
+  collidingUnit?: Unit;
+  reason?: string;
+}
+
+/**
+ * Validates whether moving a unit along a straight-line trajectory from `fromPos` to `toPos`
+ * causes its swept base footprint to cut through any intervening units.
+ * Units with FLY ignore intervening models during movement.
+ */
+export function checkPathCrossesUnits(
+  unit: Unit,
+  fromPos: WorldPoint,
+  toPos: WorldPoint,
+  allUnits: Unit[],
+  options?: {
+    ignoreUnitId?: string;
+    isCharge?: boolean;
+    chargeTargetUnitId?: string;
+    stepSize?: number;
+  }
+): PathCollisionResult {
+  if (unitHasFlyTrait(unit)) {
+    return { hasCollision: false };
+  }
+
+  const dx = toPos.x - fromPos.x;
+  const dy = toPos.y - fromPos.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 2) {
+    return { hasCollision: false };
+  }
+
+  const stepPx = options?.stepSize || 15;
+  const numSteps = Math.max(2, Math.ceil(dist / stepPx));
+
+  const uDims = getUnitBaseDimensions(unit);
+  const baseTokens: Token[] = (unit.tokens && unit.tokens.length > 0)
+    ? unit.tokens.filter(t => t.currentLives > 0)
+    : [{
+        id: `${unit.id}-0`,
+        unitId: unit.id,
+        x: fromPos.x,
+        y: fromPos.y,
+        offsetX: 0,
+        offsetY: 0,
+        currentLives: unit.stats.lives,
+        maxLives: unit.stats.lives,
+        size: Math.max(uDims.width, uDims.height),
+        radius: uDims.radius,
+        baseShape: uDims.shape,
+        baseWidth: uDims.width,
+        baseHeight: uDims.height,
+        rotation: 0
+      }];
+
+  // Filter obstacle units
+  const obstacleUnits = allUnits.filter(u => {
+    if (u.id === unit.id) return false;
+    if (options?.ignoreUnitId && u.id === options.ignoreUnitId) return false;
+    if (options?.isCharge && options?.chargeTargetUnitId && u.id === options.chargeTargetUnitId) {
+      return false; // charge target is the intended destination
+    }
+    if (u.embarkedIn || u.inStrategicReserve || !u.position || u.stats.lives <= 0) return false;
+    return true;
+  });
+
+  // Sample discrete steps along path (excluding step 0 which is current position)
+  for (let s = 1; s <= numSteps; s++) {
+    const fraction = s / numSteps;
+    const curCentroidX = fromPos.x + dx * fraction;
+    const curCentroidY = fromPos.y + dy * fraction;
+
+    const candidateTokens: Token[] = baseTokens.map(tok => ({
+      ...tok,
+      x: curCentroidX + (tok.offsetX || 0),
+      y: curCentroidY + (tok.offsetY || 0),
+      baseShape: tok.baseShape || uDims.shape,
+      baseWidth: tok.baseWidth || uDims.width,
+      baseHeight: tok.baseHeight || uDims.height,
+      radius: tok.radius || uDims.radius,
+      size: tok.size || Math.max(uDims.width, uDims.height)
+    }));
+
+    const col = checkUniversalTokenCollisions(candidateTokens, obstacleUnits, unit.id);
+    if (col.hasCollision) {
+      const collidingUnit = obstacleUnits.find(u => u.name === col.collidingUnitName || u.tokens?.some(t => t.id === col.collidingTokenName));
+      return {
+        hasCollision: true,
+        collidingUnit,
+        reason: col.reason || `Action blocked: Path crosses through ${col.collidingUnitName || 'another unit'}.`
+      };
+    }
+  }
+
+  return { hasCollision: false };
+}
+
+export interface DisembarkValidationResult {
+  valid: boolean;
+  reason?: string;
+  offendingTokenIds?: string[];
+}
+
+/**
+ * Calculates edge-to-edge distance between a token and a vehicle unit.
+ */
+export function getTokenDistanceToVehicleEdge(tok: Token, vehicle: Unit): number {
+  const vDims = getUnitBaseDimensions(vehicle);
+  const vTokens = (vehicle.tokens && vehicle.tokens.length > 0)
+    ? vehicle.tokens.filter(t => t.currentLives > 0)
+    : [{
+        x: vehicle.position?.x ?? 0,
+        y: vehicle.position?.y ?? 0,
+        baseShape: vDims.shape,
+        baseWidth: vDims.width,
+        baseHeight: vDims.height,
+        radius: vDims.radius,
+        size: Math.max(vDims.width, vDims.height)
+      }];
+
+  const tokR = tok.radius || (tok.size ? tok.size / 2 : 20);
+  let minEdgeDist = Infinity;
+
+  for (const vTok of vTokens) {
+    const vShape = vTok.baseShape || vDims.shape || 'circle';
+    const vW = vTok.baseWidth || vDims.width;
+    const vH = vTok.baseHeight || vDims.height;
+
+    if (vShape === 'rectangle' || vShape === 'square') {
+      const clampedX = Math.max(vTok.x - vW / 2, Math.min(tok.x, vTok.x + vW / 2));
+      const clampedY = Math.max(vTok.y - vH / 2, Math.min(tok.y, vTok.y + vH / 2));
+      const distCenterToEdge = Math.hypot(tok.x - clampedX, tok.y - clampedY);
+      const edgeDist = Math.max(0, distCenterToEdge - tokR);
+      if (edgeDist < minEdgeDist) minEdgeDist = edgeDist;
+    } else {
+      const vR = vTok.radius || vDims.radius || vW / 2;
+      const centerDist = Math.hypot(tok.x - vTok.x, tok.y - vTok.y);
+      const edgeDist = Math.max(0, centerDist - (tokR + vR));
+      if (edgeDist < minEdgeDist) minEdgeDist = edgeDist;
+    }
+  }
+
+  return minEdgeDist;
+}
+
+/**
+ * Validates manual disembark placement (RULE-002):
+ * 1. Each model must be within 3" (150px) edge-to-edge of the transport vehicle.
+ * 2. Squad must maintain 2" (100px) unit coherency.
+ * 3. Zero base overlap with any unit (including the transport vehicle).
+ */
+export function validateDisembarkPlacement(
+  unit: Unit,
+  vehicle: Unit,
+  allUnits: Unit[],
+  maxDistFromVehiclePx: number = 150,
+  coherencyDistPx: number = 100
+): DisembarkValidationResult {
+  const livingTokens = (unit.tokens || []).filter(t => t.currentLives > 0);
+  if (livingTokens.length === 0) {
+    return { valid: true };
+  }
+
+  // 1. Check distance to vehicle for each model
+  for (const tok of livingTokens) {
+    const edgeDist = getTokenDistanceToVehicleEdge(tok, vehicle);
+    if (edgeDist > maxDistFromVehiclePx + 2) { // 2px tolerance
+      return {
+        valid: false,
+        reason: `Model ${tok.id} is placed ${(edgeDist / 50).toFixed(1)}" away from ${vehicle.name}, exceeding the 3" disembark limit.`,
+        offendingTokenIds: [tok.id]
+      };
+    }
+  }
+
+  // 2. Coherency validation
+  const coherency = validateUnitCoherency(unit, coherencyDistPx);
+  if (!coherency.isCoherent) {
+    return {
+      valid: false,
+      reason: `Squad has broken 2" unit coherency. Models must remain within 2" of squadmates.`,
+      offendingTokenIds: coherency.offendingTokenIds
+    };
+  }
+
+  // 3. Collision check with all other units (including the vehicle)
+  const col = checkUniversalTokenCollisions(livingTokens, allUnits, unit.id);
+  if (col.hasCollision) {
+    return {
+      valid: false,
+      reason: col.reason || `Disembark placement overlaps with another unit's base.`
+    };
+  }
+
+  return { valid: true };
+}
+
 
 

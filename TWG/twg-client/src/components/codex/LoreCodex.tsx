@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
 import { BookOpen, Globe2, Compass, ShieldAlert } from 'lucide-react';
-import { FACTIONS } from '../../data/factions';
+import { StorageService } from '../../services/storageService';
+import { FactionLogo } from '../common/FactionLogo';
 
 export const LoreCodex: React.FC = () => {
-  const [selectedFactionId, setSelectedFactionId] = useState<string>(FACTIONS[0].id);
-  const activeFaction = FACTIONS.find(f => f.id === selectedFactionId) || FACTIONS[0];
+  const factions = StorageService.getFactions();
+  const [selectedFactionId, setSelectedFactionId] = useState<string>(factions[0]?.id || 'crimson_empire');
+  const activeFaction = factions.find(f => f.id === selectedFactionId) || factions[0];
 
   return (
     <div className="w-full max-w-7xl mx-auto p-4 space-y-6">
@@ -59,7 +61,7 @@ export const LoreCodex: React.FC = () => {
         <div className="lg:col-span-4 space-y-2">
           <h2 className="text-sm font-bold uppercase tracking-wider text-zinc-400 px-1">Factions of Dusk</h2>
           <div className="space-y-1.5 max-h-[500px] overflow-y-auto pr-1">
-            {FACTIONS.map(f => (
+            {factions.map(f => (
               <button
                 key={f.id}
                 onClick={() => setSelectedFactionId(f.id)}
@@ -69,7 +71,7 @@ export const LoreCodex: React.FC = () => {
                     : 'bg-zinc-900/60 border-zinc-800/80 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
                 }`}
               >
-                <span className="text-2xl">{f.symbol}</span>
+                <FactionLogo faction={f} size="md" />
                 <div className="overflow-hidden">
                   <span className="font-bold text-sm block truncate">{f.name}</span>
                   <span className="text-[11px] text-zinc-400 block truncate">{f.leaderName}</span>
@@ -85,7 +87,7 @@ export const LoreCodex: React.FC = () => {
             <div>
               <span className="text-xs uppercase tracking-widest text-rose-400 font-bold font-mono">Codex Dossier</span>
               <h2 className="text-2xl font-black text-white flex items-center space-x-3 mt-1">
-                <span>{activeFaction.symbol}</span>
+                <FactionLogo faction={activeFaction} size="md" />
                 <span>{activeFaction.name}</span>
               </h2>
               <p className="text-sm text-zinc-300 font-medium mt-0.5">{activeFaction.title}</p>
