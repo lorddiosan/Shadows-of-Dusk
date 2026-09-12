@@ -6,12 +6,16 @@ interface NavbarProps {
   currentTab: 'home' | 'play' | 'builder' | 'shop' | 'battlepass' | 'lore' | 'admin';
   setTab: (tab: 'home' | 'play' | 'builder' | 'shop' | 'battlepass' | 'lore' | 'admin') => void;
   user: UserProfile;
+  onOpenAuth?: () => void;
+  onOpenProfile?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
   currentTab,
   setTab,
-  user
+  user,
+  onOpenAuth,
+  onOpenProfile
 }) => {
   return (
     <header className="w-full bg-[#110e0b] border-b border-[#2e2319] sticky top-0 z-50 px-3 py-2 flex items-center justify-between shadow-lg select-none">
@@ -102,20 +106,24 @@ export const Navbar: React.FC<NavbarProps> = ({
           <span>Codex</span>
         </button>
 
-        <button
-          onClick={() => setTab('admin')}
-          className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-md font-medium text-xs transition-all ${
-            currentTab === 'admin'
-              ? 'bg-[#297e4a] text-white shadow-md border border-[#4ab575]/60'
-              : 'text-[#a39482] hover:text-[#f4efe6] hover:bg-[#241710]'
-          }`}
-        >
-          <Settings className="w-3.5 h-3.5" />
-          <span>Admin</span>
-        </button>
+        {/* AUTH-009: Admin Tab strictly gated to role === 'admin' */}
+        {user.role === 'admin' && (
+          <button
+            onClick={() => setTab('admin')}
+            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-md font-medium text-xs transition-all ${
+              currentTab === 'admin'
+                ? 'bg-[#297e4a] text-white shadow-md border border-[#4ab575]/60'
+                : 'text-[#a39482] hover:text-[#f4efe6] hover:bg-[#241710]'
+            }`}
+          >
+            <Settings className="w-3.5 h-3.5 text-amber-400" />
+            <span>Admin</span>
+            <span className="text-[9px] px-1 py-0.2 rounded bg-amber-950 text-amber-300 font-mono font-bold">CROWN</span>
+          </button>
+        )}
       </nav>
 
-      {/* Currencies & Mode */}
+      {/* Currencies & User Profile Button */}
       <div className="flex items-center space-x-2.5">
         <div className="flex items-center space-x-2 bg-[#17100b] border border-[#332216] px-2.5 py-1 rounded-md text-[11px] font-mono">
           <div className="flex items-center space-x-1 text-[#e07b53]">
@@ -129,10 +137,29 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center space-x-1.5 bg-[#241710] border border-[#593d28] px-2 py-1 rounded-md text-xs">
-          <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-          <span className="font-bold text-[#f4efe6] font-mono">Command</span>
-        </div>
+        {/* User Badge / Authentication Trigger */}
+        <button
+          type="button"
+          onClick={onOpenProfile || onOpenAuth}
+          className="flex items-center space-x-2 bg-[#241710] hover:bg-[#332216] border border-[#593d28] hover:border-[#e07b53]/60 px-2 py-1 rounded-lg transition cursor-pointer group"
+          title="Open Commander Profile / Security"
+        >
+          <img
+            src={user.avatarUrl}
+            alt={user.displayName}
+            className="w-5 h-5 rounded-md bg-zinc-900 border border-zinc-700 object-cover"
+          />
+          <div className="text-left hidden sm:block">
+            <span className="text-xs font-bold text-[#f4efe6] group-hover:text-amber-300 transition block leading-none font-mono">
+              {user.displayName.split(' ')[0]}
+            </span>
+            <span className={`text-[8px] font-mono block uppercase font-bold ${
+              user.role === 'admin' ? 'text-amber-400' : 'text-zinc-400'
+            }`}>
+              {user.role === 'admin' ? '👑 Admin' : '🛡️ Player'}
+            </span>
+          </div>
+        </button>
       </div>
     </header>
   );

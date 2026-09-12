@@ -25,11 +25,11 @@ export const FACTIONS: FactionInfo[] = [
       type: 'active',
       affects: 'all_friendly',
       activationTiming: 'command',
-      cost: 'once_per_round',
+      cost: 'once_per_game',
       vfxType: 'blood',
       effectType: 'stat_modifier',
       duration: 'end_of_round',
-      summary: 'Infuse blood-steam engines to push beyond mortal limits (0 CP).',
+      summary: 'Infuse blood-steam engines to push beyond mortal limits (Once per Game).',
       effect: 'All friendly units gain +1 to Movement and ignore difficult terrain penalty this round.'
     }
   },
@@ -56,11 +56,11 @@ export const FACTIONS: FactionInfo[] = [
       type: 'active',
       affects: 'all_friendly',
       activationTiming: 'shooting',
-      cost: 'once_per_round',
+      cost: 'once_per_game',
       vfxType: 'holy',
       effectType: 'defense',
       duration: 'end_of_phase',
-      summary: 'A golden veil shields the sisterhood from incoming volleys (0 CP).',
+      summary: 'A golden veil shields the sisterhood from incoming volleys (Once per Game).',
       effect: 'Friendly units gain +1 to Defence saving throws against ranged attacks this phase.'
     }
   },
@@ -87,11 +87,11 @@ export const FACTIONS: FactionInfo[] = [
       type: 'active',
       affects: 'all_friendly',
       activationTiming: 'charge',
-      cost: 'once_per_round',
+      cost: 'once_per_game',
       vfxType: 'plasma',
       effectType: 'stat_modifier',
       duration: 'end_of_phase',
-      summary: 'Ignites weapons with infernal wrath upon charging (0 CP).',
+      summary: 'Ignites weapons with infernal wrath upon charging (Once per Game).',
       effect: 'All friendly charging units gain +1 Attack Modifier on melee attacks this turn.'
     }
   },
@@ -118,11 +118,11 @@ export const FACTIONS: FactionInfo[] = [
       type: 'active',
       affects: 'all_friendly',
       activationTiming: 'movement',
-      cost: 'once_per_round',
+      cost: 'once_per_game',
       vfxType: 'arcane',
       effectType: 'movement',
       duration: 'end_of_phase',
-      summary: 'Warps the battlefield fabric to slip through space (0 CP).',
+      summary: 'Warps the battlefield fabric to slip through space (Once per Game).',
       effect: 'Friendly units may move through terrain obstacles and ignore distance penalties this phase.'
     }
   },
@@ -149,11 +149,11 @@ export const FACTIONS: FactionInfo[] = [
       type: 'active',
       affects: 'all_friendly',
       activationTiming: 'fight',
-      cost: 'once_per_round',
+      cost: 'once_per_game',
       vfxType: 'blood',
       effectType: 'stat_modifier',
       duration: 'end_of_phase',
-      summary: 'Drains the life force of fallen foes in close quarters (0 CP).',
+      summary: 'Drains the life force of fallen foes in close quarters (Once per Game).',
       effect: 'Friendly melee units heal 1 life when destroying an opposing model in combat.'
     }
   },
@@ -180,11 +180,11 @@ export const FACTIONS: FactionInfo[] = [
       type: 'active',
       affects: 'all_friendly',
       activationTiming: 'command',
-      cost: 'once_per_round',
+      cost: 'once_per_game',
       vfxType: 'command',
       effectType: 'defense',
       duration: 'end_of_round',
-      summary: 'Chants impenetrable mountain runes across the battle line (0 CP).',
+      summary: 'Chants impenetrable mountain runes across the battle line (Once per Game).',
       effect: 'All friendly units holding objectives or cover gain +1 to Defence saving throws until round end.'
     }
   }

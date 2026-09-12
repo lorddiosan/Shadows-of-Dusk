@@ -753,10 +753,14 @@ export function isInsideDeploymentZone(
 
 /**
  * Checks if a unit possesses the trait to deploy outside the normal deployment zone.
- * Must be explicit via unit.canDeployOutsideZone or passives containing 'DEPLOY_OUTSIDE_ZONE'.
+ * Must be explicit via unit.canDeployOutsideZone or passives containing 'DEPLOY_OUTSIDE_ZONE' / 'Infiltrator'.
+ * 
+ * CORE RULE: A unit that can infiltrate CANNOT do so anymore if a leader that can't infiltrate is attached to them.
+ * If allUnits or attachedLeaderUnits is provided and any attached leader lacks the Infiltrator trait, infiltration is blocked.
+ * Conversely, if an attached leader is tested and its bodyguard lacks Infiltrator, infiltration is also blocked.
  */
-export function canUnitDeployOutsideZone(unit: Unit): boolean {
-  return !!(
+export function canUnitDeployOutsideZone(unit: Unit, allUnits?: Unit[]): boolean {
+  const hasInfiltrator = !!(
     unit.canDeployOutsideZone ||
     unit.traits?.includes('Infiltrator') ||
     unit.traits?.includes('DEPLOY_OUTSIDE_ZONE') ||
@@ -765,6 +769,56 @@ export function canUnitDeployOutsideZone(unit: Unit): boolean {
       p.toUpperCase().includes('INFILTRATOR')
     )
   );
+
+  if (!hasInfiltrator) return false;
+
+  // Check attached leaders - if ANY attached leader cannot infiltrate, the unit cannot infiltrate
+  const leaderUnits: Unit[] = [];
+  if (allUnits && allUnits.length > 0 && unit.attachedUnits && unit.attachedUnits.length > 0) {
+    for (const lid of unit.attachedUnits) {
+      const l = allUnits.find(u => u.id === lid);
+      if (l) leaderUnits.push(l);
+    }
+  }
+  if ((unit as any).attachedLeaderUnits && Array.isArray((unit as any).attachedLeaderUnits)) {
+    leaderUnits.push(...(unit as any).attachedLeaderUnits);
+  }
+
+  for (const leader of leaderUnits) {
+    const leaderCanInfiltrate = !!(
+      leader.canDeployOutsideZone ||
+      leader.traits?.includes('Infiltrator') ||
+      leader.traits?.includes('DEPLOY_OUTSIDE_ZONE') ||
+      leader.passives?.some(p => 
+        p.toUpperCase().includes('DEPLOY_OUTSIDE_ZONE') ||
+        p.toUpperCase().includes('INFILTRATOR')
+      )
+    );
+    if (!leaderCanInfiltrate) {
+      return false;
+    }
+  }
+
+  // Also if this unit is a leader attached to a bodyguard (attachedTo):
+  if (unit.attachedTo && allUnits && allUnits.length > 0) {
+    const bodyguard = allUnits.find(u => u.id === unit.attachedTo);
+    if (bodyguard) {
+      const bodyguardCanInfiltrate = !!(
+        bodyguard.canDeployOutsideZone ||
+        bodyguard.traits?.includes('Infiltrator') ||
+        bodyguard.traits?.includes('DEPLOY_OUTSIDE_ZONE') ||
+        bodyguard.passives?.some(p => 
+          p.toUpperCase().includes('DEPLOY_OUTSIDE_ZONE') ||
+          p.toUpperCase().includes('INFILTRATOR')
+        )
+      );
+      if (!bodyguardCanInfiltrate) {
+        return false;
+      }
+    }
+  }
+
+  return true;
 }
 
 /**
@@ -1231,7 +1285,7 @@ export function checkUniversalTokenCollisions(
 /**
  * Checks if a leader unit can attach to candidate bodyguard squad.
  */
-export function canAttachLeader(leader: Unit, bodyguard: Unit): boolean {
+export function canAttachLeader(leader: Unit, bodyguard: Unit, zoneDepth: number = 200, worldWidth: number = 1200): boolean {
   if (leader.owner !== bodyguard.owner) return false;
   if (leader.id === bodyguard.id) return false;
   const isLeader = leader.traits?.includes('Leader') || leader.role === 'Leader' || leader.role === 'Legendary Leader' || leader.type === 'Character';
@@ -1240,6 +1294,14 @@ export function canAttachLeader(leader: Unit, bodyguard: Unit): boolean {
   if (leader.attachedTo || leader.embarkedIn || leader.inStrategicReserve) return false;
   if (bodyguard.embarkedIn || bodyguard.inStrategicReserve) return false;
   if (bodyguard.attachedUnits && bodyguard.attachedUnits.length >= 1) return false; // 1 leader per squad max
+
+  // Infiltration rule: If bodyguard is deployed outside the deployment zone, leader must be able to infiltrate
+  if (bodyguard.position && !isInsideDeploymentZone(bodyguard.position, bodyguard.owner, worldWidth, zoneDepth)) {
+    if (!canUnitDeployOutsideZone(leader)) {
+      return false;
+    }
+  }
+
   return true;
 }
 

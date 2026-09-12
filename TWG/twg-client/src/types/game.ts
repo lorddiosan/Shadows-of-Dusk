@@ -13,6 +13,7 @@ export type BaseShape = 'circle' | 'square' | 'oval' | 'rectangle';
 
 export interface StatBlock {
   mv: number;         // Movement (squares per Movement phase)
+  baseMv?: number;    // Permanent base movement for round reset
   def: number;        // Defence (Toughness-equivalent)
   baseDef: number;    // Permanent base for caps (+-3)
   defModifier: number;// Temporary modifier for next turn (-3 to +3)
@@ -39,7 +40,7 @@ export interface WorldPoint {
 export type FormationType = 'auto' | 'circle' | 'line' | 'grid' | 'stack';
 
 // DESIGN-007 & CODE-026: Ability Builder Schema
-export type AbilityAffects = 'self' | 'attached' | 'target' | 'area' | 'all_friendly' | 'all_enemy';
+export type AbilityAffects = 'self' | 'attached' | 'target' | 'area' | 'all_friendly' | 'all_allies' | 'all_enemy';
 export type AbilityType = 'passive' | 'active';
 export type AbilityTiming = 'any_time' | 'deployment' | 'command' | 'movement' | 'shooting' | 'charge' | 'fight' | 'round_end';
 export type AbilityCost = 'free' | 'gain_1_cp' | 'once_per_game' | 'once_per_round' | 'once_per_activation' | '1_cp' | '2_cp';
@@ -56,7 +57,7 @@ export interface UnitAbility {
   activationTiming?: AbilityTiming;
   cost: AbilityCost;
   effect: string;
-  effectType?: 'stat_modifier' | 'damage' | 'movement' | 'reroll' | 'defense' | 'custom';
+  effectType?: 'stat_modifier' | 'damage' | 'movement' | 'reroll' | 'defense' | 'heal' | 'custom';
   duration: AbilityDuration;
   triggerCondition?: string;
   summary?: string;

@@ -7,6 +7,10 @@ import { Shop } from './components/shop/Shop';
 import { BattlePass } from './components/battlepass/BattlePass';
 import { LoreCodex } from './components/codex/LoreCodex';
 import { AdminPanel } from './components/admin/AdminPanel';
+import { AuthModal } from './components/auth/AuthModal';
+import { ProfileModal } from './components/auth/ProfileModal';
+import { MatchmakingModal } from './components/matchmaking/MatchmakingModal';
+import { DuelZoneModal } from './components/matchmaking/DuelZoneModal';
 import { AuthService } from './services/authService';
 import { StorageService } from './services/storageService';
 import { UserProfile, ShopItem } from './types/user';
@@ -16,21 +20,40 @@ export function App() {
   const [currentTab, setCurrentTab] = useState<'home' | 'play' | 'builder' | 'shop' | 'battlepass' | 'lore' | 'admin'>('home');
   const [user, setUser] = useState<UserProfile>(() => AuthService.getCurrentUser());
   const [activeBattleRoster, setActiveBattleRoster] = useState<ArmyRoster | null>(null);
+  const [matchmakingRoster, setMatchmakingRoster] = useState<ArmyRoster | null>(null);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [isMatchmakingModalOpen, setIsMatchmakingModalOpen] = useState(false);
+  const [isDuelZoneOpen, setIsDuelZoneOpen] = useState(false);
   const [dataVersion, setDataVersion] = useState(0);
+
+  // Subscribe to auth state changes from Supabase / AuthService
+  useEffect(() => {
+    const unsubscribe = AuthService.onAuthStateChange((updatedUser) => {
+      setUser(updatedUser);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // AUTH-009 / AUTH-010: Route Guard: If user is not admin, kick out of admin tab
+  useEffect(() => {
+    if (currentTab === 'admin' && user.role !== 'admin') {
+      setCurrentTab('home');
+    }
+  }, [currentTab, user.role]);
 
   // Sync user profile changes to local storage
   useEffect(() => {
     StorageService.saveUserProfile(user);
   }, [user]);
 
-  const handleGoogleSignIn = async () => {
-    const signedInUser = await AuthService.signInWithGoogle();
-    setUser(signedInUser);
-  };
-
-  const handleSignOut = () => {
-    const guest = AuthService.signOut();
-    setUser(guest);
+  const handleSetTab = (tab: 'home' | 'play' | 'builder' | 'shop' | 'battlepass' | 'lore' | 'admin') => {
+    // AUTH-009: Prevent non-admin access to admin tab
+    if (tab === 'admin' && user.role !== 'admin') {
+      setIsAuthModalOpen(true);
+      return;
+    }
+    setCurrentTab(tab);
   };
 
   const handleDeployRosterToBattle = (roster: ArmyRoster) => {
@@ -84,18 +107,25 @@ export function App() {
     <div className="min-h-screen bg-[#090a0f] text-zinc-100 flex flex-col selection:bg-rose-600 selection:text-white">
       <Navbar
         currentTab={currentTab}
-        setTab={setCurrentTab}
+        setTab={handleSetTab}
         user={user}
+        onOpenAuth={() => setIsAuthModalOpen(true)}
+        onOpenProfile={() => setIsProfileModalOpen(true)}
       />
 
       <main className={`flex-1 ${currentTab === 'play' ? 'overflow-hidden' : 'pb-16'}`}>
         {currentTab === 'home' && (
           <WarRoomHome
-            onNavigate={setCurrentTab}
+            onNavigate={handleSetTab}
             onSelectArmyToDeploy={(roster) => {
               setActiveBattleRoster(roster);
               setCurrentTab('play');
             }}
+            onStartMatchmaking={(roster) => {
+              setMatchmakingRoster(roster);
+              setIsMatchmakingModalOpen(true);
+            }}
+            onOpenDuelZone={() => setIsDuelZoneOpen(true)}
           />
         )}
 
@@ -141,6 +171,66 @@ export function App() {
           />
         )}
       </main>
+
+      {/* Authentication Modal */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        onAuthSuccess={(loggedInUser) => {
+          setUser(loggedInUser);
+          setIsAuthModalOpen(false);
+        }}
+      />
+
+      {/* User Profile & Credentials Modal */}
+      <ProfileModal
+        isOpen={isProfileModalOpen}
+        onClose={() => setIsProfileModalOpen(false)}
+        user={user}
+        onSignOut={async () => {
+          const guest = await AuthService.signOut();
+          setUser(guest);
+          setIsProfileModalOpen(false);
+        }}
+        onSwitchAccount={() => {
+          setIsProfileModalOpen(false);
+          setIsAuthModalOpen(true);
+        }}
+      />
+
+      {/* 1v1 Matchmaking Radar Modal */}
+      {isMatchmakingModalOpen && (
+        <MatchmakingModal
+          isOpen={isMatchmakingModalOpen}
+          onClose={() => setIsMatchmakingModalOpen(false)}
+          user={user}
+          roster={matchmakingRoster || StorageService.getRosters()[0]}
+          onMatchFound={() => {
+            setActiveBattleRoster(matchmakingRoster || StorageService.getRosters()[0]);
+            setIsMatchmakingModalOpen(false);
+            setCurrentTab('play');
+          }}
+        />
+      )}
+
+      {/* Duel Zone Arena Modal (UI-007 revised) */}
+      <DuelZoneModal
+        isOpen={isDuelZoneOpen}
+        onClose={() => setIsDuelZoneOpen(false)}
+        user={user}
+        rosters={StorageService.getRosters()}
+        selectedRoster={matchmakingRoster || StorageService.getRosters()[0]}
+        onSelectRoster={(roster) => setMatchmakingRoster(roster)}
+        onStart1v1Matchmaking={(roster) => {
+          setMatchmakingRoster(roster);
+          setIsMatchmakingModalOpen(true);
+        }}
+        onStartAiSkirmish={(roster) => {
+          setActiveBattleRoster(roster);
+          setCurrentTab('play');
+        }}
+        onOpenArmyBuilder={() => setCurrentTab('builder')}
+      />
     </div>
   );
 }

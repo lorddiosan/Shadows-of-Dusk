@@ -178,3 +178,86 @@ export function rollCharge(mv: number): { distance: number; roll: number; succes
     return { distance: 0, roll, success: false };
   }
 }
+
+export type AbilityUsageLimit = 'once_per_game' | 'once_per_round' | 'once_per_activation';
+
+/**
+ * Determine the usage limit rule for an ability:
+ * - Faction abilities are once per game unless explicitly specified otherwise ('once_per_round' or 'once_per_activation')
+ * - Regular/unit abilities are once per round unless explicitly specified otherwise ('once_per_game' or 'once_per_activation')
+ */
+export function getAbilityUsageLimit(
+  ability: { cost?: string },
+  isFaction: boolean
+): AbilityUsageLimit {
+  if (isFaction) {
+    if (ability.cost === 'once_per_round') return 'once_per_round';
+    if (ability.cost === 'once_per_activation') return 'once_per_activation';
+    return 'once_per_game';
+  }
+  if (ability.cost === 'once_per_game') return 'once_per_game';
+  if (ability.cost === 'once_per_activation') return 'once_per_activation';
+  return 'once_per_round';
+}
+
+/**
+ * Evaluate whether an ability is activatable given current phase and usage records.
+ */
+export function checkAbilityActivation(params: {
+  ability: {
+    type?: string;
+    activationTiming?: string;
+    cost?: string;
+  };
+  isFaction: boolean;
+  currentPhase: string;
+  usedInRound: number;
+  usedInGame: boolean;
+}): { isActivatable: boolean; disabledReason?: string; rule: AbilityUsageLimit } {
+  const { ability, isFaction, currentPhase, usedInRound, usedInGame } = params;
+  const rule = getAbilityUsageLimit(ability, isFaction);
+
+  if (ability.type === 'passive') {
+    return { isActivatable: false, disabledReason: 'Passive doctrine always active', rule };
+  }
+
+  const timingMatches =
+    !ability.activationTiming ||
+    ability.activationTiming === 'any_time' ||
+    ability.activationTiming.toLowerCase() === currentPhase.toLowerCase();
+
+  if (!timingMatches) {
+    return {
+      isActivatable: false,
+      disabledReason: `Available in ${ability.activationTiming?.replace('_', ' ').toUpperCase()} phase`,
+      rule
+    };
+  }
+
+  if (rule === 'once_per_game' && usedInGame) {
+    return {
+      isActivatable: false,
+      disabledReason: 'Already used this match (Once per Game)',
+      rule
+    };
+  }
+
+  if (rule === 'once_per_round' && usedInRound >= 1) {
+    return {
+      isActivatable: false,
+      disabledReason: 'Already used this round (Once per Round)',
+      rule
+    };
+  }
+
+  if (rule === 'once_per_activation' && usedInRound >= 1) {
+    return {
+      isActivatable: false,
+      disabledReason: 'Already activated this turn',
+      rule
+    };
+  }
+
+  return { isActivatable: true, rule };
+}
+

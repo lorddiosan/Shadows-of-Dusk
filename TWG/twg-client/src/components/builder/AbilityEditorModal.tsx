@@ -166,7 +166,7 @@ export const AbilityEditorModal: React.FC<AbilityEditorModalProps> = ({
   const [activationTiming, setActivationTiming] = useState<AbilityTiming>('command');
   const [cost, setCost] = useState<AbilityCost>('free');
   const [vfxType, setVfxType] = useState<'command' | 'holy' | 'blood' | 'arcane' | 'laser' | 'plasma' | 'slash' | 'crush'>('command');
-  const [effectType, setEffectType] = useState<'stat_modifier' | 'damage' | 'movement' | 'reroll' | 'defense' | 'custom'>('stat_modifier');
+  const [effectType, setEffectType] = useState<'stat_modifier' | 'damage' | 'movement' | 'reroll' | 'defense' | 'heal' | 'custom'>('stat_modifier');
   const [duration, setDuration] = useState<AbilityDuration>('end_of_phase');
   const [triggerCondition, setTriggerCondition] = useState<string>('');
   const [summary, setSummary] = useState<string>('');
@@ -199,10 +199,10 @@ export const AbilityEditorModal: React.FC<AbilityEditorModalProps> = ({
     } else {
       setName('');
       setIcon(contextType === 'faction' ? '🔮' : '⚡');
-      setType(contextType === 'faction' ? 'active' : 'active');
+      setType('active');
       setAffects(contextType === 'faction' ? 'all_friendly' : 'self');
       setActivationTiming('command');
-      setCost('free');
+      setCost(contextType === 'faction' ? 'once_per_game' : 'once_per_round');
       setVfxType('command');
       setEffectType('stat_modifier');
       setDuration('end_of_phase');
@@ -466,11 +466,11 @@ export const AbilityEditorModal: React.FC<AbilityEditorModalProps> = ({
                 disabled={type === 'passive'}
                 className="w-full bg-zinc-950 border border-zinc-750 px-2 py-1.5 rounded-lg text-xs text-white focus:border-amber-400 focus:outline-none font-mono disabled:opacity-50"
               >
-                <option value="free">Free (0 CP)</option>
-                <option value="gain_1_cp">Generates +1 Free CP ⭐</option>
+                <option value="once_per_round">Once Per Round (Default for Units)</option>
+                <option value="once_per_game">Once Per Game (Default for Factions)</option>
                 <option value="once_per_activation">Once Per Activation</option>
-                <option value="once_per_round">Once Per Round</option>
-                <option value="once_per_game">Once Per Game</option>
+                <option value="gain_1_cp">Generates +1 Free CP ⭐ (Once Per Round)</option>
+                <option value="free">Free (0 CP / Once Per Round)</option>
               </select>
             </div>
 
@@ -507,6 +507,7 @@ export const AbilityEditorModal: React.FC<AbilityEditorModalProps> = ({
                 <option value="damage">Damage / Offensive</option>
                 <option value="defense">Armor / Defensive</option>
                 <option value="movement">Movement / Mobility</option>
+                <option value="heal">Heal / Regeneration</option>
                 <option value="reroll">Dice Reroll / Mod</option>
                 <option value="custom">Custom / Special</option>
               </select>

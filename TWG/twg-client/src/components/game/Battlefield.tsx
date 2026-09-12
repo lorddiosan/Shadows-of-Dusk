@@ -15,7 +15,7 @@ import {
 } from '../../types/game';
 import { ArmyRoster } from '../../types/army';
 import { DEFAULT_POIS, DEFAULT_SPECIAL_TILES, GAME_EVENTS, GENERAL_CARDS, FACTION_CARDS } from '../../data/gameContent';
-import { resolveCombat, rollCharge, CombatResult, checkTypeAdvantage } from '../../engine/combatEngine';
+import { resolveCombat, rollCharge, CombatResult, checkTypeAdvantage, getAbilityUsageLimit, checkAbilityActivation, AbilityUsageLimit } from '../../engine/combatEngine';
 import { calculatePOIScores, checkWinConditions } from '../../engine/scoringEngine';
 import { checkAndTriggerEvents } from '../../engine/eventsEngine';
 import { StorageService, PRESET_MAPS } from '../../services/storageService';
@@ -140,15 +140,19 @@ export const createInitialGameState = (customRoster?: ArmyRoster | null): GameSt
   const ensureValidLives = (u: any): Unit => {
     const lives = Math.max(1, Number(u.stats?.lives) || 5);
     const modelCount = Math.max(1, Number(u.stats?.modelCount) || 1);
+    const tpl = allTemplates.find(t => t.templateId === u.templateId || t.name === u.name);
     return {
       ...u,
       tokenImageUrl: u.tokenImageUrl,
+      abilities: (u.abilities && u.abilities.length > 0) ? u.abilities : (tpl?.abilities || []),
+      traits: (u.traits && u.traits.length > 0) ? u.traits : (tpl?.traits || []),
       stats: {
         ...u.stats,
         lives,
         maxLives: Math.max(lives, Number(u.stats?.maxLives) || lives),
         modelCount,
-        hpPerModel: Math.max(1, Math.floor(lives / modelCount))
+        hpPerModel: Math.max(1, Math.floor(lives / modelCount)),
+        baseMv: u.stats?.baseMv ?? u.stats?.mv ?? 5
       }
     };
   };
@@ -259,6 +263,15 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     setUsedAbilitiesThisGame({});
     setAbilitiesDockOpen(false);
   };
+
+  // Reset once-per-round abilities whenever round changes
+  const prevRoundRef = useRef<number>(gameState.round);
+  useEffect(() => {
+    if (gameState.round !== prevRoundRef.current) {
+      setUsedAbilitiesThisRound({});
+      prevRoundRef.current = gameState.round;
+    }
+  }, [gameState.round]);
 
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null);
   const [targetUnitId, setTargetUnitId] = useState<string | null>(null);
@@ -386,17 +399,44 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
   // Valid targets for shooting / charge / fight
   const getValidTargetUnits = (): Unit[] => {
-    if (!selectedUnit || !selectedUnit.position || selectedUnit.owner !== gameState.activePlayer) return [];
+    if (!selectedUnit || selectedUnit.owner !== gameState.activePlayer) return [];
+    const isAttachedLeader = !!selectedUnit.attachedTo;
+    const hostSquad = isAttachedLeader ? gameState.units.find(u => u.id === selectedUnit.attachedTo) : null;
+    const effectivePos = selectedUnit.position || hostSquad?.position;
+    if (!effectivePos) return [];
+
     const enemyOwner = selectedUnit.owner === 'player1' ? 'player2' : 'player1';
     const enemies = gameState.units.filter(u => u.owner === enemyOwner && u.position && u.stats.lives > 0);
 
     if (gameState.phase === 'Shooting') {
-      if (selectedUnit.stats.range === 0 || selectedUnit.hasShot) return [];
-      if (selectedUnit.attachedTo) {
-        const hostSquad = gameState.units.find(u => u.id === selectedUnit.attachedTo);
-        if (hostSquad && (hostSquad.stats.range === 0 || hostSquad.hasShot)) return [];
-      }
-      return enemies.filter(e => isUnitInShootingRange(selectedUnit, e, DEFAULT_GRID_SIZE));
+      const attachedLeaders = (selectedUnit.attachedUnits || [])
+        .map(id => gameState.units.find(u => u.id === id))
+        .filter((l): l is Unit => !!l && (l.stats?.lives ?? 0) > 0);
+      const rangedAttachedLeaders = attachedLeaders.filter(l => l.stats.range > 0 && !l.hasShot);
+
+      const canSquadShoot = selectedUnit.stats.range > 0 && !selectedUnit.hasShot;
+      const canLeaderShoot = isAttachedLeader
+        ? (selectedUnit.stats.range > 0 && !selectedUnit.hasShot)
+        : (rangedAttachedLeaders.length > 0);
+
+      if (!canSquadShoot && !canLeaderShoot) return [];
+
+      const maxRange = Math.max(
+        canSquadShoot ? selectedUnit.stats.range : 0,
+        isAttachedLeader
+          ? (canLeaderShoot ? selectedUnit.stats.range : 0)
+          : (rangedAttachedLeaders.reduce((max, l) => Math.max(max, l.stats.range), 0))
+      );
+
+      const measuringUnit: Unit = {
+        ...(isAttachedLeader && hostSquad ? hostSquad : selectedUnit),
+        stats: {
+          ...(isAttachedLeader && hostSquad ? hostSquad.stats : selectedUnit.stats),
+          range: maxRange
+        }
+      };
+
+      return enemies.filter(e => isUnitInShootingRange(measuringUnit, e, DEFAULT_GRID_SIZE));
     }
 
     if (gameState.phase === 'Charge') {
@@ -444,19 +484,24 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
         , opposingRosters[0])
       : allRosters.find(r => r.id !== chosenP1.id) || chosenP1;
 
+    const allTemplates = StorageService.getUnitTemplates();
     const ensureValidLives = (u: any): Unit => {
       const lives = Math.max(1, Number(u.stats?.lives) || 5);
       const modelCount = Math.max(1, Number(u.stats?.modelCount) || 1);
+      const tpl = allTemplates.find(t => t.templateId === u.templateId || t.name === u.name);
       return {
         ...u,
         tokenImageUrl: u.tokenImageUrl,
         carryCapacity: u.carryCapacity ?? u.stats?.carryCapacity,
+        abilities: (u.abilities && u.abilities.length > 0) ? u.abilities : (tpl?.abilities || []),
+        traits: (u.traits && u.traits.length > 0) ? u.traits : (tpl?.traits || []),
         stats: {
           ...u.stats,
           lives,
           maxLives: Math.max(lives, Number(u.stats?.maxLives) || lives),
           modelCount,
           hpPerModel: Math.max(1, Math.floor(lives / modelCount)),
+          baseMv: u.stats?.baseMv ?? u.stats?.mv ?? 5,
           carryCapacity: u.carryCapacity ?? u.stats?.carryCapacity
         }
       };
@@ -676,6 +721,17 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     }));
     setSelectedUnitId(unit.id);
     addLog(`📦 ${unit.name} arrived from Strategic Reserves at (${deployPos.x}px, ${deployPos.y}px)! (Counts as moved)`, 'event');
+    if (unit.abilities && unit.abilities.length > 0) {
+      addLog(`🃏 Added ${unit.name}'s tactical cards to your Hand: ${unit.abilities.map(a => a.name).join(', ')}!`, 'score');
+    }
+    if (unit.attachedUnits && unit.attachedUnits.length > 0) {
+      unit.attachedUnits.forEach(attId => {
+        const attLeader = gameState.units.find(u => u.id === attId);
+        if (attLeader && attLeader.abilities && attLeader.abilities.length > 0) {
+          addLog(`🃏 Added ${attLeader.name}'s tactical cards to your Hand: ${attLeader.abilities.map(a => a.name).join(', ')}!`, 'score');
+        }
+      });
+    }
   };
 
   // Attach a Leader to an Infantry Bodyguard squad
@@ -689,8 +745,16 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       return;
     }
 
-    if (!canAttachLeader(leader, bodyguard)) {
-      addLog(`Cannot attach ${leader.name} to ${bodyguard.name}.`, 'info');
+    const p1Zone = gameState.currentMap?.deploymentZones.player1.maxX ?? 200;
+    const p2Zone = gameState.currentMap ? (1200 - gameState.currentMap.deploymentZones.player2.minX) : 200;
+    const zoneDepth = bodyguard.owner === 'player1' ? p1Zone : p2Zone;
+
+    if (!canAttachLeader(leader, bodyguard, zoneDepth, 1200)) {
+      if (bodyguard.position && !isInsideDeploymentZone(bodyguard.position, bodyguard.owner, 1200, zoneDepth) && !canUnitDeployOutsideZone(leader)) {
+        addLog(`⛔ Cannot attach ${leader.name} to ${bodyguard.name}: ${bodyguard.name} is deployed outside the deployment zone, and ${leader.name} cannot infiltrate!`, 'info');
+      } else {
+        addLog(`Cannot attach ${leader.name} to ${bodyguard.name}.`, 'info');
+      }
       return;
     }
 
@@ -1008,11 +1072,20 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       const p2Zone = gameState.currentMap ? (1200 - gameState.currentMap.deploymentZones.player2.minX) : 200;
       const zoneDepth = unit.owner === 'player1' ? p1Zone : p2Zone;
 
-      const canBypass = canUnitDeployOutsideZone(unit);
+      const canBypass = canUnitDeployOutsideZone(unit, gameState.units);
       const inZone = isInsideDeploymentZone(newPos, unit.owner, 1200, zoneDepth);
 
       if (!canBypass && !inZone) {
-        const msg = `⛔ Placement Rejected! ${unit.name} cannot deploy outside your designated deployment zone (${unit.owner === 'player1' ? `West: x ≤ ${p1Zone}px` : `East: x ≥ ${1200 - p2Zone}px`}).`;
+        const hasInfiltratorTrait = !!(
+          unit.canDeployOutsideZone ||
+          unit.traits?.includes('Infiltrator') ||
+          unit.traits?.includes('DEPLOY_OUTSIDE_ZONE') ||
+          unit.passives?.some(p => p.toUpperCase().includes('INFILTRATOR') || p.toUpperCase().includes('DEPLOY_OUTSIDE_ZONE'))
+        );
+        const leaderBlocked = hasInfiltratorTrait && ((unit.attachedUnits && unit.attachedUnits.length > 0) || !!unit.attachedTo);
+        const msg = leaderBlocked
+          ? `⛔ Placement Rejected! ${unit.name} has Infiltrator, but an attached Leader lacks Infiltrator! Infiltration is blocked.`
+          : `⛔ Placement Rejected! ${unit.name} cannot deploy outside your designated deployment zone (${unit.owner === 'player1' ? `West: x ≤ ${p1Zone}px` : `East: x ≥ ${1200 - p2Zone}px`}).`;
         addLog(msg, 'info');
         setDeploymentErrorNotice(msg);
         setTimeout(() => setDeploymentErrorNotice(null), 4000);
@@ -1175,7 +1248,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       const p2Zone = gameState.currentMap ? (1200 - gameState.currentMap.deploymentZones.player2.minX) : 200;
       const zoneDepth = unit.owner === 'player1' ? p1Zone : p2Zone;
 
-      const canBypass = canUnitDeployOutsideZone(unit);
+      const canBypass = canUnitDeployOutsideZone(unit, gameState.units);
       const inZone = isInsideDeploymentZone(newWorldPos, unit.owner, 1200, zoneDepth);
 
       if (!canBypass && !inZone) {
@@ -1619,7 +1692,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       maxY: 800
     };
 
-    const fitRes = fitFormationToZone(unit, finalPos, unit.formation || 'auto', zoneBounds, canUnitDeployOutsideZone(unit));
+    const fitRes = fitFormationToZone(unit, finalPos, unit.formation || 'auto', zoneBounds, canUnitDeployOutsideZone(unit, gameState.units));
     const deployed: Unit = {
       ...fitRes.unit,
       isPendingDeploymentConfirm: true
@@ -1690,6 +1763,17 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
           } : u)
         }));
         addLog(`✅ Auto-confirmed placement of ${existingPending.name}.`, 'info');
+        if (existingPending.abilities && existingPending.abilities.length > 0) {
+          addLog(`🃏 Added ${existingPending.name}'s tactical cards to your Hand: ${existingPending.abilities.map(a => a.name).join(', ')}!`, 'score');
+        }
+        if (existingPending.attachedUnits && existingPending.attachedUnits.length > 0) {
+          existingPending.attachedUnits.forEach(attId => {
+            const attLeader = gameState.units.find(u => u.id === attId);
+            if (attLeader && attLeader.abilities && attLeader.abilities.length > 0) {
+              addLog(`🃏 Added ${attLeader.name}'s tactical cards to your Hand: ${attLeader.abilities.map(a => a.name).join(', ')}!`, 'score');
+            }
+          });
+        }
       } else {
         const msg = `⚠️ Please adjust coherency for ${existingPending.name} before placing another squad!`;
         addLog(msg, 'info');
@@ -1724,11 +1808,20 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     const p2Zone = gameState.currentMap ? (1200 - gameState.currentMap.deploymentZones.player2.minX) : 200;
     const zoneDepth = unit.owner === 'player1' ? p1Zone : p2Zone;
 
-    const canBypass = canUnitDeployOutsideZone(unit);
+    const canBypass = canUnitDeployOutsideZone(unit, gameState.units);
     const inZone = isInsideDeploymentZone(dropPos, unit.owner, 1200, zoneDepth);
 
     if (!canBypass && !inZone) {
-      const msg = `⛔ Placement Rejected! ${unit.name} cannot deploy outside your designated deployment zone (${unit.owner === 'player1' ? `West: x ≤ ${p1Zone}px` : `East: x ≥ ${1200 - p2Zone}px`}).`;
+      const hasInfiltratorTrait = !!(
+        unit.canDeployOutsideZone ||
+        unit.traits?.includes('Infiltrator') ||
+        unit.traits?.includes('DEPLOY_OUTSIDE_ZONE') ||
+        unit.passives?.some(p => p.toUpperCase().includes('INFILTRATOR') || p.toUpperCase().includes('DEPLOY_OUTSIDE_ZONE'))
+      );
+      const leaderBlocked = hasInfiltratorTrait && ((unit.attachedUnits && unit.attachedUnits.length > 0) || !!unit.attachedTo);
+      const msg = leaderBlocked
+        ? `⛔ Placement Rejected! ${unit.name} has Infiltrator, but an attached Leader lacks Infiltrator! Infiltration is blocked.`
+        : `⛔ Placement Rejected! ${unit.name} cannot deploy outside your designated deployment zone (${unit.owner === 'player1' ? `West: x ≤ ${p1Zone}px` : `East: x ≥ ${1200 - p2Zone}px`}).`;
       addLog(msg, 'info');
       setDeploymentErrorNotice(msg);
       setTimeout(() => setDeploymentErrorNotice(null), 4000);
@@ -1816,6 +1909,17 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
           } : u)
         }));
         addLog(`✅ Auto-confirmed placement of ${existingPending.name}.`, 'info');
+        if (existingPending.abilities && existingPending.abilities.length > 0) {
+          addLog(`🃏 Added ${existingPending.name}'s tactical cards to your Hand: ${existingPending.abilities.map(a => a.name).join(', ')}!`, 'score');
+        }
+        if (existingPending.attachedUnits && existingPending.attachedUnits.length > 0) {
+          existingPending.attachedUnits.forEach(attId => {
+            const attLeader = gameState.units.find(u => u.id === attId);
+            if (attLeader && attLeader.abilities && attLeader.abilities.length > 0) {
+              addLog(`🃏 Added ${attLeader.name}'s tactical cards to your Hand: ${attLeader.abilities.map(a => a.name).join(', ')}!`, 'score');
+            }
+          });
+        }
       } else {
         const msg = `⚠️ Please adjust coherency for ${existingPending.name} before placing another squad!`;
         addLog(msg, 'info');
@@ -1880,6 +1984,17 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     } : u);
 
     addLog(`✅ Deployment Confirmed: ${unit.name} locked into position. Passing deployment turn.`, 'info');
+    if (unit.abilities && unit.abilities.length > 0) {
+      addLog(`🃏 Added ${unit.name}'s tactical cards to your Hand: ${unit.abilities.map(a => a.name).join(', ')}!`, 'score');
+    }
+    if (unit.attachedUnits && unit.attachedUnits.length > 0) {
+      unit.attachedUnits.forEach(attId => {
+        const attLeader = updatedUnits.find(u => u.id === attId);
+        if (attLeader && attLeader.abilities && attLeader.abilities.length > 0) {
+          addLog(`🃏 Added ${attLeader.name}'s tactical cards to your Hand: ${attLeader.abilities.map(a => a.name).join(', ')}!`, 'score');
+        }
+      });
+    }
     progressDeploymentAlternation(unit.owner, updatedUnits);
   };
 
@@ -2011,8 +2126,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     });
   };
 
-  // UI-003: Ability Activation Execution (Zero-CP rule, +1 CP generation, and Action VFX/SFX)
-  const handleActivateAbility = (item: {
+  interface BattlefieldAbilityItem {
     key: string;
     ability: UnitAbility;
     sourceName: string;
@@ -2020,11 +2134,30 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     sourceUnitId?: string;
     isFaction: boolean;
     isActivatable: boolean;
-  }) => {
-    if (!item.isActivatable) return;
+    disabledReason?: string;
+    usageLimit: AbilityUsageLimit;
+  }
 
-    const { ability, key, sourceName, sourceUnitId } = item;
+  // UI-003: Ability Activation Execution (Zero-CP rule, +1 CP generation, and Action VFX/SFX)
+  const handleActivateAbility = (item: BattlefieldAbilityItem) => {
+    const { ability, key, sourceName, sourceUnitId, isFaction } = item;
+    
+    // Check runtime activation rules
+    const check = checkAbilityActivation({
+      ability,
+      isFaction,
+      currentPhase: gameState.phase,
+      usedInRound: usedAbilitiesThisRound[key] || 0,
+      usedInGame: !!usedAbilitiesThisGame[key]
+    });
+
+    if (!check.isActivatable) {
+      addLog(`⛔ Cannot activate ${ability.name}: ${check.disabledReason}`, 'info');
+      return;
+    }
+
     const isP1 = gameState.activePlayer === 'player1';
+    const activeOwner = gameState.activePlayer;
     const gainsCP = ability.cost === 'gain_1_cp' || !!ability.gainsCP;
 
     setGameState(prev => {
@@ -2032,28 +2165,116 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       const p1CP = isP1 && gainsCP ? (prev.player1CP ?? 0) + 1 : (prev.player1CP ?? 0);
       const p2CP = !isP1 && gainsCP ? (prev.player2CP ?? 0) + 1 : (prev.player2CP ?? 0);
 
+      const isTargetFriendly = (u: Unit) => u.owner === activeOwner && (u.stats?.lives ?? 0) > 0;
+
+      let affectedCount = 0;
       const updatedUnits = prev.units.map(u => {
-        if (sourceUnitId && u.id === sourceUnitId) {
-          if (ability.effectType === 'stat_modifier') {
-            return {
-              ...u,
-              advantageStacks: Math.min(2, u.advantageStacks + 1)
-            };
-          }
-          if (ability.effectType === 'defense') {
-            return {
-              ...u,
-              stats: {
-                ...u.stats,
-                defModifier: Math.min(3, u.stats.defModifier + 1)
-              }
-            };
-          }
+        let shouldAffect = false;
+        if (isFaction || ability.affects === 'all_friendly' || ability.affects === 'all_allies') {
+          shouldAffect = isTargetFriendly(u);
+        } else if (ability.affects === 'self' || !ability.affects) {
+          shouldAffect = !!(sourceUnitId && u.id === sourceUnitId);
+        } else if (sourceUnitId && u.id === sourceUnitId) {
+          shouldAffect = true;
         }
-        return u;
+
+        if (!shouldAffect) return u;
+        affectedCount++;
+
+        let updated = { ...u };
+
+        // 1. Movement boost (The Crimson Empire: Blood-Alchemical Overdrive, Chronarch: Temporal Loom Surge, movement effects)
+        if (
+          ability.id === 'crimson_blood_forge' ||
+          ability.id === 'chronarch_temporal_warp' ||
+          ability.effectType === 'movement' ||
+          ability.effect?.toLowerCase().includes('+1 to movement') ||
+          ability.effect?.toLowerCase().includes('+1 movement')
+        ) {
+          const currentBaseMv = u.stats.baseMv ?? u.stats.mv;
+          const newTraits = u.traits ? [...u.traits] : [];
+          if (!newTraits.includes('IgnoreDifficultTerrain')) {
+            newTraits.push('IgnoreDifficultTerrain');
+          }
+          updated = {
+            ...updated,
+            traits: newTraits,
+            advantageStacks: Math.min(2, updated.advantageStacks + 1),
+            stats: {
+              ...updated.stats,
+              baseMv: currentBaseMv,
+              mv: updated.stats.mv + 1
+            }
+          };
+        }
+
+        // 2. Defence boost (Daughters of Astraea: Dawn Aegis Aura, Ironclad: Runic Phalanx, defense effects)
+        if (
+          ability.id === 'astraea_dawn_vigil' ||
+          ability.id === 'ironclad_rune_phalanx' ||
+          ability.effectType === 'defense' ||
+          ability.effect?.toLowerCase().includes('defence') ||
+          ability.effect?.toLowerCase().includes('defense')
+        ) {
+          updated = {
+            ...updated,
+            stats: {
+              ...updated.stats,
+              defModifier: Math.min(3, (updated.stats.defModifier || 0) + 1)
+            }
+          };
+        }
+
+        // 3. Attack boost (The Infernal Crusades: Hellfire Shockwave, attack modifiers)
+        if (
+          ability.id === 'infernal_hellfire_rush' ||
+          (ability.effectType === 'stat_modifier' && ability.effect?.toLowerCase().includes('attack modifier'))
+        ) {
+          updated = {
+            ...updated,
+            advantageStacks: Math.min(2, updated.advantageStacks + 1),
+            stats: {
+              ...updated.stats,
+              am: updated.stats.am + 1
+            }
+          };
+        }
+
+        // 4. Healing (The Court of Nocturne: Crimson Eclipse Feast, heal effects)
+        if (
+          ability.id === 'nocturne_vampiric_feast' ||
+          ability.effectType === 'heal' ||
+          ability.effect?.toLowerCase().includes('heal')
+        ) {
+          const healedLives = Math.min(updated.stats.maxLives, updated.stats.lives + 1);
+          updated = syncUnitTokens({
+            ...updated,
+            stats: {
+              ...updated.stats,
+              lives: healedLives
+            }
+          });
+        }
+
+        // Fallback for general stat_modifier
+        if (
+          ability.effectType === 'stat_modifier' &&
+          ability.id !== 'crimson_blood_forge' &&
+          ability.id !== 'infernal_hellfire_rush'
+        ) {
+          updated = {
+            ...updated,
+            advantageStacks: Math.min(2, updated.advantageStacks + 1)
+          };
+        }
+
+        return updated;
       });
 
-      const logMsg = `⚡ ABILITY ACTIVATION: [${ability.name}] invoked by ${sourceName}! ${ability.effect}${gainsCP ? ' (+1 Free CP Gained! ⭐)' : ''}`;
+      const logMsg = isFaction
+        ? `⚡ FACTION DOCTRINE: [${ability.name}] activated by ${sourceName}! ${ability.effect} (${affectedCount} friendly squad(s) enhanced).`
+        : `⚡ ABILITY ACTIVATION: [${ability.name}] invoked by ${sourceName}! ${ability.effect}${gainsCP ? ' (+1 Free CP Gained! ⭐)' : ''}`;
+
       return {
         ...prev,
         player1CP: p1CP,
@@ -2080,12 +2301,23 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     const vfxStyle = gainsCP ? 'gain_cp' : (ability.vfxType || (ability.effectType === 'defense' ? 'holy' : 'command'));
     vfxDispatcher.triggerAbility(casterPos, ability.icon || '⚡', ability.name, vfxStyle as any);
 
+    // If it's a faction ability or all_friendly ability, also pulse VFX on each deployed friendly unit
+    if (isFaction || ability.affects === 'all_friendly' || ability.affects === 'all_allies') {
+      gameState.units
+        .filter(u => u.owner === activeOwner && u.position && (u.stats?.lives ?? 0) > 0)
+        .forEach(u => {
+          if (u.position) {
+            vfxDispatcher.triggerAbility(u.position, ability.icon || (ability.vfxType === 'blood' ? '🩸' : '✨'), ability.name, vfxStyle as any);
+          }
+        });
+    }
+
     setUsedAbilitiesThisRound(prev => ({
       ...prev,
       [key]: (prev[key] || 0) + 1
     }));
 
-    if (ability.cost === 'once_per_game') {
+    if (check.rule === 'once_per_game') {
       setUsedAbilitiesThisGame(prev => ({
         ...prev,
         [key]: true
@@ -2096,59 +2328,85 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
   };
 
   // Combat Execution
-  const handleExecuteShooting = () => {
-    if (!selectedUnit || !targetUnit || !selectedUnit.position || !targetUnit.position) return;
+  const handleExecuteShooting = (specificShooter?: Unit) => {
+    if (!selectedUnit || !targetUnit || !targetUnit.position) return;
 
-    // BUG-018: If selected unit is an attached leader, check host squad
-    if (selectedUnit.attachedTo) {
-      const hostSquad = gameState.units.find(u => u.id === selectedUnit.attachedTo);
-      if (hostSquad && (hostSquad.stats.range === 0 || hostSquad.hasShot)) {
-        addLog(`⛔ Cannot Shoot: Attached leader cannot fire because host squad (${hostSquad.name}) ${hostSquad.stats.range === 0 ? 'is melee-only' : 'has already shot'}!`, 'info');
-        return;
+    // Determine shooter: specific unit passed, or attached leader if selected squad is melee-only
+    let shooter: Unit = specificShooter || selectedUnit;
+    if (!specificShooter && selectedUnit.stats.range === 0 && selectedUnit.attachedUnits) {
+      const attachedLeaders = selectedUnit.attachedUnits
+        .map(id => gameState.units.find(u => u.id === id))
+        .filter((l): l is Unit => !!l && l.stats.range > 0 && !l.hasShot && (l.stats?.lives ?? 0) > 0);
+      if (attachedLeaders.length > 0) {
+        shooter = attachedLeaders[0];
       }
     }
 
-    if (!isUnitInShootingRange(selectedUnit, targetUnit, DEFAULT_GRID_SIZE)) {
-      const { minModelDistPx } = getUnitsModelDistance(selectedUnit, targetUnit);
+    const isLeaderShooting = !!shooter.attachedTo || (selectedUnit.attachedUnits?.includes(shooter.id) && shooter.id !== selectedUnit.id);
+    const hostSquad = isLeaderShooting
+      ? gameState.units.find(u => u.id === (shooter.attachedTo || selectedUnit.id))
+      : null;
+
+    if (shooter.stats.range === 0) {
+      addLog(`⛔ Cannot Shoot: ${shooter.name} is melee-only (range 0)!`, 'info');
+      return;
+    }
+    if (shooter.hasShot) {
+      addLog(`⛔ Cannot Shoot: ${shooter.name} has already fired this round!`, 'info');
+      return;
+    }
+
+    const originPos = shooter.position || hostSquad?.position;
+    if (!originPos) return;
+
+    const measuringUnit: Unit = {
+      ...(hostSquad || shooter),
+      stats: {
+        ...(hostSquad || shooter).stats,
+        range: shooter.stats.range
+      }
+    };
+
+    if (!isUnitInShootingRange(measuringUnit, targetUnit, DEFAULT_GRID_SIZE)) {
+      const { minModelDistPx } = getUnitsModelDistance(measuringUnit, targetUnit);
       const distSq = (minModelDistPx / DEFAULT_GRID_SIZE).toFixed(1);
-      addLog(`Target is out of range (${distSq} sq > ${selectedUnit.stats.range} sq).`, 'info');
+      addLog(`Target is out of range (${distSq} sq > ${shooter.stats.range} sq).`, 'info');
       return;
     }
 
     const onHighGround = gameState.specialTiles.some(t => {
       const tx = t.x > 30 ? t.x : t.x * DEFAULT_GRID_SIZE + DEFAULT_GRID_SIZE / 2;
       const ty = t.y > 30 ? t.y : t.y * DEFAULT_GRID_SIZE + DEFAULT_GRID_SIZE / 2;
-      return Math.hypot(selectedUnit.position!.x - tx, selectedUnit.position!.y - ty) < 45 && t.type === 'HighGround';
+      return Math.hypot(originPos.x - tx, originPos.y - ty) < 45 && t.type === 'HighGround';
     });
 
-    const result = resolveCombat(selectedUnit, targetUnit, false, onHighGround ? 1 : 0);
+    const attackerUnit: Unit = {
+      ...shooter,
+      position: originPos
+    };
+
+    const result = resolveCombat(attackerUnit, targetUnit, false, onHighGround ? 1 : 0);
     setRecentCombatResult(result);
-    addLog(result.logText, 'combat', 'Shooting');
-    applyDamageToUnit(targetUnit.id, result.livesLost, result.defModifierChange, selectedUnit.owner);
+    
+    const combatMessage = isLeaderShooting && hostSquad
+      ? `🎯 [Leader Fire] ${shooter.name} (attached to ${hostSquad.name}) fired at ${targetUnit.name}! ${result.logText}`
+      : result.logText;
+    addLog(combatMessage, 'combat', 'Shooting');
+    applyDamageToUnit(targetUnit.id, result.livesLost, result.defModifierChange, shooter.owner);
 
     // Trigger unit-specific and action-specific shooting VFX & SFX
-    if (selectedUnit.position && targetUnit.position) {
-      let shootVariant: 'ballistic' | 'laser' | 'plasma' = 'ballistic';
-      if (selectedUnit.traits?.includes('Psionic') || selectedUnit.abilities?.some(a => a.vfxType === 'laser')) {
-        shootVariant = 'laser';
-      } else if (selectedUnit.type === 'Monster' || selectedUnit.traits?.includes('Berserk') || selectedUnit.abilities?.some(a => a.vfxType === 'plasma')) {
-        shootVariant = 'plasma';
-      }
-      vfxDispatcher.triggerShoot(selectedUnit.position, targetUnit.position, shootVariant);
+    let shootVariant: 'ballistic' | 'laser' | 'plasma' = 'ballistic';
+    if (shooter.traits?.includes('Psionic') || shooter.abilities?.some(a => a.vfxType === 'laser')) {
+      shootVariant = 'laser';
+    } else if (shooter.type === 'Monster' || shooter.traits?.includes('Berserk') || shooter.abilities?.some(a => a.vfxType === 'plasma')) {
+      shootVariant = 'plasma';
     }
+    vfxDispatcher.triggerShoot(originPos, targetUnit.position, shootVariant);
 
-    // Mark unit and any attached leaders (or host squad) as having shot
-    const shotUnitIds = new Set<string>([selectedUnit.id]);
-    if (selectedUnit.attachedUnits) {
-      selectedUnit.attachedUnits.forEach(id => shotUnitIds.add(id));
-    }
-    if (selectedUnit.attachedTo) {
-      shotUnitIds.add(selectedUnit.attachedTo);
-    }
-
+    // Mark ONLY the actual shooter as having shot (not the entire unit if only leader fired)
     setGameState(prev => ({
       ...prev,
-      units: prev.units.map(u => shotUnitIds.has(u.id) ? { ...u, hasShot: true } : u)
+      units: prev.units.map(u => u.id === shooter.id ? { ...u, hasShot: true } : u)
     }));
   };
 
@@ -2675,7 +2933,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
           const clonedUnits = [...baseUnits];
           const eventRes = checkAndTriggerEvents(prev.round, clonedEvents, clonedUnits);
 
-          // Reset all action flags, stacks, and refresh turnStartPos for all units
+          // Reset all action flags, stacks, temporary round buffs, and refresh turnStartPos for all units
           const cleanUnits = clonedUnits.map(u => ({
             ...u,
             hasMoved: false,
@@ -2687,6 +2945,12 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
             pendingOriginalTokens: undefined,
             advantageStacks: 0,
             disadvantageStacks: 0,
+            traits: (u.traits || []).filter(t => t !== 'IgnoreDifficultTerrain' && t !== 'IgnoreTerrain'),
+            stats: {
+              ...u.stats,
+              mv: u.stats.baseMv ?? u.stats.mv,
+              defModifier: 0
+            },
             tokens: (u.tokens || []).map(t => ({
               ...t,
               turnStartPos: { x: t.x, y: t.y },
@@ -3036,45 +3300,19 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
   const currentCP = gameState.activePlayer === 'player1' ? (gameState.player1CP ?? 0) : (gameState.player2CP ?? 0);
 
-  interface BattlefieldAbilityItem {
-    key: string;
-    ability: UnitAbility;
-    sourceName: string;
-    sourceAvatar: string;
-    sourceUnitId?: string;
-    isFaction: boolean;
-    isActivatable: boolean;
-    disabledReason?: string;
-  }
-
   const availableAbilities: BattlefieldAbilityItem[] = [];
 
   // 1. Faction Ability
   if (activeFaction?.factionAbility) {
     const ab = activeFaction.factionAbility;
     const key = `faction_${activeFaction.id}_${ab.id}`;
-    let isAct = false;
-    let reason = '';
-
-    if (ab.type === 'passive') {
-      reason = 'Passive doctrine always active';
-    } else {
-      const timingMatches = !ab.activationTiming || ab.activationTiming === 'any_time' || ab.activationTiming.toLowerCase() === gameState.phase.toLowerCase();
-      const usedInRound = usedAbilitiesThisRound[key] || 0;
-      const usedInGame = usedAbilitiesThisGame[key];
-
-      if (!timingMatches) {
-        reason = `Available in ${ab.activationTiming?.replace('_', ' ').toUpperCase()} phase`;
-      } else if (ab.cost === 'once_per_round' && usedInRound >= 1) {
-        reason = 'Already used this round';
-      } else if (ab.cost === 'once_per_game' && usedInGame) {
-        reason = 'Already used this match';
-      } else if (ab.cost === 'once_per_activation' && usedInRound >= 1) {
-        reason = 'Already activated';
-      } else {
-        isAct = true;
-      }
-    }
+    const check = checkAbilityActivation({
+      ability: ab,
+      isFaction: true,
+      currentPhase: gameState.phase,
+      usedInRound: usedAbilitiesThisRound[key] || 0,
+      usedInGame: !!usedAbilitiesThisGame[key]
+    });
 
     availableAbilities.push({
       key,
@@ -3082,39 +3320,33 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       sourceName: `${activeFaction.shortName || activeFaction.name} (Faction)`,
       sourceAvatar: activeFaction.symbol || '🔮',
       isFaction: true,
-      isActivatable: isAct,
-      disabledReason: reason
+      isActivatable: check.isActivatable,
+      disabledReason: check.disabledReason,
+      usageLimit: check.rule
     });
   }
 
-  // 2. Unit Abilities (Zero-CP cost rule)
+  // 2. Unit Abilities (Zero-CP cost rule - added to player hand when unit is deployed on battlefield)
   gameState.units
-    .filter(u => u.owner === gameState.activePlayer && (u.stats?.lives ?? 0) > 0 && u.position)
+    .filter(u => {
+      if (u.owner !== gameState.activePlayer || (u.stats?.lives ?? 0) <= 0) return false;
+      if (u.position) return true;
+      if (u.attachedTo) {
+        const host = gameState.units.find(b => b.id === u.attachedTo);
+        return !!host?.position;
+      }
+      return false;
+    })
     .forEach(u => {
       (u.abilities || []).forEach((ab, idx) => {
         const key = `unit_${u.id}_${ab.id || idx}`;
-        let isAct = false;
-        let reason = '';
-
-        if (ab.type === 'passive') {
-          reason = 'Passive skill always active';
-        } else {
-          const timingMatches = !ab.activationTiming || ab.activationTiming === 'any_time' || ab.activationTiming.toLowerCase() === gameState.phase.toLowerCase();
-          const usedInRound = usedAbilitiesThisRound[key] || 0;
-          const usedInGame = usedAbilitiesThisGame[key];
-
-          if (!timingMatches) {
-            reason = `Available in ${ab.activationTiming?.replace('_', ' ').toUpperCase()} phase`;
-          } else if (ab.cost === 'once_per_round' && usedInRound >= 1) {
-            reason = 'Already used this round';
-          } else if (ab.cost === 'once_per_game' && usedInGame) {
-            reason = 'Already used this match';
-          } else if (ab.cost === 'once_per_activation' && usedInRound >= 1) {
-            reason = 'Already activated';
-          } else {
-            isAct = true;
-          }
-        }
+        const check = checkAbilityActivation({
+          ability: ab,
+          isFaction: false,
+          currentPhase: gameState.phase,
+          usedInRound: usedAbilitiesThisRound[key] || 0,
+          usedInGame: !!usedAbilitiesThisGame[key]
+        });
 
         availableAbilities.push({
           key,
@@ -3123,8 +3355,9 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
           sourceAvatar: u.avatar || '⚔️',
           sourceUnitId: u.id,
           isFaction: false,
-          isActivatable: isAct,
-          disabledReason: reason
+          isActivatable: check.isActivatable,
+          disabledReason: check.disabledReason,
+          usageLimit: check.rule
         });
       });
     });
@@ -3796,40 +4029,150 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
               {gameState.phase === 'Shooting' && (
                 selectedUnit.owner === gameState.activePlayer ? (() => {
-                  const hostSquad = selectedUnit.attachedTo ? gameState.units.find(u => u.id === selectedUnit.attachedTo) : null;
-                  const hostBlocked = hostSquad && (hostSquad.stats.range === 0 || hostSquad.hasShot);
-                  if (hostBlocked) {
+                  const isAttachedLeader = !!selectedUnit.attachedTo;
+                  
+                  const attachedLeaders = (selectedUnit.attachedUnits || [])
+                    .map(id => gameState.units.find(u => u.id === id))
+                    .filter((l): l is Unit => !!l && (l.stats?.lives ?? 0) > 0);
+                  const rangedAttachedLeaders = attachedLeaders.filter(l => l.stats.range > 0);
+
+                  const squadCanShoot = selectedUnit.stats.range > 0;
+                  const squadHasFired = selectedUnit.hasShot;
+
+                  // Case 1: Selected unit is an attached leader directly
+                  if (isAttachedLeader) {
+                    if (selectedUnit.stats.range === 0) {
+                      return (
+                        <div className="px-3 py-1.5 bg-zinc-850 border border-zinc-750 rounded-lg text-xs text-zinc-500 font-mono">
+                          Leader Melee Only (Range 0)
+                        </div>
+                      );
+                    }
+                    if (selectedUnit.hasShot) {
+                      return (
+                        <button disabled className="bg-zinc-800/90 border border-zinc-700 text-zinc-500 font-bold text-xs px-3.5 py-1.5 rounded-lg flex items-center space-x-1 cursor-not-allowed">
+                          <span>✓ Leader Already Fired</span>
+                        </button>
+                      );
+                    }
+                    if (targetUnit) {
+                      return (
+                        <button
+                          onClick={() => handleExecuteShooting(selectedUnit)}
+                          className="bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs px-3.5 py-1.5 rounded-lg flex items-center space-x-1.5 shadow cursor-pointer transition active:scale-95"
+                        >
+                          <Target className="w-3.5 h-3.5" />
+                          <span>Fire Leader ({selectedUnit.stats.range} sq)</span>
+                        </button>
+                      );
+                    }
                     return (
-                      <div className="px-3 py-1.5 bg-zinc-850 border border-zinc-750 rounded-lg text-xs text-zinc-400 font-mono">
-                        Host Squad {hostSquad.stats.range === 0 ? 'Melee Only' : 'Already Fired'}
+                      <div className="px-3 py-1.5 bg-rose-950/40 border border-rose-800/50 rounded-lg text-xs text-rose-300 font-mono">
+                        Click enemy target in range ({selectedUnit.stats.range} sq)
                       </div>
                     );
                   }
-                  if (selectedUnit.stats.range === 0) {
+
+                  // Case 2: Selected unit is a melee squad, but has an attached leader who CAN shoot
+                  if (!squadCanShoot && rangedAttachedLeaders.length > 0) {
+                    const readyLeader = rangedAttachedLeaders.find(l => !l.hasShot);
+                    if (!readyLeader) {
+                      return (
+                        <button disabled className="bg-zinc-800/90 border border-zinc-750 text-zinc-500 font-bold text-xs px-3.5 py-1.5 rounded-lg flex items-center space-x-1 cursor-not-allowed font-mono">
+                          <span>✓ Attached Leader Already Fired</span>
+                        </button>
+                      );
+                    }
+                    if (targetUnit) {
+                      return (
+                        <button
+                          onClick={() => handleExecuteShooting(readyLeader)}
+                          className="bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs px-3.5 py-1.5 rounded-lg flex items-center space-x-1.5 shadow cursor-pointer transition active:scale-95"
+                        >
+                          <Target className="w-3.5 h-3.5" />
+                          <span>Fire Leader: {readyLeader.name} ({readyLeader.stats.range} sq)</span>
+                        </button>
+                      );
+                    }
+                    return (
+                      <div className="px-3 py-1.5 bg-rose-950/40 border border-rose-800/50 rounded-lg text-xs text-rose-300 font-mono">
+                        Squad Melee • Click enemy for Leader {readyLeader.name} ({readyLeader.stats.range} sq)
+                      </div>
+                    );
+                  }
+
+                  // Case 3: Both squad and attached leader(s) can shoot
+                  if (squadCanShoot && rangedAttachedLeaders.length > 0) {
+                    const readyLeaders = rangedAttachedLeaders.filter(l => !l.hasShot);
+                    return (
+                      <div className="flex items-center space-x-2">
+                        {!squadHasFired ? (
+                          targetUnit ? (
+                            <button
+                              onClick={() => handleExecuteShooting(selectedUnit)}
+                              className="bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs px-3 py-1.5 rounded-lg flex items-center space-x-1 shadow cursor-pointer transition active:scale-95"
+                            >
+                              <Target className="w-3.5 h-3.5" />
+                              <span>Fire Squad ({selectedUnit.stats.range} sq)</span>
+                            </button>
+                          ) : (
+                            <div className="px-2.5 py-1 bg-rose-950/40 border border-rose-800/50 rounded-lg text-xs text-rose-300 font-mono">
+                              Squad Range: {selectedUnit.stats.range} sq
+                            </div>
+                          )
+                        ) : (
+                          <span className="text-zinc-500 text-xs font-mono">✓ Squad Fired</span>
+                        )}
+
+                        {readyLeaders.map(leader => (
+                          targetUnit ? (
+                            <button
+                              key={leader.id}
+                              onClick={() => handleExecuteShooting(leader)}
+                              className="bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs px-3 py-1.5 rounded-lg flex items-center space-x-1 shadow cursor-pointer transition active:scale-95"
+                            >
+                              <Target className="w-3.5 h-3.5" />
+                              <span>Fire {leader.name} ({leader.stats.range} sq)</span>
+                            </button>
+                          ) : (
+                            <span key={leader.id} className="text-amber-400/80 text-[11px] font-mono">
+                              {leader.name} ({leader.stats.range} sq)
+                            </span>
+                          )
+                        ))}
+                      </div>
+                    );
+                  }
+
+                  // Case 4: Standard squad without ranged leaders
+                  if (!squadCanShoot) {
                     return (
                       <div className="px-3 py-1.5 bg-zinc-850 border border-zinc-750 rounded-lg text-xs text-zinc-500 font-mono">
                         Melee Only (Range 0)
                       </div>
                     );
                   }
-                  if (selectedUnit.hasShot) {
+
+                  if (squadHasFired) {
                     return (
                       <button disabled className="bg-zinc-800/90 border border-zinc-700 text-zinc-500 font-bold text-xs px-3.5 py-1.5 rounded-lg flex items-center space-x-1 cursor-not-allowed">
                         <span>✓ Already Fired</span>
                       </button>
                     );
                   }
+
                   if (targetUnit) {
                     return (
                       <button
-                        onClick={handleExecuteShooting}
-                        className="bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs px-3.5 py-1.5 rounded-lg flex items-center space-x-1.5 shadow"
+                        onClick={() => handleExecuteShooting(selectedUnit)}
+                        className="bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs px-3.5 py-1.5 rounded-lg flex items-center space-x-1.5 shadow cursor-pointer transition active:scale-95"
                       >
                         <Target className="w-3.5 h-3.5" />
                         <span>Fire Ranged ({selectedUnit.stats.range} sq)</span>
                       </button>
                     );
                   }
+
                   return (
                     <div className="px-3 py-1.5 bg-rose-950/40 border border-rose-800/50 rounded-lg text-xs text-rose-300 font-mono">
                       Click enemy target in range ({selectedUnit.stats.range} sq)
@@ -4126,9 +4469,16 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
                           {/* Card Type & Phase Ribbon */}
                           <div className={`mx-2 px-1.5 py-0.5 rounded flex items-center justify-between text-[8px] font-mono border ${themeStyle.ribbonBg}`}>
-                            <span className={`font-bold ${themeStyle.accentText}`}>
-                              {isFaction ? '🔮 FACTION' : isPassive ? '🛡️ PASSIVE' : '⚡ TACTIC'}
-                            </span>
+                            <div className="flex items-center space-x-1">
+                              <span className={`font-bold ${themeStyle.accentText}`}>
+                                {isFaction ? '🔮 FACTION' : isPassive ? '🛡️ PASSIVE' : '⚡ TACTIC'}
+                              </span>
+                              {!isPassive && (
+                                <span className="px-1 rounded bg-black/50 text-amber-300 font-bold text-[7px]">
+                                  {item.usageLimit === 'once_per_game' ? '1x/GAME' : item.usageLimit === 'once_per_activation' ? '1x/ACT' : '1x/RND'}
+                                </span>
+                              )}
+                            </div>
                             <span className="text-zinc-300 uppercase font-semibold">
                               {ability.activationTiming ? ability.activationTiming.replace('_', ' ') : 'ANY TIME'}
                             </span>
@@ -4307,20 +4657,123 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
             </div>
           )}
 
-          {/* Tab 3: Active Command Cards */}
+          {/* Tab 3: Tactical & Faction Playing Cards Hand + Mission Objectives */}
           {rightTab === 'cards' && (
-            <div className="flex-1 overflow-y-auto p-3 space-y-2.5">
-              <span className="text-xs uppercase font-mono tracking-wider text-zinc-400 block font-bold">Player 1 Active Cards (4)</span>
-              {gameState.player1ActiveCards.map((card, idx) => (
-                <div key={card.id} className="bg-zinc-950 p-2.5 rounded-lg border border-zinc-800 space-y-1">
-                  <div className="flex justify-between items-center text-[10px] font-mono">
-                    <span className="text-amber-400 font-bold">Slot {idx + 1}</span>
-                    <span className="text-zinc-500">{card.type}</span>
+            <div className="flex-1 overflow-y-auto p-3 space-y-4">
+              {/* Section 1: Playing Cards in Hand */}
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-1.5">
+                    <span className="text-amber-400">🃏</span>
+                    <span className="text-xs uppercase font-mono tracking-wider text-zinc-300 font-bold">
+                      Cards in Hand ({availableAbilities.length})
+                    </span>
                   </div>
-                  <span className="font-bold text-white text-xs block">{card.name}</span>
-                  <p className="text-[11px] text-zinc-400">{card.objectiveText || card.description}</p>
+                  <button
+                    onClick={() => setAbilitiesDockOpen(prev => !prev)}
+                    className="text-[10px] text-amber-400 hover:text-amber-300 font-mono underline cursor-pointer"
+                  >
+                    {abilitiesDockOpen ? 'Hide Dock' : 'Expand Dock'}
+                  </button>
                 </div>
-              ))}
+
+                {availableAbilities.length === 0 ? (
+                  <div className="p-4 bg-zinc-950/80 border border-dashed border-zinc-800 rounded-xl text-center space-y-1">
+                    <Zap className="w-5 h-5 text-zinc-600 mx-auto" />
+                    <span className="text-[11px] text-zinc-400 block font-mono font-bold">No Cards In Hand</span>
+                    <p className="text-[9px] text-zinc-500">
+                      Deploy squads from the tray to draw their tactical ability cards into your Hand!
+                    </p>
+                  </div>
+                ) : (
+                  availableAbilities.map(item => {
+                    const { key, ability, sourceName, sourceAvatar, isFaction, isActivatable, disabledReason } = item;
+                    const gainsCP = ability.cost === 'gain_1_cp' || !!ability.gainsCP;
+                    const isPassive = ability.type === 'passive';
+
+                    return (
+                      <div
+                        key={key}
+                        className={`p-2.5 rounded-xl border transition space-y-1.5 ${
+                          isActivatable
+                            ? 'bg-zinc-950 border-amber-500/70 shadow-[0_0_12px_rgba(245,158,11,0.15)]'
+                            : 'bg-zinc-950/60 border-zinc-800'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between text-[10px] font-mono">
+                          <div className="flex items-center space-x-1 min-w-0">
+                            <span>{ability.icon || sourceAvatar || '⚡'}</span>
+                            <span className="font-bold text-white text-xs truncate">{ability.name}</span>
+                          </div>
+                          <div className="flex items-center space-x-1">
+                            {!isPassive && (
+                              <span className="px-1.5 py-0.2 rounded text-[7px] font-mono font-bold bg-amber-950/80 text-amber-300 border border-amber-500/40">
+                                {item.usageLimit === 'once_per_game' ? '1x/GAME' : item.usageLimit === 'once_per_activation' ? '1x/ACT' : '1x/RND'}
+                              </span>
+                            )}
+                            <span className={`px-1.5 py-0.2 rounded text-[8px] font-mono uppercase font-bold ${
+                              isFaction ? 'bg-purple-950 text-purple-300 border border-purple-800' : 'bg-zinc-850 text-zinc-400'
+                            }`}>
+                              {isFaction ? 'Faction' : 'Unit'}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between text-[9px] font-mono text-zinc-400">
+                          <span className="text-amber-300/90">{sourceName}</span>
+                          <span className="uppercase text-zinc-400">{ability.activationTiming?.replace('_', ' ') || 'Any Time'}</span>
+                        </div>
+
+                        <p className="text-[10px] text-zinc-300 leading-tight">{ability.effect}</p>
+
+                        <div className="pt-1 flex items-center justify-between gap-2 border-t border-zinc-850">
+                          <span className="text-[9px] font-mono">
+                            {gainsCP ? (
+                              <span className="text-emerald-400 font-bold">+1 Free CP ⭐</span>
+                            ) : isPassive ? (
+                              <span className="text-sky-400 font-bold">Passive</span>
+                            ) : (
+                              <span className="text-amber-300 font-bold">0 CP</span>
+                            )}
+                          </span>
+
+                          {isPassive ? (
+                            <span className="text-[9px] font-mono text-sky-400 font-bold">Always Active</span>
+                          ) : isActivatable ? (
+                            <button
+                              onClick={() => handleActivateAbility(item)}
+                              className="px-2.5 py-1 bg-amber-500 hover:bg-amber-400 text-black font-bold font-mono text-[10px] rounded-lg shadow cursor-pointer transition active:scale-95"
+                            >
+                              Play Card
+                            </button>
+                          ) : (
+                            <span className="text-[9px] font-mono text-zinc-500">
+                              🔒 {disabledReason || 'Phase Locked'}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              {/* Section 2: Secondary Mission Cards */}
+              <div className="space-y-2 pt-2 border-t border-zinc-800">
+                <span className="text-xs uppercase font-mono tracking-wider text-zinc-400 block font-bold">
+                  Mission Objectives (4)
+                </span>
+                {gameState.player1ActiveCards.map((card, idx) => (
+                  <div key={card.id} className="bg-zinc-950 p-2.5 rounded-lg border border-zinc-800 space-y-1">
+                    <div className="flex justify-between items-center text-[10px] font-mono">
+                      <span className="text-amber-400 font-bold">Slot {idx + 1}</span>
+                      <span className="text-zinc-500">{card.type}</span>
+                    </div>
+                    <span className="font-bold text-white text-xs block">{card.name}</span>
+                    <p className="text-[11px] text-zinc-400">{card.objectiveText || card.description}</p>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
@@ -4421,7 +4874,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                   {trayUnits.map(u => {
                     const isLeader = u.role === 'Leader' || u.role === 'Legendary Leader' || u.type === 'Character';
                     const isInfantry = u.type === 'Infantry';
-                    const canBypass = canUnitDeployOutsideZone(u);
+                    const canBypass = canUnitDeployOutsideZone(u, gameState.units);
                     const baseDims = getUnitBaseDimensions(u);
                     const attachedLeader = u.attachedUnits && u.attachedUnits.length > 0 
                       ? gameState.units.find(x => u.attachedUnits!.includes(x.id)) 
@@ -4520,6 +4973,12 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                           {canBypass && (
                             <span className="px-1.5 py-0.5 rounded bg-purple-950/80 border border-purple-700/80 text-purple-300 font-bold">
                               DEPLOY ANYWHERE
+                            </span>
+                          )}
+
+                          {!canBypass && (u.canDeployOutsideZone || u.traits?.includes('Infiltrator') || u.traits?.includes('DEPLOY_OUTSIDE_ZONE')) && (
+                            <span className="px-1.5 py-0.5 rounded bg-rose-950/80 border border-rose-700/80 text-rose-300 font-bold" title="Infiltration blocked: attached leader cannot infiltrate">
+                              INFILTRATE BLOCKED BY LEADER
                             </span>
                           )}
 

@@ -443,7 +443,7 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
           if (activePhase === 'Deployment') {
             const zoneDepth = unit.owner === 'player1' ? p1ZoneWidth : p2ZoneWidth;
             const inZone = isInsideDeploymentZone({ x: targetX, y: targetY }, unit.owner, WORLD_WIDTH, zoneDepth);
-            if (!canUnitDeployOutsideZone(unit) && !inZone) {
+            if (!canUnitDeployOutsideZone(unit, units) && !inZone) {
               setRejectedPlacementNotice(
                 `⚠️ Placement Rejected: Model cannot deploy outside your designated deployment zone!`
               );
@@ -523,7 +523,7 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
       targetX = Math.max(collisionRadius, Math.min(WORLD_WIDTH - collisionRadius, targetX));
       targetY = Math.max(collisionRadius, Math.min(WORLD_HEIGHT - collisionRadius, targetY));
 
-      const canBypassZone = canUnitDeployOutsideZone(unit);
+      const canBypassZone = canUnitDeployOutsideZone(unit, units);
 
       // Hard Deployment Zone Restriction Check
       if (activePhase === 'Deployment') {
@@ -531,9 +531,18 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
         const inZone = isInsideDeploymentZone({ x: targetX, y: targetY }, unit.owner, WORLD_WIDTH, zoneDepth);
 
         if (!canBypassZone && !inZone) {
+          const hasInfiltratorTrait = !!(
+            unit.canDeployOutsideZone ||
+            unit.traits?.includes('Infiltrator') ||
+            unit.traits?.includes('DEPLOY_OUTSIDE_ZONE') ||
+            unit.passives?.some(p => p.toUpperCase().includes('INFILTRATOR') || p.toUpperCase().includes('DEPLOY_OUTSIDE_ZONE'))
+          );
+          const leaderBlocked = hasInfiltratorTrait && ((unit.attachedUnits && unit.attachedUnits.length > 0) || !!unit.attachedTo);
           // Reject placement: Return the unit to its previous valid position
           setRejectedPlacementNotice(
-            `⚠️ Placement Rejected: ${unit.name} cannot deploy outside your designated deployment zone (${unit.owner === 'player1' ? `West: x ≤ ${p1ZoneWidth}px` : `East: x ≥ ${WORLD_WIDTH - p2ZoneWidth}px`})! Units require the explicit 'DEPLOY_OUTSIDE_ZONE' trait to deploy forward.`
+            leaderBlocked
+              ? `⚠️ Placement Rejected: ${unit.name} has the Infiltrator trait, but an attached Leader lacks Infiltrator! Infiltration is blocked unless all attached models can infiltrate.`
+              : `⚠️ Placement Rejected: ${unit.name} cannot deploy outside your designated deployment zone (${unit.owner === 'player1' ? `West: x ≤ ${p1ZoneWidth}px` : `East: x ≥ ${WORLD_WIDTH - p2ZoneWidth}px`})! Units require the explicit 'Infiltrator' trait to deploy forward.`
           );
           setTimeout(() => setRejectedPlacementNotice(null), 5000);
           setDraggingUnitId(null);
@@ -778,7 +787,7 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
     activePhase === 'Deployment' &&
     draggingUnit &&
     ghostTargetPos &&
-    !canUnitDeployOutsideZone(draggingUnit) &&
+    !canUnitDeployOutsideZone(draggingUnit, units) &&
     !isInsideDeploymentZone(ghostTargetPos, draggingUnit.owner, WORLD_WIDTH, draggingUnit.owner === 'player1' ? p1ZoneWidth : p2ZoneWidth)
   );
   // Canvas Drag Over (Drag-from-Tray)
@@ -882,7 +891,7 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
 
     // Hard Deployment Zone Restriction Check
     if (activePhase === 'Deployment') {
-      const canBypass = canUnitDeployOutsideZone(unit);
+      const canBypass = canUnitDeployOutsideZone(unit, units);
       const zoneDepth = unit.owner === 'player1' ? p1ZoneWidth : p2ZoneWidth;
       const inZone = isInsideDeploymentZone(worldPt, unit.owner, WORLD_WIDTH, zoneDepth);
 
@@ -1745,11 +1754,15 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
                     <span className={unit.owner === 'player1' ? 'text-rose-400 font-bold' : 'text-sky-400 font-bold'}>
                       {unit.stats.lives}L ({tokens.length}U • {getUnitSize(unit)} • {unit.formation || 'circle'})
                     </span>
-                    {canUnitDeployOutsideZone(unit) && (
+                    {canUnitDeployOutsideZone(unit, units) ? (
                       <span className="bg-amber-950 border border-amber-500 text-amber-300 text-[8px] px-1 rounded uppercase font-black">
                         Infiltrator
                       </span>
-                    )}
+                    ) : (unit.traits?.includes('Infiltrator') || unit.canDeployOutsideZone) ? (
+                      <span className="bg-rose-950 border border-rose-500 text-rose-300 text-[8px] px-1 rounded uppercase font-black" title="Infiltration blocked by attached Leader">
+                        Infiltrate Blocked
+                      </span>
+                    ) : null}
                     {unit.attachedUnits && unit.attachedUnits.length > 0 && (
                       <span className="bg-amber-950 border border-amber-400 text-amber-300 text-[8px] px-1 rounded uppercase font-black">
                         ★ Commander

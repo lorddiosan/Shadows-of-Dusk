@@ -2,6 +2,7 @@ import { UserProfile } from '../types/user';
 import { ArmyRoster, FactionInfo } from '../types/army';
 import { Unit, BattleMap } from '../types/game';
 import { FACTIONS, UNIT_TEMPLATES } from '../data/factions';
+import { safeStorage } from './supabaseClient';
 
 const USER_STORAGE_KEY = 'sod_user_profile_v1';
 const ROSTERS_STORAGE_KEY = 'sod_army_rosters_v1';
@@ -11,9 +12,11 @@ const MAPS_STORAGE_KEY = 'sod_battle_maps_v1';
 
 const DEFAULT_PROFILE: UserProfile = {
   id: 'usr_guest_01',
+  username: 'dusk_commander',
   email: 'commander@convergence.war',
   displayName: 'Dusk Commander',
   avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=DuskCommander',
+  role: 'player',
   provider: 'guest',
   crystalShards: 1250,
   aetherCores: 200,
@@ -61,7 +64,7 @@ function getDefaultPresetArmies(): ArmyRoster[] {
 export const StorageService = {
   getUserProfile(): UserProfile {
     try {
-      const data = localStorage.getItem(USER_STORAGE_KEY);
+      const data = safeStorage.getItem(USER_STORAGE_KEY);
       if (data) return JSON.parse(data);
     } catch {
       // ignore
@@ -71,7 +74,7 @@ export const StorageService = {
 
   saveUserProfile(profile: UserProfile): void {
     try {
-      localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(profile));
+      safeStorage.setItem(USER_STORAGE_KEY, JSON.stringify(profile));
     } catch {
       // ignore
     }
@@ -79,17 +82,29 @@ export const StorageService = {
 
   getRosters(): ArmyRoster[] {
     try {
-      const data = localStorage.getItem(ROSTERS_STORAGE_KEY);
+      const data = safeStorage.getItem(ROSTERS_STORAGE_KEY);
       if (data) {
         const parsed = JSON.parse(data);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.map((r: ArmyRoster) => ({
+            ...r,
+            units: (r.units || []).map(u => {
+              const tpl = UNIT_TEMPLATES.find(t => t.templateId === u.templateId || t.name === u.name);
+              return {
+                ...u,
+                abilities: (u.abilities && u.abilities.length > 0) ? u.abilities : (tpl?.abilities || []),
+                traits: (u.traits && u.traits.length > 0) ? u.traits : (tpl?.traits || [])
+              };
+            })
+          }));
+        }
       }
     } catch {
       // ignore
     }
     const presets = getDefaultPresetArmies();
     try {
-      localStorage.setItem(ROSTERS_STORAGE_KEY, JSON.stringify(presets));
+      safeStorage.setItem(ROSTERS_STORAGE_KEY, JSON.stringify(presets));
     } catch {
       // ignore
     }
@@ -104,18 +119,18 @@ export const StorageService = {
     } else {
       rosters.push(roster);
     }
-    localStorage.setItem(ROSTERS_STORAGE_KEY, JSON.stringify(rosters));
+    safeStorage.setItem(ROSTERS_STORAGE_KEY, JSON.stringify(rosters));
   },
 
   deleteRoster(rosterId: string): void {
     const rosters = this.getRosters().filter(r => r.id !== rosterId);
-    localStorage.setItem(ROSTERS_STORAGE_KEY, JSON.stringify(rosters));
+    safeStorage.setItem(ROSTERS_STORAGE_KEY, JSON.stringify(rosters));
   },
 
   // Admin Custom Factions
   getFactions(): FactionInfo[] {
     try {
-      const custom = localStorage.getItem(CUSTOM_FACTIONS_KEY);
+      const custom = safeStorage.getItem(CUSTOM_FACTIONS_KEY);
       if (custom) {
         const parsed = JSON.parse(custom);
         // Combine base with custom
@@ -129,7 +144,15 @@ export const StorageService = {
     return FACTIONS;
   },
 
+  assertIsAdmin(): void {
+    const profile = this.getUserProfile();
+    if (profile.role !== 'admin') {
+      throw new Error('AUTH-010 Security Error: Unauthorized action. Only administrators can modify factions and unit templates.');
+    }
+  },
+
   saveFaction(faction: FactionInfo): void {
+    this.assertIsAdmin();
     try {
       const existing = this.getCustomFactionsOnly();
       const index = existing.findIndex(f => f.id === faction.id);
@@ -138,15 +161,15 @@ export const StorageService = {
       } else {
         existing.push(faction);
       }
-      localStorage.setItem(CUSTOM_FACTIONS_KEY, JSON.stringify(existing));
-    } catch {
-      // ignore
+      safeStorage.setItem(CUSTOM_FACTIONS_KEY, JSON.stringify(existing));
+    } catch (err: any) {
+      if (err.message?.includes('AUTH-010')) throw err;
     }
   },
 
   getCustomFactionsOnly(): FactionInfo[] {
     try {
-      const custom = localStorage.getItem(CUSTOM_FACTIONS_KEY);
+      const custom = safeStorage.getItem(CUSTOM_FACTIONS_KEY);
       if (custom) return JSON.parse(custom);
     } catch {
       // ignore
@@ -155,18 +178,19 @@ export const StorageService = {
   },
 
   deleteFaction(factionId: string): void {
+    this.assertIsAdmin();
     try {
       const existing = this.getCustomFactionsOnly().filter(f => f.id !== factionId);
-      localStorage.setItem(CUSTOM_FACTIONS_KEY, JSON.stringify(existing));
-    } catch {
-      // ignore
+      safeStorage.setItem(CUSTOM_FACTIONS_KEY, JSON.stringify(existing));
+    } catch (err: any) {
+      if (err.message?.includes('AUTH-010')) throw err;
     }
   },
 
   // Admin Custom Units
   getUnitTemplates(): Unit[] {
     try {
-      const custom = localStorage.getItem(CUSTOM_UNITS_KEY);
+      const custom = safeStorage.getItem(CUSTOM_UNITS_KEY);
       if (custom) {
         const parsed = JSON.parse(custom);
         const customIds = new Set(parsed.map((u: Unit) => u.templateId));
@@ -180,6 +204,7 @@ export const StorageService = {
   },
 
   saveUnitTemplate(unit: Unit): void {
+    this.assertIsAdmin();
     try {
       const existing = this.getCustomUnitsOnly();
       const index = existing.findIndex(u => u.templateId === unit.templateId);
@@ -188,15 +213,25 @@ export const StorageService = {
       } else {
         existing.push(unit);
       }
-      localStorage.setItem(CUSTOM_UNITS_KEY, JSON.stringify(existing));
-    } catch {
-      // ignore
+      safeStorage.setItem(CUSTOM_UNITS_KEY, JSON.stringify(existing));
+    } catch (err: any) {
+      if (err.message?.includes('AUTH-010')) throw err;
+    }
+  },
+
+  deleteUnitTemplate(templateId: string): void {
+    this.assertIsAdmin();
+    try {
+      const existing = this.getCustomUnitsOnly().filter(u => u.templateId !== templateId);
+      safeStorage.setItem(CUSTOM_UNITS_KEY, JSON.stringify(existing));
+    } catch (err: any) {
+      if (err.message?.includes('AUTH-010')) throw err;
     }
   },
 
   getCustomUnitsOnly(): Unit[] {
     try {
-      const custom = localStorage.getItem(CUSTOM_UNITS_KEY);
+      const custom = safeStorage.getItem(CUSTOM_UNITS_KEY);
       if (custom) return JSON.parse(custom);
     } catch {
       // ignore
@@ -204,19 +239,10 @@ export const StorageService = {
     return [];
   },
 
-  deleteUnitTemplate(templateId: string): void {
-    try {
-      const existing = this.getCustomUnitsOnly().filter(u => u.templateId !== templateId);
-      localStorage.setItem(CUSTOM_UNITS_KEY, JSON.stringify(existing));
-    } catch {
-      // ignore
-    }
-  },
-
   // Battle Maps Management
   getMaps(): BattleMap[] {
     try {
-      const custom = localStorage.getItem(MAPS_STORAGE_KEY);
+      const custom = safeStorage.getItem(MAPS_STORAGE_KEY);
       if (custom) {
         const parsed: BattleMap[] = JSON.parse(custom);
         const customIds = new Set(parsed.map(m => m.id));
@@ -231,7 +257,7 @@ export const StorageService = {
 
   getCustomMapsOnly(): BattleMap[] {
     try {
-      const custom = localStorage.getItem(MAPS_STORAGE_KEY);
+      const custom = safeStorage.getItem(MAPS_STORAGE_KEY);
       if (custom) return JSON.parse(custom);
     } catch {
       // ignore
@@ -249,10 +275,10 @@ export const StorageService = {
       } else {
         existing.unshift(toSave);
       }
-      localStorage.setItem(MAPS_STORAGE_KEY, JSON.stringify(existing));
+      safeStorage.setItem(MAPS_STORAGE_KEY, JSON.stringify(existing));
       return true;
     } catch (err) {
-      console.warn('Failed to save battle map to localStorage:', err);
+      console.warn('Failed to save battle map to storage:', err);
       return false;
     }
   },
@@ -260,7 +286,7 @@ export const StorageService = {
   deleteMap(mapId: string): void {
     try {
       const existing = this.getCustomMapsOnly().filter(m => m.id !== mapId);
-      localStorage.setItem(MAPS_STORAGE_KEY, JSON.stringify(existing));
+      safeStorage.setItem(MAPS_STORAGE_KEY, JSON.stringify(existing));
     } catch {
       // ignore
     }

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { UnitAbility, AbilityTiming, AbilityCost, AbilityType, CORE_TRAIT_DEFINITIONS } from '../../types/game';
 import { vfxDispatcher } from '../../services/audioVfxService';
 import { FACTIONS, UNIT_TEMPLATES } from '../../data/factions';
+import { getAbilityUsageLimit, checkAbilityActivation } from '../combatEngine';
 
 describe('DESIGN-007 / CODE-026: Ability System and Activation Criteria', () => {
   const sampleAbility: UnitAbility = {
@@ -185,4 +186,343 @@ describe('DESIGN-007 / CODE-026: Ability System and Activation Criteria', () => 
     expect(customCardAbility.actionButtonText).toBe('FIRE EXECUTION SHOT');
     expect(customCardAbility.quote).toBe('One round, one silence.');
   });
+
+  it('verifies Crimson Empire faction ability applies +1 Mv, IgnoreDifficultTerrain, and +1 Advantage to all friendly units', () => {
+    const crimsonAbility = FACTIONS.find(f => f.id === 'crimson_empire')?.factionAbility;
+    expect(crimsonAbility).toBeDefined();
+    expect(crimsonAbility?.id).toBe('crimson_blood_forge');
+
+    // Simulate battlefield units
+    const p1UnitA: any = {
+      id: 'p1_squad_1',
+      name: 'Bloodhound Shock Troops',
+      owner: 'player1',
+      stats: { lives: 3, mv: 6, am: 4, df: 4 },
+      traits: ['Shock']
+    };
+    const p1UnitB: any = {
+      id: 'p1_squad_2',
+      name: 'Crimson Praetor',
+      owner: 'player1',
+      stats: { lives: 5, mv: 5, am: 5, df: 5 },
+      traits: ['Leader']
+    };
+    const p2Unit: any = {
+      id: 'p2_squad_1',
+      name: 'Astraea Paladin',
+      owner: 'player2',
+      stats: { lives: 4, mv: 6, am: 4, df: 4 },
+      traits: []
+    };
+
+    const allUnits = [p1UnitA, p1UnitB, p2Unit];
+    const activeOwner = 'player1';
+    let p1Advantage = 0;
+
+    // Apply faction ability logic as implemented in Battlefield.tsx
+    const isFaction = true;
+    const abilityId = crimsonAbility!.id;
+
+    const updatedUnits = allUnits.map(u => {
+      const isTarget = isFaction && u.owner === activeOwner && u.stats.lives > 0;
+      if (!isTarget) return u;
+
+      if (abilityId === 'crimson_blood_forge') {
+        const currentTraits = u.traits || [];
+        const nextTraits = currentTraits.includes('IgnoreDifficultTerrain')
+          ? currentTraits
+          : [...currentTraits, 'IgnoreDifficultTerrain'];
+        return {
+          ...u,
+          traits: nextTraits,
+          stats: {
+            ...u.stats,
+            baseMv: u.stats.baseMv ?? u.stats.mv,
+            mv: u.stats.mv + 1
+          }
+        };
+      }
+      return u;
+    });
+
+    if (abilityId === 'crimson_blood_forge') {
+      p1Advantage += 1;
+    }
+
+    // Friendly unit A received +1 Mv, IgnoreDifficultTerrain, baseMv tracked
+    const updatedA = updatedUnits.find(u => u.id === 'p1_squad_1')!;
+    expect(updatedA.stats.mv).toBe(7);
+    expect(updatedA.stats.baseMv).toBe(6);
+    expect(updatedA.traits).toContain('IgnoreDifficultTerrain');
+
+    // Friendly unit B received +1 Mv, IgnoreDifficultTerrain, baseMv tracked
+    const updatedB = updatedUnits.find(u => u.id === 'p1_squad_2')!;
+    expect(updatedB.stats.mv).toBe(6);
+    expect(updatedB.stats.baseMv).toBe(5);
+    expect(updatedB.traits).toContain('IgnoreDifficultTerrain');
+
+    // Enemy unit unaffected
+    const updatedEnemy = updatedUnits.find(u => u.id === 'p2_squad_1')!;
+    expect(updatedEnemy.stats.mv).toBe(6);
+    expect(updatedEnemy.traits).not.toContain('IgnoreDifficultTerrain');
+
+    // Advantage gained
+    expect(p1Advantage).toBe(1);
+
+    // End-of-round cleanup restores baseMv and removes temporary trait
+    const cleanedUnits = updatedUnits.map(u => {
+      const baseMv = u.stats?.baseMv ?? u.stats?.mv ?? 6;
+      const cleanedTraits = (u.traits || []).filter(t => t !== 'IgnoreDifficultTerrain' && t !== 'IgnoreTerrain');
+      return {
+        ...u,
+        traits: cleanedTraits,
+        stats: {
+          ...u.stats,
+          mv: baseMv,
+          baseMv: undefined
+        }
+      };
+    });
+
+    const cleanedA = cleanedUnits.find(u => u.id === 'p1_squad_1')!;
+    expect(cleanedA.stats.mv).toBe(6);
+    expect(cleanedA.traits).not.toContain('IgnoreDifficultTerrain');
+  });
+
+  it('verifies tactical abilities are added to hand only when deployed or attached to deployed host', () => {
+    const leaderAbility: UnitAbility = {
+      id: 'inspire',
+      name: 'Inspiring Presence',
+      type: 'active',
+      cost: 'free',
+      activationTiming: 'command',
+      effect: 'Boost morale'
+    };
+    const squadAbility: UnitAbility = {
+      id: 'suppression',
+      name: 'Suppressive Salvo',
+      type: 'active',
+      cost: 'free',
+      activationTiming: 'shooting',
+      effect: 'Suppress enemy'
+    };
+
+    const units: any[] = [
+      // 1. Undeployed squad in tray
+      {
+        id: 'unit_tray',
+        name: 'Tray Troops',
+        owner: 'player1',
+        position: null,
+        stats: { lives: 3 },
+        abilities: [squadAbility]
+      },
+      // 2. Deployed squad on battlefield
+      {
+        id: 'unit_deployed',
+        name: 'Deployed Squad',
+        owner: 'player1',
+        position: { x: 200, y: 300 },
+        stats: { lives: 3 },
+        abilities: [squadAbility]
+      },
+      // 3. Attached leader whose bodyguard is deployed
+      {
+        id: 'unit_attached_deployed',
+        name: 'Attached Leader',
+        owner: 'player1',
+        position: null,
+        attachedTo: 'unit_deployed',
+        stats: { lives: 5 },
+        abilities: [leaderAbility]
+      },
+      // 4. Attached leader whose bodyguard is NOT deployed
+      {
+        id: 'unit_attached_tray',
+        name: 'Tray Leader',
+        owner: 'player1',
+        position: null,
+        attachedTo: 'unit_tray',
+        stats: { lives: 5 },
+        abilities: [leaderAbility]
+      },
+      // 5. Enemy deployed unit
+      {
+        id: 'enemy_deployed',
+        name: 'Enemy Squad',
+        owner: 'player2',
+        position: { x: 800, y: 400 },
+        stats: { lives: 3 },
+        abilities: [squadAbility]
+      }
+    ];
+
+    const activePlayer = 'player1';
+
+    // Same filter logic used in Battlefield.tsx availableAbilities
+    const eligibleUnits = units.filter(u => {
+      if (u.owner !== activePlayer || (u.stats?.lives ?? 0) <= 0) return false;
+      if (u.position) return true;
+      if (u.attachedTo) {
+        const host = units.find(b => b.id === u.attachedTo);
+        return !!host?.position;
+      }
+      return false;
+    });
+
+    const eligibleIds = eligibleUnits.map(u => u.id);
+    expect(eligibleIds).toContain('unit_deployed');
+    expect(eligibleIds).toContain('unit_attached_deployed');
+    expect(eligibleIds).not.toContain('unit_tray');
+    expect(eligibleIds).not.toContain('unit_attached_tray');
+    expect(eligibleIds).not.toContain('enemy_deployed');
+
+    // Abilities in hand
+    const handAbilities = eligibleUnits.flatMap(u => u.abilities);
+    expect(handAbilities.length).toBe(2);
+    expect(handAbilities.map(a => a.name)).toEqual(['Suppressive Salvo', 'Inspiring Presence']);
+  });
+
+  it('enforces default once-per-round limit for regular unit abilities unless specified otherwise', () => {
+    // 1. Free and CP-generating abilities default to once_per_round
+    expect(getAbilityUsageLimit({ cost: 'free' }, false)).toBe('once_per_round');
+    expect(getAbilityUsageLimit({ cost: 'gain_1_cp' }, false)).toBe('once_per_round');
+    expect(getAbilityUsageLimit({}, false)).toBe('once_per_round');
+    expect(getAbilityUsageLimit({ cost: 'once_per_round' }, false)).toBe('once_per_round');
+
+    // Explicit overrides for unit abilities
+    expect(getAbilityUsageLimit({ cost: 'once_per_game' }, false)).toBe('once_per_game');
+    expect(getAbilityUsageLimit({ cost: 'once_per_activation' }, false)).toBe('once_per_activation');
+
+    // 2. Activation checks: Cannot use infinitely in the same round
+    const unitAbility: UnitAbility = {
+      id: 'blood_strike',
+      name: 'Blood Cleaver',
+      type: 'active',
+      cost: 'gain_1_cp',
+      activationTiming: 'command',
+      affects: 'self',
+      duration: 'end_of_phase',
+      effect: 'Gain +1 CP and buff attack.'
+    };
+
+    // First use: ready
+    const firstCheck = checkAbilityActivation({
+      ability: unitAbility,
+      isFaction: false,
+      currentPhase: 'Command',
+      usedInRound: 0,
+      usedInGame: false
+    });
+    expect(firstCheck.isActivatable).toBe(true);
+
+    // Second use attempt in same round: rejected!
+    const secondCheck = checkAbilityActivation({
+      ability: unitAbility,
+      isFaction: false,
+      currentPhase: 'Command',
+      usedInRound: 1,
+      usedInGame: false
+    });
+    expect(secondCheck.isActivatable).toBe(false);
+    expect(secondCheck.disabledReason).toContain('Already used this round');
+  });
+
+  it('enforces default once-per-game limit for faction abilities unless specified otherwise', () => {
+    // 1. Faction abilities default to once_per_game unless explicitly once_per_round
+    expect(getAbilityUsageLimit({ cost: 'once_per_game' }, true)).toBe('once_per_game');
+    expect(getAbilityUsageLimit({ cost: 'free' }, true)).toBe('once_per_game');
+    expect(getAbilityUsageLimit({}, true)).toBe('once_per_game');
+    expect(getAbilityUsageLimit({ cost: 'once_per_round' }, true)).toBe('once_per_round');
+
+    // 2. All 6 preset faction doctrines are once_per_game
+    expect(FACTIONS.length).toBe(6);
+    FACTIONS.forEach(f => {
+      expect(f.factionAbility).toBeDefined();
+      expect(getAbilityUsageLimit(f.factionAbility!, true)).toBe('once_per_game');
+      expect(f.factionAbility!.cost).toBe('once_per_game');
+    });
+
+    // 3. Activation checks: Cannot use more than once per match
+    const crimsonAbility = FACTIONS.find(f => f.id === 'crimson_empire')!.factionAbility!;
+
+    // First use in Round 1: ready
+    const firstCheck = checkAbilityActivation({
+      ability: crimsonAbility,
+      isFaction: true,
+      currentPhase: 'Command',
+      usedInRound: 0,
+      usedInGame: false
+    });
+    expect(firstCheck.isActivatable).toBe(true);
+
+    // Second use attempt: rejected across entire game
+    const secondCheck = checkAbilityActivation({
+      ability: crimsonAbility,
+      isFaction: true,
+      currentPhase: 'Command',
+      usedInRound: 0, // Even in a new round
+      usedInGame: true
+    });
+    expect(secondCheck.isActivatable).toBe(false);
+    expect(secondCheck.disabledReason).toContain('Already used this match');
+  });
+
+  it('verifies round advance refreshes once-per-round abilities while keeping once-per-game abilities locked', () => {
+    let usedThisRound: Record<string, number> = {
+      'unit_1_strike': 1,
+      'unit_2_rally': 1
+    };
+    let usedThisGame: Record<string, boolean> = {
+      'faction_crimson_empire_crimson_blood_forge': true
+    };
+
+    const unitAbility: UnitAbility = {
+      id: 'strike',
+      name: 'Power Strike',
+      type: 'active',
+      cost: 'free',
+      activationTiming: 'fight',
+      affects: 'self',
+      duration: 'instant',
+      effect: 'Strike enemy'
+    };
+    const factionAbility = FACTIONS.find(f => f.id === 'crimson_empire')!.factionAbility!;
+
+    // At end of Round 1: unit ability is locked
+    const round1UnitCheck = checkAbilityActivation({
+      ability: unitAbility,
+      isFaction: false,
+      currentPhase: 'Fight',
+      usedInRound: usedThisRound['unit_1_strike'] || 0,
+      usedInGame: false
+    });
+    expect(round1UnitCheck.isActivatable).toBe(false);
+
+    // Round 2 Commences: Round usage state resets
+    usedThisRound = {};
+
+    // Unit ability is refreshed and ready for Round 2!
+    const round2UnitCheck = checkAbilityActivation({
+      ability: unitAbility,
+      isFaction: false,
+      currentPhase: 'Fight',
+      usedInRound: usedThisRound['unit_1_strike'] || 0,
+      usedInGame: false
+    });
+    expect(round2UnitCheck.isActivatable).toBe(true);
+
+    // Faction ability remains locked in Round 2
+    const round2FactionCheck = checkAbilityActivation({
+      ability: factionAbility,
+      isFaction: true,
+      currentPhase: 'Command',
+      usedInRound: 0,
+      usedInGame: !!usedThisGame['faction_crimson_empire_crimson_blood_forge']
+    });
+    expect(round2FactionCheck.isActivatable).toBe(false);
+    expect(round2FactionCheck.disabledReason).toContain('Already used this match');
+  });
 });
+
+

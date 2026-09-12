@@ -11,11 +11,15 @@ import { FactionLogo } from '../common/FactionLogo';
 interface WarRoomHomeProps {
   onNavigate: (tab: 'play' | 'builder' | 'shop' | 'battlepass' | 'lore' | 'admin') => void;
   onSelectArmyToDeploy: (roster: ArmyRoster) => void;
+  onStartMatchmaking?: (roster: ArmyRoster) => void;
+  onOpenDuelZone?: () => void;
 }
 
 export const WarRoomHome: React.FC<WarRoomHomeProps> = ({
   onNavigate,
-  onSelectArmyToDeploy
+  onSelectArmyToDeploy,
+  onStartMatchmaking,
+  onOpenDuelZone
 }) => {
   const factions = StorageService.getFactions();
   const rosters = StorageService.getRosters();
@@ -27,7 +31,7 @@ export const WarRoomHome: React.FC<WarRoomHomeProps> = ({
   return (
     <div className="w-full min-h-[calc(100vh-50px)] bg-[#0a0705] text-[#f4efe6] px-4 py-6 sm:px-10 space-y-8 select-none overflow-x-hidden">
       {/* Top Header / Breadcrumb */}
-      <div className="flex items-center justify-between border-b border-[#2e2319] pb-4">
+      <div className="flex flex-wrap items-center justify-between border-b border-[#2e2319] pb-4 gap-4">
         <div>
           <div className="flex items-center space-x-2 text-[#d49e54] font-mono text-[11px] uppercase tracking-[0.25em]">
             <span>EMBERFALL</span>
@@ -42,13 +46,25 @@ export const WarRoomHome: React.FC<WarRoomHomeProps> = ({
           </p>
         </div>
 
-        <button
-          onClick={() => onNavigate('play')}
-          className="px-6 py-2.5 bg-gradient-to-r from-[#9a281e] to-[#c94a29] hover:from-[#b03024] hover:to-[#e05330] text-white font-bold text-xs uppercase tracking-widest rounded-md shadow-[0_0_20px_rgba(201,74,41,0.4)] border border-[#e07b53]/50 flex items-center space-x-2 transition cursor-pointer"
-        >
-          <Swords className="w-4 h-4" />
-          <span>Seek Battle</span>
-        </button>
+        <div className="flex items-center space-x-3">
+          {(onOpenDuelZone || onStartMatchmaking) && (
+            <button
+              onClick={() => onOpenDuelZone ? onOpenDuelZone() : (activeRoster && onStartMatchmaking && onStartMatchmaking(activeRoster))}
+              className="px-5 py-2.5 bg-gradient-to-r from-amber-600 via-rose-600 to-amber-600 hover:brightness-110 text-white font-bold text-xs uppercase tracking-widest rounded-md shadow-[0_0_20px_rgba(245,158,11,0.4)] border border-amber-400/50 flex items-center space-x-2 transition cursor-pointer"
+            >
+              <span>⚔️</span>
+              <span>Duel Zone Arena</span>
+            </button>
+          )}
+
+          <button
+            onClick={() => onNavigate('play')}
+            className="px-5 py-2.5 bg-gradient-to-r from-[#9a281e] to-[#c94a29] hover:from-[#b03024] hover:to-[#e05330] text-white font-bold text-xs uppercase tracking-widest rounded-md shadow-[0_0_20px_rgba(201,74,41,0.4)] border border-[#e07b53]/50 flex items-center space-x-2 transition cursor-pointer"
+          >
+            <Swords className="w-4 h-4" />
+            <span>Solo Skirmish</span>
+          </button>
+        </div>
       </div>
 
       {/* Featured Campaign Banner (As seen in your screenshot: "Chapter III - Active Campaign: The Ember Tide") */}
@@ -217,18 +233,27 @@ export const WarRoomHome: React.FC<WarRoomHomeProps> = ({
             {/* Bottom Actions */}
             <div className="flex items-center justify-between pt-2 border-t border-[#2e2117]">
               <span className="text-[11px] text-[#a39482] font-mono">16 / 25 models mustered</span>
-              <div className="flex space-x-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   onClick={() => onNavigate('builder')}
-                  className="px-4 py-2 bg-[#241710] hover:bg-[#332216] text-[#d49e54] rounded-lg text-xs font-mono uppercase tracking-wider border border-[#4a3522] transition"
+                  className="px-4 py-2 bg-[#241710] hover:bg-[#332216] text-[#d49e54] rounded-lg text-xs font-mono uppercase tracking-wider border border-[#4a3522] transition cursor-pointer"
                 >
                   Edit Roster
                 </button>
+                {(onOpenDuelZone || onStartMatchmaking) && activeRoster && (
+                  <button
+                    onClick={() => onOpenDuelZone ? onOpenDuelZone() : (onStartMatchmaking && onStartMatchmaking(activeRoster))}
+                    className="px-4 py-2 bg-gradient-to-r from-amber-600 to-rose-600 hover:brightness-110 text-white font-bold text-xs uppercase tracking-wider rounded-lg shadow transition flex items-center space-x-1.5 cursor-pointer border border-amber-400/40"
+                  >
+                    <span>⚔️</span>
+                    <span>Duel Zone</span>
+                  </button>
+                )}
                 <button
                   onClick={() => onNavigate('play')}
-                  className="px-5 py-2 bg-gradient-to-r from-[#9a281e] to-[#c94a29] hover:from-[#b03024] hover:to-[#e05330] text-white font-bold text-xs uppercase tracking-wider rounded-lg shadow transition"
+                  className="px-5 py-2 bg-gradient-to-r from-[#9a281e] to-[#c94a29] hover:from-[#b03024] hover:to-[#e05330] text-white font-bold text-xs uppercase tracking-wider rounded-lg shadow transition cursor-pointer"
                 >
-                  Deploy Army
+                  Solo Skirmish
                 </button>
               </div>
             </div>

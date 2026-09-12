@@ -24,6 +24,7 @@ export interface ArmyRoster {
   id: string;
   name: string;
   factionId: string;
+  factionName?: string;
   tags?: string[];
   maxPoints: number;
   totalPoints: number;
