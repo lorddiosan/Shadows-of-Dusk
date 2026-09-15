@@ -1242,23 +1242,157 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
             </div>
           ))}
 
-          {/* Special Terrain Tiles */}
+          {/* Special Terrain Tiles & Environmental Hazard Zones of Effect */}
           {specialTiles.map((tile, i) => {
             const tileX = tile.x > 30 ? tile.x : tile.x * GRID_SIZE + GRID_SIZE / 2;
             const tileY = tile.y > 30 ? tile.y : tile.y * GRID_SIZE + GRID_SIZE / 2;
+            const radiusPx = tile.radius || (
+              tile.type === 'InfernalRift' ? 100 :
+              tile.type === 'Water' ? 95 :
+              tile.type === 'AcidPool' ? 95 :
+              tile.type === 'HighGround' ? 80 : 90
+            );
+
+            const nameLower = (tile.name || '').toLowerCase();
+            const emoji = tile.emoji || (
+              tile.type === 'InfernalRift' || nameLower.includes('rift') || nameLower.includes('brimstone') ? '🌋' :
+              tile.type === 'Water' || nameLower.includes('mire') || nameLower.includes('trench') ? '🌊' :
+              tile.type === 'AcidPool' || nameLower.includes('acid') ? '🧪' :
+              nameLower.includes('fog') || nameLower.includes('mist') ? '🌫️' :
+              nameLower.includes('mana') || nameLower.includes('aether') ? '🔮' :
+              tile.type === 'HighGround' || nameLower.includes('watchtower') ? '🏰' :
+              nameLower.includes('crag') ? '🏔️' :
+              tile.type === 'AncientRuin' ? '🏛️' : '⚠️'
+            );
+
+            // Thematic coloring and styling for the hazard's zone of effect
+            const isRift = tile.type === 'InfernalRift' || nameLower.includes('rift') || nameLower.includes('brimstone');
+            const isWater = tile.type === 'Water' || nameLower.includes('mire') || nameLower.includes('trench');
+            const isAcid = tile.type === 'AcidPool' || nameLower.includes('acid');
+            const isFog = nameLower.includes('fog') || nameLower.includes('mist');
+            const isMana = nameLower.includes('mana') || nameLower.includes('aether');
+            const isHighGround = tile.type === 'HighGround' || nameLower.includes('watchtower') || nameLower.includes('crag');
+
+            const theme = isRift
+              ? {
+                  border: 'border-red-500/80',
+                  bg: 'bg-red-950/25',
+                  shadow: 'shadow-[0_0_25px_rgba(239,68,68,0.35)]',
+                  badgeBorder: 'border-red-600',
+                  badgeBg: 'bg-red-950/90',
+                  textColor: 'text-red-300'
+                }
+              : isWater
+              ? {
+                  border: 'border-cyan-400/80',
+                  bg: 'bg-cyan-950/25',
+                  shadow: 'shadow-[0_0_25px_rgba(6,182,212,0.35)]',
+                  badgeBorder: 'border-cyan-600',
+                  badgeBg: 'bg-cyan-950/90',
+                  textColor: 'text-cyan-300'
+                }
+              : isAcid
+              ? {
+                  border: 'border-lime-400/80',
+                  bg: 'bg-lime-950/30',
+                  shadow: 'shadow-[0_0_25px_rgba(163,230,53,0.35)]',
+                  badgeBorder: 'border-lime-600',
+                  badgeBg: 'bg-lime-950/90',
+                  textColor: 'text-lime-300'
+                }
+              : isFog
+              ? {
+                  border: 'border-slate-300/80',
+                  bg: 'bg-slate-900/35',
+                  shadow: 'shadow-[0_0_25px_rgba(203,213,225,0.25)]',
+                  badgeBorder: 'border-slate-500',
+                  badgeBg: 'bg-slate-950/90',
+                  textColor: 'text-slate-200'
+                }
+              : isMana
+              ? {
+                  border: 'border-purple-400/80',
+                  bg: 'bg-purple-950/30',
+                  shadow: 'shadow-[0_0_25px_rgba(192,132,252,0.35)]',
+                  badgeBorder: 'border-purple-600',
+                  badgeBg: 'bg-purple-950/90',
+                  textColor: 'text-purple-300'
+                }
+              : isHighGround
+              ? {
+                  border: 'border-amber-400/80',
+                  bg: 'bg-amber-950/20',
+                  shadow: 'shadow-[0_0_25px_rgba(251,191,36,0.25)]',
+                  badgeBorder: 'border-amber-600',
+                  badgeBg: 'bg-amber-950/90',
+                  textColor: 'text-amber-300'
+                }
+              : {
+                  border: 'border-zinc-500/80',
+                  bg: 'bg-zinc-900/25',
+                  shadow: 'shadow-[0_0_20px_rgba(161,161,170,0.2)]',
+                  badgeBorder: 'border-zinc-600',
+                  badgeBg: 'bg-zinc-950/90',
+                  textColor: 'text-zinc-300'
+                };
+
+            const isTemporary = !!tile.isTemporary || (typeof tile.activeRemaining === 'number' && tile.activeRemaining > 0);
 
             return (
               <div
-                key={`tile_${i}`}
+                key={tile.id || `tile_${i}`}
                 style={{ left: `${tileX}px`, top: `${tileY}px` }}
-                className="absolute -translate-x-1/2 -translate-y-1/2 pointer-events-none opacity-80 flex flex-col items-center"
+                className="absolute pointer-events-none"
               >
-                <span className="text-3xl filter drop-shadow">
-                  {tile.type === 'HighGround' ? '🌲' : tile.type === 'Water' ? '🌊' : '🏛️'}
-                </span>
-                <span className="text-[9px] font-mono text-zinc-400 bg-black/70 px-1 rounded">
-                  {tile.name}
-                </span>
+                {/* 1. Zone of Effect Radius Circle (Pulsing dashed boundary) */}
+                <div
+                  style={{
+                    width: `${radiusPx * 2}px`,
+                    height: `${radiusPx * 2}px`,
+                    left: `-${radiusPx}px`,
+                    top: `-${radiusPx}px`
+                  }}
+                  className={`absolute rounded-full border-2 border-dashed ${theme.border} ${theme.bg} ${theme.shadow} transition-all duration-1000 ${
+                    isTemporary ? 'animate-pulse' : 'opacity-90'
+                  }`}
+                />
+
+                {/* 2. Concentric Inner Ripple Ring for dynamic depth */}
+                <div
+                  style={{
+                    width: `${radiusPx * 1.3}px`,
+                    height: `${radiusPx * 1.3}px`,
+                    left: `-${radiusPx * 0.65}px`,
+                    top: `-${radiusPx * 0.65}px`
+                  }}
+                  className={`absolute rounded-full border border-dotted ${theme.border} opacity-40`}
+                />
+
+                {/* 3. Center Emoji Marker Disk & Badges */}
+                <div className="absolute -translate-x-1/2 -translate-y-1/2 z-10 flex flex-col items-center">
+                  <div className={`w-9 h-9 rounded-full ${theme.badgeBg} border-2 ${theme.badgeBorder} flex items-center justify-center shadow-2xl transition hover:scale-110`}>
+                    <span className="text-xl filter drop-shadow">
+                      {emoji}
+                    </span>
+                  </div>
+
+                  {/* 4. Themed Title and Zone Effect Pill */}
+                  <div className="mt-1 flex flex-col items-center space-y-0.5">
+                    <span className={`text-[10px] font-mono font-bold ${theme.textColor} ${theme.badgeBg} border ${theme.badgeBorder} px-2 py-0.2 rounded shadow-md whitespace-nowrap`}>
+                      {tile.name}
+                    </span>
+                    {tile.effectDescription && (
+                      <span className="text-[8px] font-mono text-zinc-300 bg-black/80 px-1.5 py-0.2 rounded border border-zinc-700/60 max-w-[140px] text-center truncate">
+                        {tile.effectDescription}
+                      </span>
+                    )}
+                    {isTemporary && (
+                      <span className="text-[8px] font-mono font-bold text-amber-300 bg-amber-950/90 border border-amber-500/80 px-1.5 py-0.2 rounded animate-pulse">
+                        ⏳ {tile.activeRemaining ?? tile.durationRounds ?? 1} Rnd{(tile.activeRemaining ?? tile.durationRounds ?? 1) === 1 ? '' : 's'} Left
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
             );
           })}

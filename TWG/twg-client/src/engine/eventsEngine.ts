@@ -65,6 +65,24 @@ export function checkAndTriggerEvents(
     }
   }
 
+  // Process temporary hazard tiles active duration decrement
+  if (updatedSpecialTiles) {
+    const nextTiles: SpecialTile[] = [];
+    for (const t of updatedSpecialTiles) {
+      if (t.isTemporary && typeof t.activeRemaining === 'number') {
+        const remaining = t.activeRemaining - 1;
+        if (remaining > 0) {
+          nextTiles.push({ ...t, activeRemaining: remaining });
+        } else {
+          logs.push(`Weather & Hazard Cleared: [${t.name}] hazard zone has dissipated.`);
+        }
+      } else {
+        nextTiles.push(t);
+      }
+    }
+    updatedSpecialTiles = nextTiles;
+  }
+
   // Evaluate candidate events if none is currently active
   for (const event of events) {
     if (event.activeRemaining > 0 || event.currentCooldown > 0) {
@@ -96,6 +114,24 @@ export function checkAndTriggerEvents(
 
       // Apply immediate or starting round effect
       if (event.id === 'acid_rain') {
+        if (updatedSpecialTiles) {
+          updatedSpecialTiles = [
+            ...updatedSpecialTiles.filter(t => !t.name.includes('Acid Rain')),
+            {
+              id: `event_acid_rain_${round}`,
+              x: 600,
+              y: 400,
+              type: 'AcidPool',
+              name: 'Acid Rain Deluge Zone',
+              effectDescription: 'Corrosive downpour: Def < 4 units lose 1 Life unless CP + Def > 6',
+              radius: 110,
+              emoji: '🧪',
+              isTemporary: true,
+              durationRounds: 2,
+              activeRemaining: 2
+            }
+          ];
+        }
         // "All units with Def < 4 lose 1 L. Resisted if CP + Def > 6."
         for (const u of units) {
           if (u.stats.lives > 0) {
@@ -111,6 +147,24 @@ export function checkAndTriggerEvents(
           }
         }
       } else if (event.id === 'flooding') {
+        if (updatedSpecialTiles) {
+          updatedSpecialTiles = [
+            ...updatedSpecialTiles.filter(t => !t.name.includes('Flood Zone')),
+            {
+              id: `event_flooding_${round}`,
+              x: 600,
+              y: 500,
+              type: 'Water',
+              name: 'Subterranean Flood Zone',
+              effectDescription: 'Fault-line water surge: non-Character units lose 1 Def',
+              radius: 115,
+              emoji: '🌊',
+              isTemporary: true,
+              durationRounds: 5,
+              activeRemaining: 5
+            }
+          ];
+        }
         // "All non-Character units lose 1 Def for 5 rounds."
         for (const u of units) {
           if (u.type !== 'Character' && u.stats.lives > 0) {
@@ -119,6 +173,24 @@ export function checkAndTriggerEvents(
           }
         }
       } else if (event.id === 'mana_surge') {
+        if (updatedSpecialTiles) {
+          updatedSpecialTiles = [
+            ...updatedSpecialTiles.filter(t => !t.name.includes('Mana Surge')),
+            {
+              id: `event_mana_surge_${round}`,
+              x: 600,
+              y: 300,
+              type: 'InfernalRift',
+              name: 'Mana Surge Vortex',
+              effectDescription: 'Arcane convergence: Characters lose 1 Life unless CP + 1d3 > 5',
+              radius: 105,
+              emoji: '🔮',
+              isTemporary: true,
+              durationRounds: 3,
+              activeRemaining: 3
+            }
+          ];
+        }
         // "All Characters lose 1 L. Resisted if CP + 1d3 > 5; on resist, gain +1 AM for 3 rounds instead."
         for (const u of units) {
           if (u.type === 'Character' && u.stats.lives > 0) {

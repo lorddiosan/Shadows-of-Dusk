@@ -2824,6 +2824,60 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       const res = relocateSpecialTiles(newSpecialTiles, t => t.type === 'HighGround');
       newSpecialTiles = res.updatedTiles;
       relocateSummary = ` 🏔️ Relocated: ${res.relocatedNames.join(', ')}`;
+    } else if (card.id === 'field_acid_monsoon') {
+      const spawnX = Math.round(350 + Math.random() * 500);
+      const spawnY = Math.round(250 + Math.random() * 300);
+      const acidHazard: SpecialTile = {
+        id: `hazard_acid_${Date.now()}`,
+        x: spawnX,
+        y: spawnY,
+        type: 'AcidPool',
+        name: 'Corrosive Acid Deluge Zone',
+        effectDescription: 'Chemical deluge: Def < 4 takes 1 damage (CP+Def > 6 resists)',
+        radius: 105,
+        emoji: '🧪',
+        isTemporary: true,
+        durationRounds: 2,
+        activeRemaining: 2
+      };
+      newSpecialTiles = [...newSpecialTiles.filter(t => !t.name.includes('Acid')), acidHazard];
+      relocateSummary = ` 🧪 Temporary Acid Hazard Zone spawned at (${spawnX}, ${spawnY}) for 2 rounds!`;
+    } else if (card.id === 'field_dense_fog') {
+      const spawnX = Math.round(350 + Math.random() * 500);
+      const spawnY = Math.round(250 + Math.random() * 300);
+      const mistHazard: SpecialTile = {
+        id: `hazard_fog_${Date.now()}`,
+        x: spawnX,
+        y: spawnY,
+        type: 'Water',
+        name: 'Convergence Mists Zone',
+        effectDescription: 'Dense violet fog: Ranged attacks -2 range squares',
+        radius: 110,
+        emoji: '🌫️',
+        isTemporary: true,
+        durationRounds: 2,
+        activeRemaining: 2
+      };
+      newSpecialTiles = [...newSpecialTiles.filter(t => !t.name.includes('Mists')), mistHazard];
+      relocateSummary = ` 🌫️ Temporary Convergence Mists spawned at (${spawnX}, ${spawnY}) for 2 rounds!`;
+    } else if (card.id === 'field_mana_flare') {
+      const spawnX = Math.round(350 + Math.random() * 500);
+      const spawnY = Math.round(250 + Math.random() * 300);
+      const manaHazard: SpecialTile = {
+        id: `hazard_mana_${Date.now()}`,
+        x: spawnX,
+        y: spawnY,
+        type: 'InfernalRift',
+        name: 'Aetherial Aurora Vortex',
+        effectDescription: 'Magical surge: Restores +1 CP & Advantage on next action',
+        radius: 100,
+        emoji: '🔮',
+        isTemporary: true,
+        durationRounds: 2,
+        activeRemaining: 2
+      };
+      newSpecialTiles = [...newSpecialTiles.filter(t => !t.name.includes('Aurora')), manaHazard];
+      relocateSummary = ` 🔮 Temporary Aetherial Aurora Vortex spawned at (${spawnX}, ${spawnY}) for 2 rounds!`;
     }
 
     setGameState(prev => ({

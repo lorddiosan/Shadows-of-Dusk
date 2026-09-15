@@ -288,11 +288,11 @@ export const DEFAULT_POIS: POI[] = [
 ];
 
 export const DEFAULT_SPECIAL_TILES: SpecialTile[] = [
-  { x: 200, y: 150, type: 'HighGround', name: 'Crumbling Watchtower', effectDescription: 'Advantage on ranged Shooting attacks' },
-  { x: 1000, y: 150, type: 'HighGround', name: 'Basalt Crag', effectDescription: 'Advantage on ranged Shooting attacks' },
-  { x: 500, y: 500, type: 'Water', name: 'Flooded Mire', effectDescription: 'Disadvantage to Infantry movement and melee' },
-  { x: 700, y: 500, type: 'Water', name: 'Sunken Crypt Trench', effectDescription: 'Disadvantage to Infantry movement and melee' },
-  { x: 600, y: 300, type: 'InfernalRift', name: 'Rift Fracture', effectDescription: 'Dangerous terrain: unstable energy' }
+  { id: 'tile_watchtower', x: 200, y: 150, type: 'HighGround', name: 'Crumbling Watchtower', effectDescription: 'Advantage on ranged Shooting attacks', radius: 80, emoji: '🏰' },
+  { id: 'tile_crag', x: 1000, y: 150, type: 'HighGround', name: 'Basalt Crag', effectDescription: 'Advantage on ranged Shooting attacks', radius: 80, emoji: '🏔️' },
+  { id: 'tile_mire', x: 500, y: 500, type: 'Water', name: 'Flooded Mire', effectDescription: 'Disadvantage to Infantry movement and melee', radius: 95, emoji: '🌊' },
+  { id: 'tile_trench', x: 700, y: 500, type: 'Water', name: 'Sunken Crypt Trench', effectDescription: 'Disadvantage to Infantry movement and melee', radius: 95, emoji: '🌊' },
+  { id: 'tile_rift', x: 600, y: 300, type: 'InfernalRift', name: 'Rift Fracture', effectDescription: 'Dangerous terrain: unstable energy', radius: 100, emoji: '🌋' }
 ];
 
 // Shop Catalog

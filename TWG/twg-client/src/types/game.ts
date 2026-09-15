@@ -184,11 +184,18 @@ export interface POI {
 export type SpecialTileType = 'HighGround' | 'Water' | 'AcidPool' | 'InfernalRift' | 'AncientRuin';
 
 export interface SpecialTile {
+  id?: string;
   x: number;
   y: number;
   type: SpecialTileType;
   name: string;
   effectDescription: string;
+  radius?: number;          // Zone of effect radius in pixels (default: 80-110px)
+  emoji?: string;           // Display emoji icon (e.g. 🌊, 🌋, 🧪, 🌫️, 🔮, 🏔️)
+  isTemporary?: boolean;    // Flag for temporary event hazards
+  durationRounds?: number;  // Initial duration in rounds
+  activeRemaining?: number; // Rounds remaining before hazard expires
+  color?: string;           // Custom zone color
 }
 
 export interface GameEvent {
