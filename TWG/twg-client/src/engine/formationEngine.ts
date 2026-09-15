@@ -1452,6 +1452,265 @@ export function findValidDisembarkPosition(
   return null;
 }
 
+export interface AbandonShipModelResult {
+  tokenId: string;
+  isLeader: boolean;
+  name: string;
+  d20Roll: number;
+  failed: boolean;
+  d3Damage: number;
+  livesRemaining: number;
+  died: boolean;
+}
+
+export interface AbandonShipUnitReport {
+  unitId: string;
+  unitName: string;
+  disembarkPosition: WorldPoint;
+  totalModels: number;
+  survivingModels: number;
+  killedModels: number;
+  totalDamage: number;
+  models: AbandonShipModelResult[];
+  squadWipedOut: boolean;
+  leaderWipedOut?: boolean;
+}
+
+export interface AbandonShipResult {
+  updatedUnits: Unit[];
+  reports: AbandonShipUnitReport[];
+  logs: { message: string; type: 'combat' | 'event' | 'info' }[];
+}
+
+/**
+ * Abandon Ship Protocol:
+ * When a transport vehicle is destroyed (lives <= 0) while carrying embarked units,
+ * those units immediately disembark at a valid position within 3" of the wreck.
+ * Every token in the disembarking unit (including attached leaders) rolls a d20:
+ * - If d20 < 10: suffers a roll of a d3 of lives lost.
+ * - If d20 >= 10: escapes unharmed.
+ */
+export function executeAbandonShipProtocol(
+  destroyedVehicle: Unit,
+  allUnits: Unit[],
+  diceRoller?: (max: number) => number
+): AbandonShipResult {
+  const roll = diceRoller || ((max: number) => Math.floor(Math.random() * max) + 1);
+  const reports: AbandonShipUnitReport[] = [];
+  const logs: { message: string; type: 'combat' | 'event' | 'info' }[] = [];
+
+  // Find squads/units directly embarked in this vehicle (excluding attached leaders who follow their bodyguard squad)
+  const embarkedSquads = allUnits.filter(u => u.embarkedIn === destroyedVehicle.id && !u.attachedTo && u.stats.lives > 0);
+
+  if (embarkedSquads.length === 0) {
+    return { updatedUnits: allUnits, reports: [], logs: [] };
+  }
+
+  let currentUnits = [...allUnits];
+
+  logs.push({
+    message: `🚨 ABANDON SHIP PROTOCOL INITIATED! Transport [${destroyedVehicle.name}] was destroyed! Emergency evacuation commencing...`,
+    type: 'event'
+  });
+
+  for (const squad of embarkedSquads) {
+    const vPos = destroyedVehicle.position || { x: 300, y: 300 };
+    // Find disembark position near wreck
+    const disembarkPos = findValidDisembarkPosition(squad, destroyedVehicle, currentUnits) || {
+      x: Math.max(50, Math.min(1150, vPos.x + 60)),
+      y: Math.max(50, Math.min(750, vPos.y))
+    };
+
+    // Find attached leaders
+    const attachedLeaders = currentUnits.filter(u =>
+      u.stats.lives > 0 &&
+      ((squad.attachedUnits && squad.attachedUnits.includes(u.id)) || u.attachedTo === squad.id)
+    );
+
+    // Re-attach leaders and stage squad on board
+    let stagedLeaders: Unit[] = attachedLeaders.map(l => ({
+      ...setUnitMutualState(l, 'attached', { leaderTargetId: squad.id, position: disembarkPos }),
+      position: disembarkPos,
+      embarkedIn: null
+    }));
+
+    let stagedSquad: Unit = {
+      ...setUnitMutualState(squad, 'onBoard', { position: disembarkPos }),
+      embarkedIn: null,
+      hasCustomTokenPositions: false,
+      pendingOriginalPosition: null,
+      pendingOriginalTokens: null
+    };
+
+    // Replace in currentUnits to sync tokens properly
+    currentUnits = currentUnits.map(u => {
+      if (u.id === stagedSquad.id) return stagedSquad;
+      const lead = stagedLeaders.find(l => l.id === u.id);
+      if (lead) return lead;
+      return u;
+    });
+
+    stagedSquad = syncUnitTokens(stagedSquad, currentUnits);
+
+    const modelResults: AbandonShipModelResult[] = [];
+    let squadDamage = 0;
+    let killedCount = 0;
+
+    // Roll d20 for each token in the unit (including attached leader)
+    const processedTokens = (stagedSquad.tokens || []).map((tok, idx) => {
+      const isLeader = !!tok.isLeaderToken;
+      const matchingLeader = isLeader ? stagedLeaders.find(l => l.id === tok.unitId) : undefined;
+      const modelName = isLeader
+        ? (matchingLeader?.name || 'Attached Leader')
+        : `${stagedSquad.name} Model #${idx + 1}`;
+
+      const d20 = roll(20);
+      const failed = d20 < 10;
+      const d3Damage = failed ? roll(3) : 0;
+      let newLives = tok.currentLives;
+      let died = false;
+
+      if (failed) {
+        newLives = Math.max(0, tok.currentLives - d3Damage);
+        if (newLives === 0) {
+          died = true;
+          killedCount++;
+        }
+        if (isLeader && matchingLeader) {
+          matchingLeader.stats = {
+            ...matchingLeader.stats,
+            lives: Math.max(0, matchingLeader.stats.lives - d3Damage)
+          };
+          if (matchingLeader.stats.lives === 0) {
+            matchingLeader.position = null;
+            matchingLeader.tokens = [];
+            matchingLeader.attachedTo = null;
+          }
+        } else {
+          squadDamage += d3Damage;
+        }
+      }
+
+      modelResults.push({
+        tokenId: tok.id,
+        isLeader,
+        name: modelName,
+        d20Roll: d20,
+        failed,
+        d3Damage,
+        livesRemaining: newLives,
+        died
+      });
+
+      return {
+        ...tok,
+        currentLives: newLives
+      };
+    });
+
+    const survivingTokens = processedTokens.filter(t => t.currentLives > 0);
+    const survivingSquadTokens = survivingTokens.filter(t => !t.isLeaderToken);
+
+    // Recalculate squad lives
+    const remainingSquadLives = survivingSquadTokens.reduce((sum, t) => sum + t.currentLives, 0);
+    stagedSquad.stats = {
+      ...stagedSquad.stats,
+      lives: remainingSquadLives
+    };
+
+    const squadWipedOut = remainingSquadLives <= 0;
+    let leaderWipedOut = false;
+
+    if (squadWipedOut) {
+      stagedSquad.position = null;
+      stagedSquad.tokens = [];
+      stagedSquad.stats.lives = 0;
+
+      // If an attached leader survived, they emerge as a solo onBoard unit!
+      stagedLeaders = stagedLeaders.map(l => {
+        if (l.stats.lives > 0) {
+          const soloLeader = setUnitMutualState(l, 'onBoard', { position: disembarkPos });
+          soloLeader.attachedTo = null;
+          return syncUnitTokens(soloLeader);
+        } else {
+          leaderWipedOut = true;
+          return {
+            ...l,
+            stats: { ...l.stats, lives: 0 },
+            position: null,
+            tokens: [],
+            attachedTo: null
+          };
+        }
+      });
+    } else {
+      // Squad survived!
+      stagedSquad.tokens = survivingTokens;
+      // Sync surviving tokens with updated leader state
+      stagedSquad = syncUnitTokens(stagedSquad, [...currentUnits, ...stagedLeaders]);
+    }
+
+    // Update currentUnits with the finalized squad and leaders
+    currentUnits = currentUnits.map(u => {
+      if (u.id === stagedSquad.id) return stagedSquad;
+      const lead = stagedLeaders.find(l => l.id === u.id);
+      if (lead) return lead;
+      return u;
+    });
+
+    reports.push({
+      unitId: stagedSquad.id,
+      unitName: stagedSquad.name,
+      disembarkPosition: disembarkPos,
+      totalModels: processedTokens.length,
+      survivingModels: survivingTokens.length,
+      killedModels: killedCount,
+      totalDamage: squadDamage,
+      models: modelResults,
+      squadWipedOut,
+      leaderWipedOut
+    });
+
+    // Generate detailed logs
+    logs.push({
+      message: `💥 ${stagedSquad.name} emergency disembark at (${disembarkPos.x}, ${disembarkPos.y}):`,
+      type: 'combat'
+    });
+
+    for (const m of modelResults) {
+      if (m.failed) {
+        logs.push({
+          message: `  🎲 ${m.name}: Rolled ${m.d20Roll} (< 10: CRASH DAMAGE!) → Suffered ${m.d3Damage} lives lost (${m.livesRemaining} HP left)${m.died ? ' 💀 KILLED!' : ''}`,
+          type: 'combat'
+        });
+      } else {
+        logs.push({
+          message: `  🎲 ${m.name}: Rolled ${m.d20Roll} (>= 10: SAFE!) → Evacuated unscathed.`,
+          type: 'combat'
+        });
+      }
+    }
+
+    if (squadWipedOut) {
+      logs.push({
+        message: `💀 SQUAD WIPED OUT: All bodyguard models in ${stagedSquad.name} perished in the crash!`,
+        type: 'combat'
+      });
+    } else {
+      logs.push({
+        message: `🛡️ ${stagedSquad.name} survivors rallied with ${survivingSquadTokens.length} models (${remainingSquadLives} HP remaining).`,
+        type: 'info'
+      });
+    }
+  }
+
+  return {
+    updatedUnits: currentUnits,
+    reports,
+    logs
+  };
+}
+
 export const ENGAGEMENT_PROXIMITY_PX = 50; // 1 inch = 50px
 
 /**

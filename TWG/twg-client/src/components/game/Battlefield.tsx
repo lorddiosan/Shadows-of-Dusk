@@ -33,7 +33,8 @@ import {
   fitFormationToZone, checkUniversalTokenCollisions, validateModelMovementDistance,
   getUnitCollisionRadius, isUnitInShootingRange, isUnitInMeleeRange,
   getUnitsModelDistance, findValidMovePositionForBot, findNearestNonOverlappingPosition,
-  checkPathCrossesUnits, validateDisembarkPlacement, getUnitBodiesAndLives
+  checkPathCrossesUnits, validateDisembarkPlacement, getUnitBodiesAndLives,
+  executeAbandonShipProtocol
 } from '../../engine/formationEngine';
 
 interface BattlefieldProps {
@@ -293,6 +294,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
   // BUG-026: Deployment error toast & Bot action status indicators
   const [deploymentErrorNotice, setDeploymentErrorNotice] = useState<string | null>(null);
+  const [abandonShipNotice, setAbandonShipNotice] = useState<string | null>(null);
   const [isBotDeploying, setIsBotDeploying] = useState<boolean>(false);
   const [isDeployStagingMinimized, setIsDeployStagingMinimized] = useState<boolean>(false);
 
@@ -2888,6 +2890,35 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
         return u;
       });
 
+      let finalUnits = updatedUnits;
+      let abandonLogs: CombatLogEntry[] = [];
+      const destroyedVehicle = prev.units.find(x => x.id === unitId);
+
+      if (unitDied && destroyedVehicle && destroyedVehicle.type === 'Vehicle') {
+        const hasEmbarked = prev.units.some(x => x.embarkedIn === unitId && x.stats.lives > 0);
+        if (hasEmbarked) {
+          const abandonRes = executeAbandonShipProtocol(destroyedVehicle, finalUnits);
+          finalUnits = abandonRes.updatedUnits;
+          abandonLogs = abandonRes.logs.map((l, i) => ({
+            id: `log_abandon_${Date.now()}_${i}`,
+            round: prev.round,
+            phase: prev.phase,
+            source: 'Abandon Ship',
+            message: l.message,
+            type: l.type,
+            timestamp: new Date().toLocaleTimeString()
+          }));
+
+          if (abandonRes.reports.length > 0) {
+            const summaryText = abandonRes.reports.map(r => 
+              `${r.unitName}: ${r.survivingModels}/${r.totalModels} survived (${r.killedModels} killed, -${r.totalDamage} HP)`
+            ).join(' | ');
+            setAbandonShipNotice(`🚨 ABANDON SHIP! [${destroyedVehicle.name}] destroyed! ${summaryText}`);
+            setTimeout(() => setAbandonShipNotice(null), 7000);
+          }
+        }
+      }
+
       const killLogs: CombatLogEntry[] = destroyedUnitName ? [
         {
           id: `log_kill_${Date.now()}`,
@@ -2907,8 +2938,8 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       const victoryLogs: CombatLogEntry[] = [];
 
       if (unitDied && !prev.isGameOver) {
-        const p1Alive = updatedUnits.some(u => u.owner === 'player1' && (u.stats?.lives || 0) > 0);
-        const p2Alive = updatedUnits.some(u => u.owner === 'player2' && (u.stats?.lives || 0) > 0);
+        const p1Alive = finalUnits.some(u => u.owner === 'player1' && (u.stats?.lives || 0) > 0);
+        const p2Alive = finalUnits.some(u => u.owner === 'player2' && (u.stats?.lives || 0) > 0);
 
         if (!p1Alive && !p2Alive) {
           isGameOver = true;
@@ -2962,7 +2993,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
       return {
         ...prev,
-        units: updatedUnits,
+        units: finalUnits,
         player1Score: attackerOwner === 'player1' ? prev.player1Score + scoreGain : prev.player1Score,
         player2Score: attackerOwner === 'player2' ? prev.player2Score + scoreGain : prev.player2Score,
         player1Kills: p1Kills,
@@ -2970,7 +3001,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
         isGameOver,
         winner,
         winReason,
-        logs: [...victoryLogs, ...killLogs, ...prev.logs.slice(0, 75 - (victoryLogs.length + killLogs.length))]
+        logs: [...victoryLogs, ...killLogs, ...abandonLogs, ...prev.logs.slice(0, 75 - (victoryLogs.length + killLogs.length + abandonLogs.length))]
       };
     });
 
@@ -6601,6 +6632,15 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
         <div className="fixed top-14 left-1/2 -translate-x-1/2 z-50 bg-emerald-950/95 border-2 border-emerald-400 text-emerald-100 px-5 py-2.5 rounded-xl shadow-2xl flex items-center space-x-2.5 animate-in fade-in slide-in-from-top-3 duration-200 font-mono text-xs font-bold">
           <Check className="w-4 h-4 text-emerald-300 shrink-0" />
           <span>{doneDeployingNotice}</span>
+        </div>
+      )}
+
+      {/* Abandon Ship Protocol Emergency Toast */}
+      {abandonShipNotice && (
+        <div className="fixed top-14 left-1/2 -translate-x-1/2 z-50 bg-amber-950/95 border-2 border-amber-500 text-amber-100 px-6 py-3 rounded-xl shadow-2xl flex items-center space-x-3 animate-in fade-in slide-in-from-top-3 duration-200 font-mono text-xs font-bold max-w-2xl text-center">
+          <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 animate-bounce" />
+          <span>{abandonShipNotice}</span>
+          <button onClick={() => setAbandonShipNotice(null)} className="ml-2 text-amber-300 hover:text-white cursor-pointer">✕</button>
         </div>
       )}
 

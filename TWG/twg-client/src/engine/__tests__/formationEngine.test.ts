@@ -10,7 +10,8 @@ import {
   validateNormalMovementEnemyProximity,
   checkPathCrossesUnits,
   getUnitBaseDimensions,
-  setUnitMutualState
+  setUnitMutualState,
+  executeAbandonShipProtocol
 } from '../formationEngine';
 import { resolveCombat } from '../combatEngine';
 import { checkWinConditions } from '../scoringEngine';
@@ -562,6 +563,116 @@ describe('Infiltration and Leader Attachment Rules', () => {
 
       const onBoard = setUnitMutualState(embarked, 'onBoard', { position: { x: 300, y: 300 } });
       expect(onBoard.hasCustomTokenPositions).toBe(false);
+    });
+  });
+
+  describe('Abandon Ship Protocol on Vehicle Destruction', () => {
+    it('disembarks embarked squad and rolls d20 per token: < 10 rolls d3 damage, >= 10 unharmed', () => {
+      const transport = makeUnit({
+        id: 'skiff_1',
+        name: 'Sunfire Skiff',
+        type: 'Vehicle',
+        position: { x: 400, y: 300 },
+        stats: { lives: 0, maxLives: 8, mv: 10, am: 4, def: 5, baseDef: 5, defModifier: 0, modelCount: 1, hpPerModel: 8, cp: 1, range: 0 }
+      });
+
+      const embarkedSquad = makeUnit({
+        id: 'stalker_squad',
+        name: 'Alchemic Shadow Stalker',
+        type: 'Infantry',
+        embarkedIn: 'skiff_1',
+        stats: { lives: 6, maxLives: 6, mv: 6, am: 5, def: 4, baseDef: 4, defModifier: 0, modelCount: 3, hpPerModel: 2, cp: 1, range: 0 }
+      });
+
+      // Deterministic dice rolls:
+      // Model 1: d20 = 15 (>= 10) -> safe, loses 0 HP (remains 2 HP)
+      // Model 2: d20 = 6 (< 10) -> fails, rolls d3 = 1 -> loses 1 HP (remains 1 HP)
+      // Model 3: d20 = 4 (< 10) -> fails, rolls d3 = 3 -> loses 3 HP (0 HP, dies!)
+      const rolls = [15, 6, 1, 4, 3];
+      let rollIndex = 0;
+      const fakeRoller = () => rolls[rollIndex++];
+
+      const result = executeAbandonShipProtocol(transport, [transport, embarkedSquad], fakeRoller);
+
+      expect(result.reports).toHaveLength(1);
+      const rep = result.reports[0];
+      expect(rep.totalModels).toBe(3);
+      expect(rep.survivingModels).toBe(2);
+      expect(rep.killedModels).toBe(1);
+
+      // Model 1 safe
+      expect(rep.models[0].d20Roll).toBe(15);
+      expect(rep.models[0].failed).toBe(false);
+      expect(rep.models[0].livesRemaining).toBe(2);
+
+      // Model 2 wounded
+      expect(rep.models[1].d20Roll).toBe(6);
+      expect(rep.models[1].failed).toBe(true);
+      expect(rep.models[1].d3Damage).toBe(1);
+      expect(rep.models[1].livesRemaining).toBe(1);
+
+      // Model 3 killed
+      expect(rep.models[2].d20Roll).toBe(4);
+      expect(rep.models[2].failed).toBe(true);
+      expect(rep.models[2].d3Damage).toBe(3);
+      expect(rep.models[2].died).toBe(true);
+      expect(rep.models[2].livesRemaining).toBe(0);
+
+      // Squad unit updated state: 2 + 1 = 3 lives remaining, position set on board
+      const updatedSquad = result.updatedUnits.find(u => u.id === 'stalker_squad')!;
+      expect(updatedSquad.embarkedIn).toBeNull();
+      expect(updatedSquad.position).toBeDefined();
+      expect(updatedSquad.stats.lives).toBe(3);
+      expect(updatedSquad.tokens).toHaveLength(2);
+    });
+
+    it('rolls d20 for attached leader as well, and detaches leader if bodyguard squad is wiped out', () => {
+      const transport = makeUnit({
+        id: 'skiff_1',
+        name: 'Sunfire Skiff',
+        type: 'Vehicle',
+        position: { x: 400, y: 300 },
+        stats: { lives: 0, maxLives: 8, mv: 10, am: 4, def: 5, baseDef: 5, defModifier: 0, modelCount: 1, hpPerModel: 8, cp: 1, range: 0 }
+      });
+
+      const bodyguardSquad = makeUnit({
+        id: 'guard_1',
+        name: 'Silverguard Unit',
+        type: 'Infantry',
+        embarkedIn: 'skiff_1',
+        attachedUnits: ['leader_lyssandra'],
+        stats: { lives: 2, maxLives: 2, mv: 5, am: 4, def: 5, baseDef: 5, defModifier: 0, modelCount: 1, hpPerModel: 2, cp: 1, range: 0 }
+      });
+
+      const attachedLeader = makeUnit({
+        id: 'leader_lyssandra',
+        name: 'High Marshal Lyssandra',
+        type: 'Character',
+        embarkedIn: 'skiff_1',
+        attachedTo: 'guard_1',
+        stats: { lives: 5, maxLives: 5, mv: 6, am: 5, def: 5, baseDef: 5, defModifier: 0, modelCount: 1, hpPerModel: 5, cp: 1, range: 0 }
+      });
+
+      // Token 1 (Leader): d20 = 18 (>= 10) -> safe!
+      // Token 2 (Bodyguard): d20 = 2 (< 10) -> fails, rolls d3 = 3 -> loses 3 HP (dies!)
+      const rolls = [18, 2, 3];
+      let rollIndex = 0;
+      const fakeRoller = () => rolls[rollIndex++];
+
+      const result = executeAbandonShipProtocol(transport, [transport, bodyguardSquad, attachedLeader], fakeRoller);
+
+      const updatedBodyguard = result.updatedUnits.find(u => u.id === 'guard_1')!;
+      const updatedLeader = result.updatedUnits.find(u => u.id === 'leader_lyssandra')!;
+
+      // Bodyguard died in the crash
+      expect(updatedBodyguard.stats.lives).toBe(0);
+      expect(updatedBodyguard.position).toBeNull();
+
+      // Leader survived unharmed, detaches, and is placed solo on board
+      expect(updatedLeader.stats.lives).toBe(5);
+      expect(updatedLeader.attachedTo).toBeNull();
+      expect(updatedLeader.embarkedIn).toBeNull();
+      expect(updatedLeader.position).toBeDefined();
     });
   });
 });
