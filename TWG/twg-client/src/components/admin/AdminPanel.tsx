@@ -83,6 +83,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onDataChanged }) => {
     modelCount: 5,
     cp: 3,
     range: 0,
+    meleeAttacks: 1,
+    meleeDamageDice: 'd3',
+    rangedAttacks: 0,
+    rangedDamageDice: 'd3',
     passives: 'Type Advantage: Beats Monsters, Veteran Phalanx'
   });
 
@@ -258,6 +262,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onDataChanged }) => {
       modelCount: u.stats.modelCount || 1,
       cp: u.stats.cp,
       range: u.stats.range,
+      meleeAttacks: u.stats.meleeAttacks ?? 1,
+      meleeDamageDice: u.stats.meleeDamageDice || 'd3',
+      rangedAttacks: u.stats.rangedAttacks ?? (u.stats.range > 0 ? 1 : 0),
+      rangedDamageDice: u.stats.rangedDamageDice || 'd3',
       passives: (u.passives || []).join(', ')
     });
     setSelectedTraits(u.traits || (u.canDeployOutsideZone ? ['Infiltrator'] : []));
@@ -286,6 +294,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onDataChanged }) => {
       modelCount: 5,
       cp: 3,
       range: 0,
+      meleeAttacks: 1,
+      meleeDamageDice: 'd3',
+      rangedAttacks: 0,
+      rangedDamageDice: 'd3',
       passives: 'Type Advantage: Beats Monsters, Veteran Phalanx'
     });
     if (fileInputRef.current) {
@@ -329,7 +341,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onDataChanged }) => {
         cp: Number(newUnit.cp),
         range: Number(newUnit.range),
         baseShape: newUnit.baseShape || (newUnit.type === 'Vehicle' ? 'rectangle' : 'circle'),
-        carryCapacity: newUnit.type === 'Vehicle' ? Number(newUnit.carryCapacity) : undefined
+        carryCapacity: newUnit.type === 'Vehicle' ? Number(newUnit.carryCapacity) : undefined,
+        meleeAttacks: Math.max(1, Number(newUnit.meleeAttacks) || 1),
+        meleeDamageDice: newUnit.meleeDamageDice || 'd3',
+        rangedAttacks: Number(newUnit.range) > 0 ? Math.max(1, Number(newUnit.rangedAttacks) || 1) : 0,
+        rangedDamageDice: newUnit.rangedDamageDice || 'd3'
       },
       passives: newUnit.passives.split(',').map(p => p.trim()).filter(Boolean),
       traits: selectedTraits,
@@ -805,6 +821,61 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onDataChanged }) => {
                     />
                   </div>
                 </div>
+
+                {/* Action Phase Attacks & Damage Dice */}
+                <div className="pt-2 border-t border-zinc-800/80 space-y-1.5">
+                  <span className="text-[10px] uppercase font-bold text-amber-400 block font-mono">
+                    ⚔️ Action Phase Weapon Dice & Attacks
+                  </span>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <div>
+                      <span className="text-[9px] text-zinc-400 block font-mono">Melee Attacks</span>
+                      <input
+                        type="number"
+                        min="1"
+                        max="10"
+                        value={newUnit.meleeAttacks}
+                        onChange={e => setNewUnit({ ...newUnit, meleeAttacks: Math.max(1, Number(e.target.value)) })}
+                        className="w-full bg-zinc-950 border border-zinc-800 p-1 rounded text-center text-xs font-mono font-bold text-rose-400"
+                      />
+                    </div>
+                    <div>
+                      <span className="text-[9px] text-zinc-400 block font-mono">Melee Dmg Die</span>
+                      <select
+                        value={newUnit.meleeDamageDice}
+                        onChange={e => setNewUnit({ ...newUnit, meleeDamageDice: e.target.value })}
+                        className="w-full bg-zinc-950 border border-zinc-800 p-1 rounded text-center text-xs font-mono font-bold text-rose-300"
+                      >
+                        {['d3', 'd6', 'd8', 'd10', 'd12', 'd20'].map(d => (
+                          <option key={d} value={d}>{d}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <span className="text-[9px] text-zinc-400 block font-mono">Ranged Attacks</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="10"
+                        value={newUnit.rangedAttacks}
+                        onChange={e => setNewUnit({ ...newUnit, rangedAttacks: Math.max(0, Number(e.target.value)) })}
+                        className="w-full bg-zinc-950 border border-zinc-800 p-1 rounded text-center text-xs font-mono font-bold text-purple-400"
+                      />
+                    </div>
+                    <div>
+                      <span className="text-[9px] text-zinc-400 block font-mono">Ranged Dmg Die</span>
+                      <select
+                        value={newUnit.rangedDamageDice}
+                        onChange={e => setNewUnit({ ...newUnit, rangedDamageDice: e.target.value })}
+                        className="w-full bg-zinc-950 border border-zinc-800 p-1 rounded text-center text-xs font-mono font-bold text-purple-300"
+                      >
+                        {['d3', 'd6', 'd8', 'd10', 'd12', 'd20'].map(d => (
+                          <option key={d} value={d}>{d}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               {/* Tactical Traits (Multi-Select Dropdown & Tag List) */}
@@ -1094,8 +1165,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onDataChanged }) => {
                         <span className="text-xs font-mono font-bold text-amber-400">{unit.points} pts</span>
                       </div>
                       <p className="text-xs text-zinc-400 mt-0.5">
-                        {unit.stats.modelCount} models • {unit.stats.hpPerModel || 1} HP/model ({unit.stats.lives} Total Lives)
+                        {unit.stats.modelCount} models • {unit.stats.hpPerModel || 1} HP/model ({unit.stats.lives} Total Lives) • Mv:{unit.stats.mv} Def:{unit.stats.def} AM:{unit.stats.am}
                       </p>
+                      <div className="flex items-center space-x-2 text-[10px] font-mono text-zinc-300 mt-0.5">
+                        <span className="text-rose-400">⚔️ Melee: {unit.stats.meleeAttacks || 1}x {unit.stats.meleeDamageDice || 'd3'}</span>
+                        {unit.stats.range > 0 && (
+                          <span className="text-purple-400">🏹 Ranged: {unit.stats.rangedAttacks || 1}x {unit.stats.rangedDamageDice || 'd3'} (Rng {unit.stats.range})</span>
+                        )}
+                      </div>
                       {/* Traits & Abilities Badges */}
                       <div className="flex items-center space-x-1.5 flex-wrap gap-y-1 mt-1.5">
                         {(unit.traits || (unit.canDeployOutsideZone ? ['Infiltrator'] : [])).map(t => {

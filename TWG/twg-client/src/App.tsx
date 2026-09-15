@@ -86,10 +86,12 @@ export function App() {
   };
 
   const handleClaimBattlePassReward = (tier: number, isPremium: boolean) => {
+    if (user.claimedPassTiers?.includes(tier)) return;
     setUser(prev => ({
       ...prev,
       crystalShards: prev.crystalShards + (tier * 50),
-      aetherCores: isPremium && tier % 5 === 0 ? prev.aetherCores + 100 : prev.aetherCores
+      aetherCores: isPremium && tier % 5 === 0 ? prev.aetherCores + 100 : prev.aetherCores,
+      claimedPassTiers: [...(prev.claimedPassTiers || []), tier]
     }));
   };
 

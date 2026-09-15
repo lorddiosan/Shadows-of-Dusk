@@ -59,6 +59,77 @@ interface TabletopCanvasProps {
   onMoveGroupTokens?: (updates: { unitId: string; tokenId: string; newPos: WorldPoint }[]) => void;
 }
 
+export interface TraitBadgeInfo {
+  icon: string;
+  label: string;
+  badgeClass: string;
+  isTemp?: boolean;
+}
+
+export const getTraitBadgeInfo = (trait: string, isTemp = false): TraitBadgeInfo => {
+  const t = trait.trim();
+  const lower = t.toLowerCase();
+
+  // Temporary traits / Status effects
+  if (isTemp || lower.includes('fire') || lower.includes('burn') || lower.includes('poison') || lower.includes('stun') || lower.includes('freeze') || lower.includes('frozen') || lower.includes('frost') || lower.includes('acid') || lower.includes('bleed')) {
+    if (lower.includes('fire') || lower.includes('burn')) {
+      return { icon: '🔥', label: t, badgeClass: 'bg-red-950/90 border-red-500 text-red-300 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.5)]', isTemp: true };
+    }
+    if (lower.includes('poison') || lower.includes('venom') || lower.includes('toxin')) {
+      return { icon: '🧪', label: t, badgeClass: 'bg-emerald-950/90 border-lime-500 text-lime-300 animate-pulse shadow-[0_0_8px_rgba(132,204,22,0.5)]', isTemp: true };
+    }
+    if (lower.includes('stun') || lower.includes('paralyz') || lower.includes('shock')) {
+      return { icon: '⚡', label: t, badgeClass: 'bg-amber-950/90 border-yellow-400 text-yellow-300 animate-pulse shadow-[0_0_8px_rgba(250,204,21,0.5)]', isTemp: true };
+    }
+    if (lower.includes('freeze') || lower.includes('frozen') || lower.includes('frost') || lower.includes('chill')) {
+      return { icon: '❄️', label: t, badgeClass: 'bg-cyan-950/90 border-cyan-400 text-cyan-300 animate-pulse shadow-[0_0_8px_rgba(6,182,212,0.5)]', isTemp: true };
+    }
+    if (lower.includes('acid') || lower.includes('corrod')) {
+      return { icon: '💧', label: t, badgeClass: 'bg-lime-950/90 border-lime-400 text-lime-300 animate-pulse shadow-[0_0_8px_rgba(163,230,53,0.5)]', isTemp: true };
+    }
+    if (lower.includes('bleed')) {
+      return { icon: '🩸', label: t, badgeClass: 'bg-rose-950/90 border-red-600 text-rose-300 animate-pulse shadow-[0_0_8px_rgba(225,29,72,0.5)]', isTemp: true };
+    }
+    return { icon: '✨', label: t, badgeClass: 'bg-amber-950/90 border-amber-400 text-amber-300 animate-pulse', isTemp: true };
+  }
+
+  // Permanent traits
+  switch (lower) {
+    case 'infiltrator':
+      return { icon: '🥷', label: 'Infiltrator', badgeClass: 'bg-amber-950/90 border-amber-500 text-amber-300' };
+    case 'leader':
+      return { icon: '👑', label: 'Leader', badgeClass: 'bg-yellow-950/90 border-yellow-500 text-yellow-300' };
+    case 'shieldwall':
+      return { icon: '🛡️', label: 'Shieldwall', badgeClass: 'bg-blue-950/90 border-blue-400 text-blue-300' };
+    case 'flying':
+      return { icon: '🪽', label: 'Flying', badgeClass: 'bg-sky-950/90 border-sky-400 text-sky-300' };
+    case 'berserk':
+      return { icon: '⚔️', label: 'Berserk', badgeClass: 'bg-rose-950/90 border-rose-500 text-rose-300' };
+    case 'sniper':
+      return { icon: '🎯', label: 'Sniper', badgeClass: 'bg-purple-950/90 border-purple-400 text-purple-300' };
+    case 'rapid fire':
+      return { icon: '⚡', label: 'Rapid Fire', badgeClass: 'bg-amber-950/90 border-yellow-400 text-yellow-300' };
+    case 'cavalry':
+      return { icon: '🐎', label: 'Cavalry', badgeClass: 'bg-orange-950/90 border-orange-500 text-orange-300' };
+    case 'heavy armour':
+      return { icon: '🦾', label: 'Heavy Armour', badgeClass: 'bg-zinc-800 border-zinc-500 text-zinc-200' };
+    case 'unyielding':
+      return { icon: '🗿', label: 'Unyielding', badgeClass: 'bg-stone-900 border-stone-500 text-stone-200' };
+    case 'psionic':
+      return { icon: '🔮', label: 'Psionic', badgeClass: 'bg-violet-950/90 border-violet-400 text-violet-300' };
+    case 'teleport':
+      return { icon: '🌀', label: 'Teleport', badgeClass: 'bg-indigo-950/90 border-indigo-400 text-indigo-300' };
+    case 'scout':
+      return { icon: '🔭', label: 'Scout', badgeClass: 'bg-teal-950/90 border-teal-400 text-teal-300' };
+    case 'regeneration':
+      return { icon: '💚', label: 'Regeneration', badgeClass: 'bg-emerald-950/90 border-emerald-400 text-emerald-300' };
+    case 'skimmer':
+      return { icon: '⛵', label: 'Skimmer', badgeClass: 'bg-cyan-950/90 border-cyan-400 text-cyan-300' };
+    default:
+      return { icon: '🏷️', label: t, badgeClass: 'bg-zinc-850 border-zinc-600 text-zinc-300' };
+  }
+};
+
 export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
   units,
   pois,
@@ -553,22 +624,23 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
 
       // Universal Collision Check for entire squad
       let candidateTokens: Token[];
-      if (unit.hasCustomTokenPositions && unit.tokens && unit.tokens.length > 0) {
+      if (unit.tokens && unit.tokens.length > 0) {
         candidateTokens = unit.tokens.map(t => ({
           ...t,
-          x: targetX + (t.offsetX || 0),
-          y: targetY + (t.offsetY || 0)
+          x: targetX + (typeof t.offsetX === 'number' ? t.offsetX : (t.x - (unit.position?.x ?? dragInitialUnitPos.x))),
+          y: targetY + (typeof t.offsetY === 'number' ? t.offsetY : (t.y - (unit.position?.y ?? dragInitialUnitPos.y))),
+          radius: t.radius || (t.size ? t.size / 2 : 20)
         }));
       } else {
         const { width, height, radius, shape } = getUnitBaseDimensions(unit);
         candidateTokens = calculateFormationOffsets(
-          unit.tokens?.length || unit.stats.modelCount || 1,
+          unit.stats.modelCount || 1,
           unit.formation || 'circle',
           radius,
           width,
           height
         ).map((off, idx) => ({
-          id: unit.tokens?.[idx]?.id || `tok_${idx}`,
+          id: `tok_${idx}`,
           unitId: unit.id,
           x: targetX + off.offsetX,
           y: targetY + off.offsetY,
@@ -576,6 +648,7 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
           offsetY: off.offsetY,
           rotation: 0,
           size: Math.max(width, height),
+          radius: radius,
           baseShape: unit.baseShape || shape,
           baseWidth: unit.baseWidth || width,
           baseHeight: unit.baseHeight || height,
@@ -1456,11 +1529,11 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
                   );
                 })()}
 
-                {/* Shooting Range Sphere (BUG-018: Blocked if attached leader's host squad is melee-only or has already shot) */}
-                {activePhase === 'Shooting' && selectedUnit.stats.range > 0 && !selectedUnit.hasShot && (() => {
+                {/* Shooting Range Sphere (Active in Shooting or Action Phase) */}
+                {(activePhase === 'Shooting' || activePhase === 'Action') && selectedUnit.stats.range > 0 && (activePhase === 'Action' ? (selectedUnit.actionsRemaining ?? 2) > 0 : !selectedUnit.hasShot) && (() => {
                   if (selectedUnit.attachedTo) {
                     const hostSquad = units.find(u => u.id === selectedUnit.attachedTo);
-                    if (hostSquad && (hostSquad.stats.range === 0 || hostSquad.hasShot)) {
+                    if (hostSquad && (hostSquad.stats.range === 0 || (activePhase === 'Action' ? (hostSquad.actionsRemaining ?? 2) <= 0 : hostSquad.hasShot))) {
                       return null;
                     }
                   }
@@ -1492,8 +1565,8 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
                   );
                 })()}
 
-                {/* Charge Reach Sphere */}
-                {activePhase === 'Charge' && !selectedUnit.hasCharged && (
+                {/* Engagement Reach Sphere (Active in Charge or Action Phase) */}
+                {(activePhase === 'Charge' || activePhase === 'Action') && (activePhase === 'Action' ? (selectedUnit.actionsRemaining ?? 2) > 0 : !selectedUnit.hasCharged) && (
                   <circle
                     cx={selectedUnit.position.x}
                     cy={selectedUnit.position.y}
@@ -1652,6 +1725,26 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
                   const isTokenSelected = selectedTokenIds.includes(token.id);
                   const isSquadMultiSelected = selectedTokenIds.length > 1 && isTokenSelected;
 
+                  const customBorderClass = unit.borderStyle === 'border_gold'
+                    ? 'ring-2 ring-yellow-400 border-yellow-300 shadow-[0_0_12px_rgba(234,179,8,0.7)]'
+                    : unit.borderStyle === 'border_cyber_neon'
+                    ? 'ring-2 ring-cyan-400 border-cyan-300 shadow-[0_0_14px_rgba(6,182,212,0.8)]'
+                    : unit.borderStyle === 'border_crimson_spike'
+                    ? 'ring-2 ring-red-600 border-rose-500 shadow-[0_0_12px_rgba(220,38,38,0.7)]'
+                    : unit.borderStyle === 'border_void_rune'
+                    ? 'ring-2 ring-purple-500 border-violet-400 shadow-[0_0_16px_rgba(168,85,247,0.8)]'
+                    : '';
+
+                  const customVfxClass = unit.vfxEffect === 'vfx_ethereal_glow'
+                    ? 'animate-pulse drop-shadow-[0_0_10px_rgba(56,189,248,0.9)]'
+                    : unit.vfxEffect === 'vfx_void_flame'
+                    ? 'animate-pulse drop-shadow-[0_0_12px_rgba(147,51,234,0.9)]'
+                    : unit.vfxEffect === 'vfx_lightning_aura'
+                    ? 'drop-shadow-[0_0_12px_rgba(250,204,21,0.9)]'
+                    : unit.vfxEffect === 'vfx_blood_mist'
+                    ? 'drop-shadow-[0_0_14px_rgba(239,68,68,0.9)]'
+                    : '';
+
                   return (
                     <div
                       key={token.id}
@@ -1675,12 +1768,14 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
                           ? 'ring-4 ring-rose-500 ring-offset-2 ring-offset-black scale-105 shadow-[0_0_20px_rgba(244,63,94,0.6)] animate-pulse'
                           : 'hover:scale-110 shadow-xl'
                       } ${
-                        isAttachedLeader
-                          ? 'bg-gradient-to-tr from-amber-950 via-amber-700 to-yellow-500 border-2 border-yellow-300 ring-2 ring-amber-400'
-                          : unit.owner === 'player1'
-                          ? 'bg-gradient-to-tr from-rose-950 via-red-800 to-rose-600 border-2 border-amber-400'
-                          : 'bg-gradient-to-tr from-sky-950 via-blue-800 to-sky-600 border-2 border-cyan-400'
-                      }`}
+                        customBorderClass || (
+                          isAttachedLeader
+                            ? 'bg-gradient-to-tr from-amber-950 via-amber-700 to-yellow-500 border-2 border-yellow-300 ring-2 ring-amber-400'
+                            : unit.owner === 'player1'
+                            ? 'bg-gradient-to-tr from-rose-950 via-red-800 to-rose-600 border-2 border-amber-400'
+                            : 'bg-gradient-to-tr from-sky-950 via-blue-800 to-sky-600 border-2 border-cyan-400'
+                        )
+                      } ${customVfxClass}`}
                     >
                       {/* Token Avatar or Custom Image */}
                       {(token.tokenImageUrl || unit.tokenImageUrl) ? (
@@ -1754,18 +1849,54 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
                     <span className={unit.owner === 'player1' ? 'text-rose-400 font-bold' : 'text-sky-400 font-bold'}>
                       {unit.stats.lives}L ({tokens.length}U • {getUnitSize(unit)} • {unit.formation || 'circle'})
                     </span>
-                    {canUnitDeployOutsideZone(unit, units) ? (
-                      <span className="bg-amber-950 border border-amber-500 text-amber-300 text-[8px] px-1 rounded uppercase font-black">
-                        Infiltrator
+                    {/* Permanent Traits with Icons */}
+                    {(unit.traits || []).map((trait, tIdx) => {
+                      if (trait === 'Infiltrator' && !canUnitDeployOutsideZone(unit, units)) {
+                        return (
+                          <span key={tIdx} className="bg-rose-950 border border-rose-500 text-rose-300 text-[8px] px-1.5 py-0.5 rounded uppercase font-black flex items-center space-x-1" title="Infiltration blocked by attached Leader">
+                            <span>🥷</span>
+                            <span>Infiltrate Blocked</span>
+                          </span>
+                        );
+                      }
+                      const badge = getTraitBadgeInfo(trait);
+                      return (
+                        <span key={tIdx} className={`border text-[8px] px-1.5 py-0.5 rounded uppercase font-black flex items-center space-x-1 ${badge.badgeClass}`}>
+                          <span>{badge.icon}</span>
+                          <span>{badge.label}</span>
+                        </span>
+                      );
+                    })}
+
+                    {/* Temporary Status Traits with Icons (e.g. On Fire, Poisoned, Stunned, Frozen, Acid) */}
+                    {(unit.tempTraits || []).map((tempTrait, ttIdx) => {
+                      const badge = getTraitBadgeInfo(tempTrait, true);
+                      return (
+                        <span key={`temp_${ttIdx}`} className={`border text-[8px] px-1.5 py-0.5 rounded uppercase font-black flex items-center space-x-1 ${badge.badgeClass}`}>
+                          <span>{badge.icon}</span>
+                          <span>{badge.label}</span>
+                        </span>
+                      );
+                    })}
+
+                    {/* Advantage / Disadvantage Status Badges */}
+                    {unit.advantageStacks > 0 && (
+                      <span className="bg-emerald-950 border border-emerald-400 text-emerald-300 text-[8px] px-1.5 py-0.5 rounded uppercase font-black flex items-center space-x-1">
+                        <span>⬆️</span>
+                        <span>Advantage x{unit.advantageStacks}</span>
                       </span>
-                    ) : (unit.traits?.includes('Infiltrator') || unit.canDeployOutsideZone) ? (
-                      <span className="bg-rose-950 border border-rose-500 text-rose-300 text-[8px] px-1 rounded uppercase font-black" title="Infiltration blocked by attached Leader">
-                        Infiltrate Blocked
+                    )}
+                    {unit.disadvantageStacks > 0 && (
+                      <span className="bg-rose-950 border border-rose-500 text-rose-300 text-[8px] px-1.5 py-0.5 rounded uppercase font-black flex items-center space-x-1">
+                        <span>⬇️</span>
+                        <span>Disadvantage x{unit.disadvantageStacks}</span>
                       </span>
-                    ) : null}
+                    )}
+
                     {unit.attachedUnits && unit.attachedUnits.length > 0 && (
-                      <span className="bg-amber-950 border border-amber-400 text-amber-300 text-[8px] px-1 rounded uppercase font-black">
-                        ★ Commander
+                      <span className="bg-amber-950 border border-amber-400 text-amber-300 text-[8px] px-1.5 py-0.5 rounded uppercase font-black flex items-center space-x-1">
+                        <span>★</span>
+                        <span>Commander</span>
                       </span>
                     )}
                     {(unit.type === 'Vehicle' || unit.role === 'Vehicle / Monster' || (unit.carryCapacity && unit.carryCapacity > 0)) && (() => {
@@ -1773,8 +1904,8 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
                       const currentLoad = embarkedSquads.reduce((acc, u) => acc + (u.stats?.modelCount || 1) + (u.attachedUnits?.length || 0), 0);
                       const maxCapacity = unit.carryCapacity ?? unit.stats?.carryCapacity ?? (unit.transportCapacity ? unit.transportCapacity * 5 : 6);
                       return (
-                        <span className="bg-sky-950 border border-sky-400 text-sky-300 text-[8px] px-1 rounded uppercase font-black">
-                          Capacity: {currentLoad}/{maxCapacity}
+                        <span className="bg-sky-950 border border-sky-400 text-sky-300 text-[8px] px-1.5 py-0.5 rounded uppercase font-black flex items-center space-x-1">
+                          <span>Capacity: {currentLoad}/{maxCapacity}</span>
                         </span>
                       );
                     })()}

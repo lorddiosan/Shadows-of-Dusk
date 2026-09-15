@@ -136,17 +136,33 @@ export const BattlePass: React.FC<BattlePassProps> = ({
                   </div>
 
                   {/* Claim Button */}
-                  <button
-                    disabled={!isUnlocked}
-                    onClick={() => onClaimReward(tierObj.tier, isPremiumUnlocked)}
-                    className={`mt-3 w-full py-1.5 rounded-lg text-xs font-bold transition ${
-                      isUnlocked
-                        ? 'bg-purple-700 hover:bg-purple-600 text-white cursor-pointer'
-                        : 'bg-zinc-800 text-zinc-600 cursor-not-allowed'
-                    }`}
-                  >
-                    {isUnlocked ? 'Claim' : 'Locked'}
-                  </button>
+                  {(() => {
+                    const isClaimed = user.claimedPassTiers?.includes(tierObj.tier);
+                    if (isClaimed) {
+                      return (
+                        <button
+                          disabled
+                          className="mt-3 w-full py-1.5 rounded-lg text-xs font-bold bg-zinc-850 border border-emerald-800/40 text-emerald-400 flex items-center justify-center space-x-1 cursor-not-allowed"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Claimed</span>
+                        </button>
+                      );
+                    }
+                    return (
+                      <button
+                        disabled={!isUnlocked}
+                        onClick={() => onClaimReward(tierObj.tier, isPremiumUnlocked)}
+                        className={`mt-3 w-full py-1.5 rounded-lg text-xs font-bold transition ${
+                          isUnlocked
+                            ? 'bg-purple-700 hover:bg-purple-600 text-white cursor-pointer'
+                            : 'bg-zinc-800 text-zinc-600 cursor-not-allowed'
+                        }`}
+                      >
+                        {isUnlocked ? 'Claim' : 'Locked'}
+                      </button>
+                    );
+                  })()}
                 </div>
               );
             })}

@@ -30,6 +30,10 @@ export interface StatBlock {
   baseWidth?: number;    // Base width in pixels (for square/rect/oval)
   baseHeight?: number;   // Base height in pixels (for square/rect/oval)
   carryCapacity?: number;// Vehicle model transport capacity (e.g. 6 models)
+  meleeAttacks?: number; // Number of melee attacks per model (default 1)
+  meleeDamageDice?: string; // Melee damage die: 'd3' | 'd6' | 'd8' | 'd10' | 'd12' | 'd20' (default 'd3')
+  rangedAttacks?: number; // Number of ranged attacks per model (default 1 if range > 0, else 0)
+  rangedDamageDice?: string; // Ranged damage die: 'd3' | 'd6' | 'd8' | 'd10' | 'd12' | 'd20' (default 'd3')
 }
 
 export interface WorldPoint {
@@ -42,7 +46,7 @@ export type FormationType = 'auto' | 'circle' | 'line' | 'grid' | 'stack';
 // DESIGN-007 & CODE-026: Ability Builder Schema
 export type AbilityAffects = 'self' | 'attached' | 'target' | 'area' | 'all_friendly' | 'all_allies' | 'all_enemy';
 export type AbilityType = 'passive' | 'active';
-export type AbilityTiming = 'any_time' | 'deployment' | 'command' | 'movement' | 'shooting' | 'charge' | 'fight' | 'round_end';
+export type AbilityTiming = 'any_time' | 'deployment' | 'command' | 'movement' | 'action' | 'shooting' | 'charge' | 'fight' | 'round_end';
 export type AbilityCost = 'free' | 'gain_1_cp' | 'once_per_game' | 'once_per_round' | 'once_per_activation' | '1_cp' | '2_cp';
 export type AbilityDuration = 'instant' | 'end_of_phase' | 'end_of_round' | 'permanent';
 
@@ -110,10 +114,13 @@ export interface Unit {
   points: number;
   avatar: string;
   tokenImageUrl?: string;         // Custom uploaded token image (PNG/JPG/WebP base64/URL)
+  borderStyle?: string;           // Custom cosmetic border/frame style (e.g. 'border_gold', 'border_cyber_neon')
+  vfxEffect?: string;             // Custom cosmetic visual effect / aura (e.g. 'vfx_ethereal_glow', 'vfx_void_flame')
   description: string;
   passives: string[];
   abilities?: UnitAbility[];      // Configured Unit Abilities (DESIGN-007 / CODE-026)
   traits?: string[];              // Tactical traits (e.g. 'Infiltrator', 'Flying', 'Leader', 'Transport', 'Scout')
+  tempTraits?: string[];          // Temporary status traits (e.g. 'On Fire', 'Poisoned', 'Stunned', 'Frozen', 'Acid Corroded')
   canDeployOutsideZone?: boolean; // Trait: allows deployment outside deployment zone
   inStrategicReserve?: boolean;   // Placed in Strategic Reserves (Round 2+ Movement deploy)
   embarkedIn?: string | null;     // ID of the vehicle/transport this unit is loaded inside
@@ -145,14 +152,17 @@ export interface Unit {
   lastEmbarkRound?: number | null; // Round number when unit embarked
   lastDisembarkPhase?: Phase | null; // Last phase this unit disembarked (RULE-001)
   lastDisembarkRound?: number | null; // Round number when unit disembarked
+  actionsRemaining?: number; // Actions remaining in the current Action Phase (default 2)
+  maxActions?: number; // Total actions available per Action Phase (default 2)
+  issuedStratagemsThisTurn?: string[]; // Stratagem IDs issued to this unit during current turn/round
 }
 
-export type Phase = 'Deployment' | 'Command' | 'Movement' | 'Shooting' | 'Charge' | 'Fight';
+export type Phase = 'Deployment' | 'Command' | 'Movement' | 'Action' | 'Scoring' | 'Shooting' | 'Charge' | 'Fight';
 
 export interface Card {
   id: string;
   name: string;
-  type: 'General' | 'Faction' | 'Leader';
+  type: 'General' | 'Faction' | 'Leader' | 'FieldEffect' | 'SecondaryMission';
   factionId?: string;
   description: string;
   objectiveText?: string;

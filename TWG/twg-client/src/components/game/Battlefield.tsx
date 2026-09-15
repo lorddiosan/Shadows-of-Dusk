@@ -14,12 +14,12 @@ import {
   UnitAbility, CardTheme, CardRarity 
 } from '../../types/game';
 import { ArmyRoster } from '../../types/army';
-import { DEFAULT_POIS, DEFAULT_SPECIAL_TILES, GAME_EVENTS, GENERAL_CARDS, FACTION_CARDS } from '../../data/gameContent';
+import { DEFAULT_POIS, DEFAULT_SPECIAL_TILES, GAME_EVENTS, GENERAL_CARDS, FACTION_CARDS, SECONDARY_MISSION_CARDS, FIELD_EFFECT_CARDS } from '../../data/gameContent';
 import { resolveCombat, rollCharge, CombatResult, checkTypeAdvantage, getAbilityUsageLimit, checkAbilityActivation, AbilityUsageLimit } from '../../engine/combatEngine';
 import { calculatePOIScores, checkWinConditions } from '../../engine/scoringEngine';
-import { checkAndTriggerEvents } from '../../engine/eventsEngine';
+import { checkAndTriggerEvents, relocateSpecialTiles } from '../../engine/eventsEngine';
 import { StorageService, PRESET_MAPS } from '../../services/storageService';
-import { TabletopCanvas } from './TabletopCanvas';
+import { TabletopCanvas, getTraitBadgeInfo } from './TabletopCanvas';
 import { vttDragBridge } from '../../services/dragBridge';
 import { vfxDispatcher } from '../../services/audioVfxService';
 import { FactionLogo } from '../common/FactionLogo';
@@ -33,7 +33,7 @@ import {
   fitFormationToZone, checkUniversalTokenCollisions, validateModelMovementDistance,
   getUnitCollisionRadius, isUnitInShootingRange, isUnitInMeleeRange,
   getUnitsModelDistance, findValidMovePositionForBot, findNearestNonOverlappingPosition,
-  checkPathCrossesUnits, validateDisembarkPlacement
+  checkPathCrossesUnits, validateDisembarkPlacement, getUnitBodiesAndLives
 } from '../../engine/formationEngine';
 
 interface BattlefieldProps {
@@ -42,7 +42,7 @@ interface BattlefieldProps {
   onReturnHome?: () => void;
 }
 
-const PHASES_ORDER: Phase[] = ['Deployment', 'Command', 'Movement', 'Shooting', 'Charge', 'Fight'];
+const PHASES_ORDER: Phase[] = ['Deployment', 'Command', 'Movement', 'Action', 'Scoring'];
 
 const CARD_THEME_STYLES: Record<CardTheme, {
   bg: string;
@@ -187,8 +187,8 @@ export const createInitialGameState = (customRoster?: ArmyRoster | null): GameSt
   const p2InitRoll = Math.floor(Math.random() * 6) + 1;
   const initWinner: 'player1' | 'player2' = p1InitRoll >= p2InitRoll ? 'player1' : 'player2';
 
-  const p1AllCards = [...GENERAL_CARDS, ...(FACTION_CARDS['crimson_empire'] || [])];
-  const p2AllCards = [...GENERAL_CARDS, ...(FACTION_CARDS['daughters_astraea'] || [])];
+  const p1AllCards = [...SECONDARY_MISSION_CARDS, ...FIELD_EFFECT_CARDS, ...GENERAL_CARDS, ...(FACTION_CARDS['crimson_empire'] || [])];
+  const p2AllCards = [...SECONDARY_MISSION_CARDS, ...FIELD_EFFECT_CARDS, ...GENERAL_CARDS, ...(FACTION_CARDS['daughters_astraea'] || [])];
 
   const initialMaps = StorageService.getMaps();
   const initialMap = initialMaps[0] || PRESET_MAPS[0];
@@ -277,6 +277,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
   const [targetUnitId, setTargetUnitId] = useState<string | null>(null);
   const [recentCombatResult, setRecentCombatResult] = useState<CombatResult | null>(null);
   const [showCardDrawer, setShowCardDrawer] = useState<boolean>(false);
+  const [cardDrawerTab, setCardDrawerTab] = useState<'missions' | 'field_hazards'>('missions');
   const [draggedUnitId, setDraggedUnitId] = useState<string | null>(null);
   
   // Slide-out drawers for Army Tray, Dice Tray, Command Phase, Strategic Reserves, and Embarked Units
@@ -408,6 +409,50 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     const enemyOwner = selectedUnit.owner === 'player1' ? 'player2' : 'player1';
     const enemies = gameState.units.filter(u => u.owner === enemyOwner && u.position && u.stats.lives > 0);
 
+    if (gameState.phase === 'Action') {
+      const remActions = selectedUnit.actionsRemaining ?? 2;
+      if (remActions <= 0) return [];
+
+      const attachedLeaders = (selectedUnit.attachedUnits || [])
+        .map(id => gameState.units.find(u => u.id === id))
+        .filter((l): l is Unit => !!l && (l.stats?.lives ?? 0) > 0);
+      const rangedAttachedLeaders = attachedLeaders.filter(l => l.stats.range > 0);
+
+      const canSquadShoot = selectedUnit.stats.range > 0;
+      const canLeaderShoot = isAttachedLeader
+        ? (selectedUnit.stats.range > 0)
+        : (rangedAttachedLeaders.length > 0);
+      const canShoot = canSquadShoot || canLeaderShoot;
+
+      const maxRange = Math.max(
+        canSquadShoot ? selectedUnit.stats.range : 0,
+        isAttachedLeader
+          ? (canLeaderShoot ? selectedUnit.stats.range : 0)
+          : (rangedAttachedLeaders.reduce((max, l) => Math.max(max, l.stats.range), 0))
+      );
+
+      const measuringUnit: Unit = {
+        ...(isAttachedLeader && hostSquad ? hostSquad : selectedUnit),
+        stats: {
+          ...(isAttachedLeader && hostSquad ? hostSquad.stats : selectedUnit.stats),
+          range: maxRange
+        }
+      };
+
+      return enemies.filter(e => {
+        // 1. In Melee range (for Fight)
+        const inMelee = isUnitInMeleeRange(selectedUnit, e, DEFAULT_GRID_SIZE);
+        // 2. In Shooting range (for Shoot)
+        const inShoot = canShoot && isUnitInShootingRange(measuringUnit, e, DEFAULT_GRID_SIZE);
+        // 3. In Engagement range (for Engage: dist > 0.3 and <= mv + 0.3)
+        const { minModelDistPx } = getUnitsModelDistance(selectedUnit, e);
+        const dist = minModelDistPx / DEFAULT_GRID_SIZE;
+        const inEngagement = dist > 0.3 && dist <= (selectedUnit.stats.mv + 0.3);
+
+        return inMelee || inShoot || inEngagement;
+      });
+    }
+
     if (gameState.phase === 'Shooting') {
       const attachedLeaders = (selectedUnit.attachedUnits || [])
         .map(id => gameState.units.find(u => u.id === id))
@@ -532,8 +577,8 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     // Deployment coin flip
     const deploymentCoinFlip: 'player1' | 'player2' = Math.random() >= 0.5 ? 'player1' : 'player2';
 
-    const p1AllCards = [...GENERAL_CARDS, ...(FACTION_CARDS[chosenP1.factionId] || [])];
-    const p2AllCards = [...GENERAL_CARDS, ...(FACTION_CARDS[botRoster.factionId] || [])];
+    const p1AllCards = [...SECONDARY_MISSION_CARDS, ...FIELD_EFFECT_CARDS, ...GENERAL_CARDS, ...(FACTION_CARDS[chosenP1.factionId] || [])];
+    const p2AllCards = [...SECONDARY_MISSION_CARDS, ...FIELD_EFFECT_CARDS, ...GENERAL_CARDS, ...(FACTION_CARDS[botRoster.factionId] || [])];
 
     const matchLogs: CombatLogEntry[] = [
       {
@@ -740,8 +785,8 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     const bodyguard = gameState.units.find(u => u.id === bodyguardId);
     if (!leader || !bodyguard) return;
 
-    if (gameState.phase !== 'Deployment' && gameState.phase !== 'Command') {
-      addLog('Leaders can only attach to bodyguard squads during Deployment or Command Phase.', 'info');
+    if (gameState.phase !== 'Deployment') {
+      addLog('⛔ Attachment Locked: Leaders can only attach to bodyguard squads during Deployment Phase.', 'info');
       return;
     }
 
@@ -829,15 +874,15 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       return;
     }
 
-    // RULE-001: Cannot embark if already disembarked in this phase (unless Fight phase exception)
-    const isFightReembark = gameState.phase === 'Fight' && infantry.lastDisembarkRound === gameState.round && infantry.lastDisembarkPhase !== 'Fight';
+    // RULE-001: Cannot embark if already disembarked in this phase (unless Fight/Action phase exception)
+    const isFightReembark = (gameState.phase === 'Fight' || gameState.phase === 'Action') && infantry.lastDisembarkRound === gameState.round && infantry.lastDisembarkPhase !== gameState.phase;
     if (infantry.lastDisembarkPhase === gameState.phase && infantry.lastDisembarkRound === gameState.round) {
       addLog(`⛔ Action Restricted: ${infantry.name} cannot embark and disembark in the same phase!`, 'info');
       return;
     }
 
     if (gameState.phase !== 'Deployment' && gameState.phase !== 'Movement' && !isFightReembark) {
-      addLog('Units can only embark during Deployment or Movement Phase (or re-embark in Fight Phase if disembarked earlier this round).', 'info');
+      addLog('Units can only embark during Deployment or Movement Phase (or re-embark in Action Phase if disembarked earlier this round).', 'info');
       return;
     }
 
@@ -859,6 +904,11 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
     const updatedInfantry: Unit = {
       ...setUnitMutualState(infantry, 'embarked', { vehicleId: vehicle.id }),
+      isPendingMoveConfirm: false,
+      isPendingDisembarkConfirm: false,
+      pendingOriginalPosition: null,
+      pendingOriginalTokens: null,
+      hasMoved: true,
       lastEmbarkPhase: gameState.phase,
       lastEmbarkRound: gameState.round
     };
@@ -869,6 +919,11 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       if (infantry.attachedUnits && infantry.attachedUnits.includes(u.id)) {
         return {
           ...setUnitMutualState(u, 'embarked', { vehicleId: vehicle.id }),
+          isPendingMoveConfirm: false,
+          isPendingDisembarkConfirm: false,
+          pendingOriginalPosition: null,
+          pendingOriginalTokens: null,
+          hasMoved: true,
           lastEmbarkPhase: gameState.phase,
           lastEmbarkRound: gameState.round
         };
@@ -878,6 +933,11 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
     addLog(`🛡️ ${infantry.name}${infantry.attachedUnits?.length ? ' (with Commander)' : ''} embarked into transport ${vehicle.name}.`, 'event');
     setEmbarkModalUnitId(null);
+
+    // Switch selection to the transport vehicle so the player can immediately control the vehicle or select another unit without freeze
+    if (selectedUnitId === infantryId || (infantry.attachedUnits && infantry.attachedUnits.includes(selectedUnitId || ''))) {
+      setSelectedUnitId(vehicle.id);
+    }
 
     if (gameState.phase === 'Deployment') {
       if (vehicle.position) {
@@ -937,9 +997,11 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
     const staged = moveUnit({ 
       ...setUnitMutualState(infantry, 'onBoard', { position: disembarkPos }), 
+      hasCustomTokenPositions: false,
       isPendingDisembarkConfirm: true,
       disembarkingFromVehicleId: vehicle.id,
-      pendingOriginalPosition: null
+      pendingOriginalPosition: null,
+      pendingOriginalTokens: null
     }, disembarkPos, updatedUnits);
 
     updatedUnits = updatedUnits.map(u => u.id === infantryId ? staged : u);
@@ -1541,6 +1603,13 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       return;
     }
 
+    // Section 7: 1-Square No-End Zone Rule (Cannot end normal move within 50px of enemy)
+    const proxCheck = validateNormalMovementEnemyProximity(unit, unit.tokens || [], gameState.units, 50);
+    if (!proxCheck.valid) {
+      addLog(`⛔ Move Confirmation Blocked: Normal movement cannot end within 1 square (50px) of enemy ${proxCheck.offendingEnemyUnit?.name}! Only a Charge can enter Engagement Range.`, 'event', 'Engagement Range Error');
+      return;
+    }
+
     // Coherency is valid! Clear offending flags and refresh turnStartPos (BUG-003)
     const cleanTokens = (unit.tokens || []).map(t => ({
       ...t,
@@ -2076,6 +2145,10 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
         addLog(`⚠️ Please select one of your own active units on the battlefield first!`, 'info', 'Command');
         return;
       }
+      if (selectedUnit.issuedStratagemsThisTurn?.includes(stratagemId)) {
+        addLog(`⛔ Stratagem Restricted: [${strat.name}] has already been issued to ${selectedUnit.name} this turn! (Limit: 1 per unit per turn)`, 'event', 'Command');
+        return;
+      }
     }
 
     setGameState(prev => {
@@ -2084,24 +2157,28 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
       const updatedUnits = prev.units.map(u => {
         if (!selectedUnit || u.id !== selectedUnit.id) return u;
+        const currentIssued = u.issuedStratagemsThisTurn || [];
+        const nextIssued = currentIssued.includes(stratagemId) ? currentIssued : [...currentIssued, stratagemId];
+        const baseUnit = { ...u, issuedStratagemsThisTurn: nextIssued };
+
         if (stratagemId === 'tactical_blitz') {
-          return { ...u, stats: { ...u.stats, mv: u.stats.mv + 2 } };
+          return { ...baseUnit, stats: { ...baseUnit.stats, mv: baseUnit.stats.mv + 2 } };
         }
         if (stratagemId === 'overcharged_munitions') {
-          return { ...u, stats: { ...u.stats, am: u.stats.am + 1 } };
+          return { ...baseUnit, stats: { ...baseUnit.stats, am: baseUnit.stats.am + 1 } };
         }
         if (stratagemId === 'aegis_bulwark') {
-          return { ...u, stats: { ...u.stats, defModifier: Math.min(3, u.stats.defModifier + 1) } };
+          return { ...baseUnit, stats: { ...baseUnit.stats, defModifier: Math.min(3, baseUnit.stats.defModifier + 1) } };
         }
         if (stratagemId === 'field_repairs') {
-          const restoredLives = Math.min(u.stats.maxLives, u.stats.lives + 2);
-          const repaired = { ...u, stats: { ...u.stats, lives: restoredLives } };
+          const restoredLives = Math.min(baseUnit.stats.maxLives, baseUnit.stats.lives + 2);
+          const repaired = { ...baseUnit, stats: { ...baseUnit.stats, lives: restoredLives } };
           return syncUnitTokens(repaired);
         }
         if (stratagemId === 'inspiring_command') {
-          return { ...u, advantageStacks: Math.min(2, u.advantageStacks + 1), disadvantageStacks: 0 };
+          return { ...baseUnit, advantageStacks: Math.min(2, baseUnit.advantageStacks + 1), disadvantageStacks: 0 };
         }
-        return u;
+        return baseUnit;
       });
 
       const logMsg = `⚡ STRATAGEM: [${strat.name}] activated for ${strat.cost} CP on ${selectedUnit?.name || 'Army'}!`;
@@ -2336,7 +2413,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     if (!specificShooter && selectedUnit.stats.range === 0 && selectedUnit.attachedUnits) {
       const attachedLeaders = selectedUnit.attachedUnits
         .map(id => gameState.units.find(u => u.id === id))
-        .filter((l): l is Unit => !!l && l.stats.range > 0 && !l.hasShot && (l.stats?.lives ?? 0) > 0);
+        .filter((l): l is Unit => !!l && l.stats.range > 0 && (l.stats?.lives ?? 0) > 0);
       if (attachedLeaders.length > 0) {
         shooter = attachedLeaders[0];
       }
@@ -2347,11 +2424,17 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       ? gameState.units.find(u => u.id === (shooter.attachedTo || selectedUnit.id))
       : null;
 
+    const currentActions = selectedUnit.actionsRemaining ?? 2;
+    if (gameState.phase === 'Action' && currentActions <= 0) {
+      addLog(`⛔ Cannot Shoot: ${selectedUnit.name} has no actions remaining!`, 'info');
+      return;
+    }
+
     if (shooter.stats.range === 0) {
       addLog(`⛔ Cannot Shoot: ${shooter.name} is melee-only (range 0)!`, 'info');
       return;
     }
-    if (shooter.hasShot) {
+    if (gameState.phase !== 'Action' && shooter.hasShot) {
       addLog(`⛔ Cannot Shoot: ${shooter.name} has already fired this round!`, 'info');
       return;
     }
@@ -2391,7 +2474,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     const combatMessage = isLeaderShooting && hostSquad
       ? `🎯 [Leader Fire] ${shooter.name} (attached to ${hostSquad.name}) fired at ${targetUnit.name}! ${result.logText}`
       : result.logText;
-    addLog(combatMessage, 'combat', 'Shooting');
+    addLog(combatMessage, 'combat', gameState.phase === 'Action' ? 'Action' : 'Shooting');
     applyDamageToUnit(targetUnit.id, result.livesLost, result.defModifierChange, shooter.owner);
 
     // Trigger unit-specific and action-specific shooting VFX & SFX
@@ -2403,30 +2486,54 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     }
     vfxDispatcher.triggerShoot(originPos, targetUnit.position, shootVariant);
 
-    // Mark ONLY the actual shooter as having shot (not the entire unit if only leader fired)
+    // Mark shooter/squad as having shot and deduct 1 action
     setGameState(prev => ({
       ...prev,
-      units: prev.units.map(u => u.id === shooter.id ? { ...u, hasShot: true } : u)
+      units: prev.units.map(u => {
+        if (u.id === shooter.id || u.id === selectedUnit.id) {
+          return {
+            ...u,
+            hasShot: true,
+            actionsRemaining: Math.max(0, (u.actionsRemaining ?? 2) - 1)
+          };
+        }
+        return u;
+      })
     }));
   };
 
-  const handleExecuteCharge = () => {
+  const handleExecuteEngagement = () => {
     if (!selectedUnit || !targetUnit || !selectedUnit.position || !targetUnit.position) return;
+
+    const currentActions = selectedUnit.actionsRemaining ?? 2;
+    if (gameState.phase === 'Action' && currentActions <= 0) {
+      addLog(`⛔ Cannot Engage: ${selectedUnit.name} has no actions remaining!`, 'info');
+      return;
+    }
+
     const { minModelDistPx } = getUnitsModelDistance(selectedUnit, targetUnit);
     const currentDistSq = minModelDistPx / DEFAULT_GRID_SIZE;
     const chargeRes = rollCharge(selectedUnit.stats.mv);
 
     if (!chargeRes.success) {
-      addLog(`❌ Charge Failed! ${selectedUnit.name} rolled ${chargeRes.roll} on 1d6.`, 'charge');
+      addLog(`❌ Engagement Failed! ${selectedUnit.name} rolled ${chargeRes.roll} on 1d6.`, 'charge', gameState.phase === 'Action' ? 'Action' : 'Charge');
       setGameState(prev => ({
         ...prev,
-        units: prev.units.map(u => u.id === selectedUnit.id ? { ...u, hasCharged: true } : u)
+        units: prev.units.map(u => u.id === selectedUnit.id ? { 
+          ...u, 
+          hasCharged: true,
+          actionsRemaining: Math.max(0, (u.actionsRemaining ?? 2) - 1)
+        } : u)
       }));
     } else if (chargeRes.distance < currentDistSq - 1.2) {
-      addLog(`⚠️ Charge Fell Short! Rolled ${chargeRes.roll} (${chargeRes.distance} sq < ${currentDistSq.toFixed(1)} sq).`, 'charge');
+      addLog(`⚠️ Engagement Fell Short! Rolled ${chargeRes.roll} (${chargeRes.distance} sq < ${currentDistSq.toFixed(1)} sq).`, 'charge', gameState.phase === 'Action' ? 'Action' : 'Charge');
       setGameState(prev => ({
         ...prev,
-        units: prev.units.map(u => u.id === selectedUnit.id ? { ...u, hasCharged: true } : u)
+        units: prev.units.map(u => u.id === selectedUnit.id ? { 
+          ...u, 
+          hasCharged: true,
+          actionsRemaining: Math.max(0, (u.actionsRemaining ?? 2) - 1)
+        } : u)
       }));
     } else {
       const angle = Math.atan2(targetUnit.position.y - selectedUnit.position.y, targetUnit.position.x - selectedUnit.position.x);
@@ -2476,10 +2583,14 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       }
 
       if (!foundValidCharge) {
-        addLog(`⛔ Charge Blocked: Intervening units obstruct all charge paths between ${selectedUnit.name} and ${targetUnit.name}! (Units cannot move through models without FLY).`, 'charge');
+        addLog(`⛔ Engagement Blocked: Intervening units obstruct all engagement paths between ${selectedUnit.name} and ${targetUnit.name}! (Units cannot move through models without FLY).`, 'charge', gameState.phase === 'Action' ? 'Action' : 'Charge');
         setGameState(prev => ({
           ...prev,
-          units: prev.units.map(u => u.id === selectedUnit.id ? { ...u, hasCharged: true } : u)
+          units: prev.units.map(u => u.id === selectedUnit.id ? { 
+            ...u, 
+            hasCharged: true,
+            actionsRemaining: Math.max(0, (u.actionsRemaining ?? 2) - 1)
+          } : u)
         }));
         return;
       }
@@ -2487,6 +2598,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       const chargedUnit = moveUnit({
         ...selectedUnit,
         hasCharged: true,
+        actionsRemaining: Math.max(0, (selectedUnit.actionsRemaining ?? 2) - 1),
         advantageStacks: Math.min(2, selectedUnit.advantageStacks + 1)
       }, bestPos, gameState.units);
 
@@ -2501,7 +2613,8 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
             return {
               ...u,
               position: leaderPos,
-              hasCharged: true
+              hasCharged: true,
+              actionsRemaining: Math.max(0, (u.actionsRemaining ?? 2) - 1)
             };
           }
           return u;
@@ -2514,12 +2627,21 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
         ...prev,
         units: nextUnits
       }));
-      addLog(`⚡ SUCCESSFUL CHARGE! ${selectedUnit.name} rolled ${chargeRes.roll}. Closed into melee (tangent contact)!`, 'charge');
+      addLog(`⚡ SUCCESSFUL ENGAGEMENT! ${selectedUnit.name} rolled ${chargeRes.roll}. Closed into melee (tangent contact)!`, 'charge', gameState.phase === 'Action' ? 'Action' : 'Charge');
     }
   };
 
+  const handleExecuteCharge = handleExecuteEngagement;
+
   const handleExecuteFight = () => {
     if (!selectedUnit || !targetUnit || !selectedUnit.position || !targetUnit.position) return;
+
+    const currentActions = selectedUnit.actionsRemaining ?? 2;
+    if (gameState.phase === 'Action' && currentActions <= 0) {
+      addLog(`⛔ Cannot Fight: ${selectedUnit.name} has no actions remaining!`, 'info');
+      return;
+    }
+
     if (!isUnitInMeleeRange(selectedUnit, targetUnit, DEFAULT_GRID_SIZE)) {
       const { minEdgeDistPx } = getUnitsModelDistance(selectedUnit, targetUnit);
       const edgeSq = (minEdgeDistPx / DEFAULT_GRID_SIZE).toFixed(1);
@@ -2530,7 +2652,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     // 1. Host unit resolves combat
     const result = resolveCombat(selectedUnit, targetUnit, true, 0);
     setRecentCombatResult(result);
-    addLog(result.logText, 'combat', 'Fight');
+    addLog(result.logText, 'combat', gameState.phase === 'Action' ? 'Action' : 'Fight');
     applyDamageToUnit(targetUnit.id, result.livesLost, result.defModifierChange, selectedUnit.owner);
 
     // Trigger Melee Fight VFX & SFX
@@ -2560,11 +2682,163 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       }
     }
 
-    // Mark host squad and attached leaders as having fought
+    // Mark host squad and attached leaders as having fought and decrement 1 action
     const foughtIds = new Set<string>([selectedUnit.id, ...(selectedUnit.attachedUnits || [])]);
     setGameState(prev => ({
       ...prev,
-      units: prev.units.map(u => foughtIds.has(u.id) ? { ...u, hasFought: true } : u)
+      units: prev.units.map(u => foughtIds.has(u.id) ? { 
+        ...u, 
+        hasFought: true,
+        actionsRemaining: Math.max(0, (u.actionsRemaining ?? 2) - 1)
+      } : u)
+    }));
+  };
+
+  const handleExecuteMissionAction = () => {
+    if (!selectedUnit) return;
+    const currentActions = selectedUnit.actionsRemaining ?? 2;
+    if (gameState.phase === 'Action' && currentActions <= 0) {
+      addLog(`⛔ Cannot perform Mission Action: ${selectedUnit.name} has no actions remaining!`, 'info');
+      return;
+    }
+    const newActions = Math.max(0, currentActions - 1);
+
+    const isP1 = selectedUnit.owner === 'player1';
+    const activeCards = isP1 ? gameState.player1ActiveCards : gameState.player2ActiveCards;
+    const unitPos = selectedUnit.position || (selectedUnit.tokens && selectedUnit.tokens[0] ? { x: selectedUnit.tokens[0].x, y: selectedUnit.tokens[0].y } : null);
+
+    let completedCard: Card | null = null;
+    let vpAwarded = 0;
+
+    if (unitPos) {
+      for (const card of activeCards) {
+        if (card.type !== 'SecondaryMission') continue;
+        let achieved = false;
+
+        if (card.id === 'sec_teleport_homer') {
+          // An Infantry unit performs a Mission Action in the enemy deployment half. (+3 VP)
+          const inEnemyHalf = isP1 ? unitPos.x > 600 : unitPos.x < 600;
+          if (selectedUnit.type === 'Infantry' && inEnemyHalf) {
+            achieved = true;
+          }
+        } else if (card.id === 'sec_investigate_archeotech') {
+          // A unit performs a Mission Action within 80px of any Point of Interest or Special Tile. (+2 VP)
+          const nearPoi = gameState.pois.some(p => Math.hypot(p.x - unitPos.x, p.y - unitPos.y) <= (p.radius || 70) + 30);
+          const nearSpecial = (gameState.specialTiles || []).some(t => Math.hypot(t.x - unitPos.x, t.y - unitPos.y) <= 80);
+          if (nearPoi || nearSpecial) {
+            achieved = true;
+          }
+        } else if (card.id === 'sec_establish_signal_array') {
+          // A unit performs a Mission Action while positioned on High Ground. (+2 VP)
+          const onHighGround = (gameState.specialTiles || []).some(t => t.type === 'HighGround' && Math.hypot(t.x - unitPos.x, t.y - unitPos.y) <= 80);
+          if (onHighGround) {
+            achieved = true;
+          }
+        } else if (card.id === 'sec_contain_rift') {
+          // A unit performs a Mission Action within 80px of a Rift Fracture. (+3 VP)
+          const nearRift = (gameState.specialTiles || []).some(t => (t.type === 'InfernalRift' || t.name.toLowerCase().includes('rift')) && Math.hypot(t.x - unitPos.x, t.y - unitPos.y) <= 100);
+          if (nearRift) {
+            achieved = true;
+          }
+        } else if (card.id === 'sec_dredge_mire') {
+          // An Infantry unit performs a Mission Action in or adjacent to Flooded Mire. (+3 VP)
+          const nearMire = (gameState.specialTiles || []).some(t => (t.type === 'Water' || t.name.toLowerCase().includes('mire')) && Math.hypot(t.x - unitPos.x, t.y - unitPos.y) <= 100);
+          if (selectedUnit.type === 'Infantry' && nearMire) {
+            achieved = true;
+          }
+        } else if (card.id === 'sec_sabotage_core') {
+          // A unit performs a Mission Action on the center Point of Interest. (+3 VP)
+          const centerPoi = gameState.pois.find(p => p.type === 'Special') || gameState.pois[1];
+          if (centerPoi && Math.hypot(centerPoi.x - unitPos.x, centerPoi.y - unitPos.y) <= (centerPoi.radius || 70) + 25) {
+            achieved = true;
+          }
+        }
+
+        if (achieved) {
+          completedCard = card;
+          vpAwarded = card.pointsValue || 2;
+          break;
+        }
+      }
+    }
+
+    setGameState(prev => {
+      let newP1Score = prev.player1Score;
+      let newP2Score = prev.player2Score;
+      let newP1ActiveCards = [...prev.player1ActiveCards];
+      let newP2ActiveCards = [...prev.player2ActiveCards];
+
+      if (completedCard) {
+        if (isP1) {
+          newP1Score += vpAwarded;
+          const unused = prev.player1CardPool.filter(c => !prev.player1ActiveCards.some(ac => ac.id === c.id));
+          const replacement = unused.length > 0 ? unused[Math.floor(Math.random() * unused.length)] : completedCard;
+          newP1ActiveCards = prev.player1ActiveCards.map(c => c.id === completedCard!.id ? replacement : c);
+        } else {
+          newP2Score += vpAwarded;
+          const unused = prev.player2CardPool.filter(c => !prev.player2ActiveCards.some(ac => ac.id === c.id));
+          const replacement = unused.length > 0 ? unused[Math.floor(Math.random() * unused.length)] : completedCard;
+          newP2ActiveCards = prev.player2ActiveCards.map(c => c.id === completedCard!.id ? replacement : c);
+        }
+      }
+
+      return {
+        ...prev,
+        player1Score: newP1Score,
+        player2Score: newP2Score,
+        player1ActiveCards: newP1ActiveCards,
+        player2ActiveCards: newP2ActiveCards,
+        units: prev.units.map(u => u.id === selectedUnit.id ? {
+          ...u,
+          actionsRemaining: newActions
+        } : u)
+      };
+    });
+
+    if (completedCard) {
+      try {
+        confetti({ particleCount: 75, spread: 65, origin: { y: 0.6 } });
+      } catch {}
+      addLog(`🎯 [Objective Completed] ${selectedUnit.name} accomplished "${completedCard.name}"! (+${vpAwarded} VP, ${newActions} action${newActions === 1 ? '' : 's'} remaining).`, 'score', 'Action');
+    } else {
+      addLog(`📋 [Mission Action] ${selectedUnit.name} completed a secondary tactical action! (${newActions} action${newActions === 1 ? '' : 's'} remaining).`, 'score', 'Action');
+    }
+  };
+
+  const handleTriggerFieldEffect = (selectedCard?: Card) => {
+    const card = selectedCard || FIELD_EFFECT_CARDS[Math.floor(Math.random() * FIELD_EFFECT_CARDS.length)];
+    let newSpecialTiles = gameState.specialTiles || DEFAULT_SPECIAL_TILES;
+    let relocateSummary = '';
+
+    if (card.id === 'field_shifting_mires') {
+      const res = relocateSpecialTiles(newSpecialTiles, t => t.type === 'Water' || t.name.toLowerCase().includes('mire') || t.name.toLowerCase().includes('trench'));
+      newSpecialTiles = res.updatedTiles;
+      relocateSummary = ` 🌊 Relocated: ${res.relocatedNames.join(', ')}`;
+    } else if (card.id === 'field_rift_migration') {
+      const res = relocateSpecialTiles(newSpecialTiles, t => t.type === 'InfernalRift' || t.name.toLowerCase().includes('rift'));
+      newSpecialTiles = res.updatedTiles;
+      relocateSummary = ` ⚡ Relocated: ${res.relocatedNames.join(', ')}`;
+    } else if (card.id === 'field_tectonic_fault') {
+      const res = relocateSpecialTiles(newSpecialTiles, t => t.type === 'HighGround');
+      newSpecialTiles = res.updatedTiles;
+      relocateSummary = ` 🏔️ Relocated: ${res.relocatedNames.join(', ')}`;
+    }
+
+    setGameState(prev => ({
+      ...prev,
+      specialTiles: newSpecialTiles,
+      logs: [
+        {
+          id: `log_field_${Date.now()}`,
+          round: prev.round,
+          phase: prev.phase,
+          source: 'Field Hazard Deck',
+          message: `🌪️ [Field Hazard: ${card.name}] ${card.objectiveText || card.description}${relocateSummary}`,
+          type: 'event',
+          timestamp: new Date().toLocaleTimeString()
+        },
+        ...prev.logs.slice(0, 74)
+      ]
     }));
   };
 
@@ -2707,7 +2981,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     }
   };
 
-  const BATTLE_PHASES: Phase[] = ['Command', 'Movement', 'Shooting', 'Charge', 'Fight'];
+  const BATTLE_PHASES: Phase[] = ['Command', 'Movement', 'Action'];
 
   const executeAdvancePhase = () => {
     setSelectedUnitId(null);
@@ -2732,6 +3006,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
           // Both deployed or placed in reserve! Move to Round 1 Command phase with Player 1
           const readyUnits = updatedUnits.map(u => ({
             ...u,
+            actionsRemaining: u.maxActions || 2,
             hasMoved: false,
             isPendingMoveConfirm: false,
             pendingOriginalPosition: undefined,
@@ -2787,7 +3062,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
         }
       }
 
-      // 2. Battle Phases: Command -> Movement -> Shooting -> Charge -> Fight
+      // 2. Battle Phases: Command -> Movement -> Action
       const currentPhaseIndex = BATTLE_PHASES.indexOf(prev.phase);
 
       // BUG-006: Auto-confirm any pending moves when leaving Movement phase
@@ -2833,6 +3108,15 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                 }))
               };
             }
+            if (nextPhase === 'Action') {
+              return {
+                ...u,
+                actionsRemaining: u.maxActions || 2,
+                hasShot: false,
+                hasCharged: false,
+                hasFought: false
+              };
+            }
             if (nextPhase === 'Shooting') return { ...u, hasShot: false };
             if (nextPhase === 'Charge') return { ...u, hasCharged: false };
             if (nextPhase === 'Fight') return { ...u, hasFought: false };
@@ -2857,14 +3141,18 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
             ]
           };
         } else {
-          // Player 1 finished 'Fight'! Hand turn to Player 2 at 'Command'
+          // Player 1 finished 'Action'! Hand turn to Player 2 at 'Command'
           const p2CPNew = (prev.player2CP ?? 3) + 1;
+          const unitsForP2 = baseUnits.map(u => ({
+            ...u,
+            issuedStratagemsThisTurn: u.owner === 'player2' ? [] : u.issuedStratagemsThisTurn
+          }));
           return {
             ...prev,
             phase: 'Command',
             activePlayer: 'player2',
             player2CP: p2CPNew,
-            units: baseUnits,
+            units: unitsForP2,
             logs: [
               {
                 id: `log_${Date.now()}`,
@@ -2901,6 +3189,15 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                 }))
               };
             }
+            if (nextPhase === 'Action') {
+              return {
+                ...u,
+                actionsRemaining: u.maxActions || 2,
+                hasShot: false,
+                hasCharged: false,
+                hasFought: false
+              };
+            }
             if (nextPhase === 'Shooting') return { ...u, hasShot: false };
             if (nextPhase === 'Charge') return { ...u, hasCharged: false };
             if (nextPhase === 'Fight') return { ...u, hasFought: false };
@@ -2925,17 +3222,18 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
             ]
           };
         } else {
-          // Player 2 finished 'Fight'! END OF ROUND N!
+          // Player 2 finished 'Action'! END OF ROUND N!
           const poiResult = calculatePOIScores(baseUnits, prev.pois);
           const newP1Score = prev.player1Score + poiResult.p1TotalPoiScore;
           const newP2Score = prev.player2Score + poiResult.p2TotalPoiScore;
           const clonedEvents = [...prev.activeEvents];
           const clonedUnits = [...baseUnits];
-          const eventRes = checkAndTriggerEvents(prev.round, clonedEvents, clonedUnits);
+          const eventRes = checkAndTriggerEvents(prev.round, clonedEvents, clonedUnits, prev.specialTiles);
 
           // Reset all action flags, stacks, temporary round buffs, and refresh turnStartPos for all units
           const cleanUnits = clonedUnits.map(u => ({
             ...u,
+            actionsRemaining: u.maxActions || 2,
             hasMoved: false,
             hasShot: false,
             hasCharged: false,
@@ -2945,6 +3243,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
             pendingOriginalTokens: undefined,
             advantageStacks: 0,
             disadvantageStacks: 0,
+            issuedStratagemsThisTurn: [],
             traits: (u.traits || []).filter(t => t !== 'IgnoreDifficultTerrain' && t !== 'IgnoreTerrain'),
             stats: {
               ...u.stats,
@@ -3006,6 +3305,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
               player1Score: newP1Score,
               player2Score: newP2Score,
               activeEvents: clonedEvents,
+              specialTiles: eventRes.specialTiles ?? prev.specialTiles,
               units: cleanUnits,
               logs: [...victoryLogs, ...prev.logs.slice(0, 75 - victoryLogs.length)]
             };
@@ -3052,6 +3352,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
             player2Score: newP2Score,
             player1CP: p1CPNew,
             activeEvents: clonedEvents,
+            specialTiles: eventRes.specialTiles ?? prev.specialTiles,
             units: cleanUnits,
             logs: [...endLogs, ...prev.logs.slice(0, 75 - endLogs.length)]
           };
@@ -3161,6 +3462,123 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       } else {
         handleAdvancePhase();
       }
+      return;
+    }
+
+    if (gameState.phase === 'Action') {
+      const activeUnitsWithActions = p2Units.filter(u => (u.actionsRemaining ?? 2) > 0 && u.position);
+      if (activeUnitsWithActions.length > 0) {
+        // Priority 1: Melee Fight if already in contact
+        for (const fighter of activeUnitsWithActions) {
+          const inMeleeTarget = p1Units.find(t => t.position && isUnitInMeleeRange(fighter, t, DEFAULT_GRID_SIZE));
+          if (inMeleeTarget && inMeleeTarget.position) {
+            const res = resolveCombat(fighter, inMeleeTarget, true);
+            addLog(`Bot: ${res.logText}`, 'combat', 'Action');
+            applyDamageToUnit(inMeleeTarget.id, res.livesLost, res.defModifierChange, 'player2');
+            vfxDispatcher.triggerFight(
+              inMeleeTarget.position, 
+              fighter.type === 'Monster' ? 'claws' : fighter.type === 'Vehicle' ? 'crush' : 'slash'
+            );
+            setGameState(prev => ({
+              ...prev,
+              units: prev.units.map(u => u.id === fighter.id ? { 
+                ...u, 
+                hasFought: true,
+                actionsRemaining: Math.max(0, (u.actionsRemaining ?? 2) - 1)
+              } : u)
+            }));
+            return;
+          }
+        }
+
+        // Priority 2: Shoot if ranged enemy in target range
+        for (const shooter of activeUnitsWithActions) {
+          if (shooter.stats.range > 0) {
+            const inRangeTarget = p1Units.find(t => t.position && isUnitInShootingRange(shooter, t, DEFAULT_GRID_SIZE));
+            if (inRangeTarget && inRangeTarget.position) {
+              const res = resolveCombat(shooter, inRangeTarget, false);
+              addLog(`Bot: ${res.logText}`, 'combat', 'Action');
+              applyDamageToUnit(inRangeTarget.id, res.livesLost, res.defModifierChange, 'player2');
+              vfxDispatcher.triggerShoot(
+                shooter.position!, 
+                inRangeTarget.position, 
+                shooter.traits?.includes('Psionic') ? 'laser' : shooter.type === 'Monster' ? 'plasma' : 'ballistic'
+              );
+              setGameState(prev => ({
+                ...prev,
+                units: prev.units.map(u => u.id === shooter.id ? { 
+                  ...u, 
+                  hasShot: true,
+                  actionsRemaining: Math.max(0, (u.actionsRemaining ?? 2) - 1)
+                } : u)
+              }));
+              return;
+            }
+          }
+        }
+
+        // Priority 3: Engage if close to an enemy
+        for (const charger of activeUnitsWithActions) {
+          const nearEnemy = p1Units.find(t => {
+            if (!t.position) return false;
+            const { minModelDistPx } = getUnitsModelDistance(charger, t);
+            const dist = minModelDistPx / DEFAULT_GRID_SIZE;
+            return dist > 0.3 && dist <= (charger.stats.mv + 0.3);
+          });
+          if (nearEnemy && nearEnemy.position) {
+            const res = rollCharge(charger.stats.mv);
+            if (res.success) {
+              const angle = Math.atan2(nearEnemy.position.y - charger.position!.y, nearEnemy.position.x - charger.position!.x);
+              const targetRadius = getUnitCollisionRadius(nearEnemy);
+              const chargerRadius = getUnitCollisionRadius(charger);
+              const contactDist = targetRadius + chargerRadius + 2;
+
+              const candidateAngles = [angle, angle + 0.25, angle - 0.25, angle + 0.5, angle - 0.5, angle + 0.75, angle - 0.75];
+              let bestPos = {
+                x: Math.max(chargerRadius, Math.min(1200 - chargerRadius, Math.round(nearEnemy.position.x - Math.cos(angle) * contactDist))),
+                y: Math.max(chargerRadius, Math.min(800 - chargerRadius, Math.round(nearEnemy.position.y - Math.sin(angle) * contactDist)))
+              };
+
+              for (const a of candidateAngles) {
+                const testX = Math.max(chargerRadius, Math.min(1200 - chargerRadius, Math.round(nearEnemy.position.x - Math.cos(a) * contactDist)));
+                const testY = Math.max(chargerRadius, Math.min(800 - chargerRadius, Math.round(nearEnemy.position.y - Math.sin(a) * contactDist)));
+                const testUnit = moveUnit(charger, { x: testX, y: testY }, gameState.units);
+                const colCheck = checkUniversalTokenCollisions(testUnit.tokens || [], gameState.units, charger.id);
+                if (!colCheck.hasCollision) {
+                  bestPos = { x: testX, y: testY };
+                  break;
+                }
+              }
+
+              const charged = moveUnit({ 
+                ...charger, 
+                hasCharged: true, 
+                actionsRemaining: Math.max(0, (charger.actionsRemaining ?? 2) - 1),
+                advantageStacks: 1 
+              }, bestPos, gameState.units);
+              setGameState(prev => ({
+                ...prev,
+                units: prev.units.map(u => u.id === charger.id ? charged : u)
+              }));
+              addLog(`Bot: ${charger.name} successfully engaged ${nearEnemy.name}!`, 'charge', 'Action');
+              return;
+            } else {
+              // Roll failed, spend 1 action
+              setGameState(prev => ({
+                ...prev,
+                units: prev.units.map(u => u.id === charger.id ? {
+                  ...u,
+                  hasCharged: true,
+                  actionsRemaining: Math.max(0, (u.actionsRemaining ?? 2) - 1)
+                } : u)
+              }));
+              addLog(`Bot: ${charger.name} failed engagement roll!`, 'charge', 'Action');
+              return;
+            }
+          }
+        }
+      }
+      handleAdvancePhase();
       return;
     }
 
@@ -3507,6 +3925,38 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
             <span>Embarked ({gameState.units.filter(u => !!u.embarkedIn).length})</span>
           </button>
 
+          <button
+            onClick={() => {
+              setCardDrawerTab('missions');
+              setShowCardDrawer(true);
+            }}
+            className={`px-2.5 py-1 rounded shadow text-xs font-bold font-mono flex items-center space-x-1.5 transition ${
+              showCardDrawer && cardDrawerTab === 'missions'
+                ? 'bg-amber-400 text-black shadow-lg'
+                : 'bg-zinc-850 hover:bg-zinc-750 text-amber-300 border border-amber-400/40'
+            }`}
+            title="Open Secondary Tactical Objectives Deck"
+          >
+            <Target className="w-3.5 h-3.5" />
+            <span>Secondary Deck ({gameState.activePlayer === 'player1' ? gameState.player1ActiveCards.filter(c => c.type === 'SecondaryMission').length : gameState.player2ActiveCards.filter(c => c.type === 'SecondaryMission').length})</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setCardDrawerTab('field_hazards');
+              setShowCardDrawer(true);
+            }}
+            className={`px-2.5 py-1 rounded shadow text-xs font-bold font-mono flex items-center space-x-1.5 transition ${
+              showCardDrawer && cardDrawerTab === 'field_hazards'
+                ? 'bg-rose-500 text-white shadow-lg'
+                : 'bg-zinc-850 hover:bg-zinc-750 text-rose-300 border border-rose-500/40'
+            }`}
+            title="Open Mid-Game Events & Hazard Disasters Deck (Shifting Terrain)"
+          >
+            <Flame className="w-3.5 h-3.5" />
+            <span>Event Deck ({gameState.activeEvents.filter(e => e.activeRemaining > 0).length > 0 ? gameState.activeEvents.filter(e => e.activeRemaining > 0)[0].name : '6 Hazards'})</span>
+          </button>
+
           <div className="w-[1px] h-5 bg-zinc-700 mx-1" />
 
           {gameState.activePlayer === 'player2' ? (
@@ -3834,9 +4284,34 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                   <span className="text-xl">{selectedUnit.avatar}</span>
                 )}
                 <div>
-                  <span className="text-xs font-bold text-white block leading-none">{selectedUnit.name}</span>
+                  <div className="flex items-center space-x-1.5 mb-0.5 flex-wrap gap-y-1">
+                    <span className="text-xs font-bold text-white leading-none">{selectedUnit.name}</span>
+                    {/* Permanent traits */}
+                    {(selectedUnit.traits || []).map((trait, i) => {
+                      const badge = getTraitBadgeInfo(trait);
+                      return (
+                        <span key={i} className={`border text-[8px] px-1 py-0.2 rounded uppercase font-black flex items-center space-x-0.5 ${badge.badgeClass}`}>
+                          <span>{badge.icon}</span>
+                          <span>{badge.label}</span>
+                        </span>
+                      );
+                    })}
+                    {/* Temp traits / Status effects */}
+                    {(selectedUnit.tempTraits || []).map((tt, i) => {
+                      const badge = getTraitBadgeInfo(tt, true);
+                      return (
+                        <span key={`tt_${i}`} className={`border text-[8px] px-1 py-0.2 rounded uppercase font-black flex items-center space-x-0.5 ${badge.badgeClass}`}>
+                          <span>{badge.icon}</span>
+                          <span>{badge.label}</span>
+                        </span>
+                      );
+                    })}
+                  </div>
                   <span className="text-[10px] text-zinc-400 font-mono">
-                    Mv:{selectedUnit.stats.mv} | Def:{selectedUnit.stats.def + selectedUnit.stats.defModifier} | AM:{selectedUnit.stats.am} | L:{selectedUnit.stats.lives} | Form:{selectedUnit.formation || 'circle'}
+                    {(() => {
+                      const bl = getUnitBodiesAndLives(selectedUnit);
+                      return `Bodies: ${bl.livingBodies}/${bl.totalBodies} (U) | Lives: ${bl.remainingLives}/${bl.maxLives} (L) | Mv:${selectedUnit.stats.mv} | Def:${selectedUnit.stats.def + selectedUnit.stats.defModifier} | AM:${selectedUnit.stats.am} | Form:${selectedUnit.formation || 'circle'}`;
+                    })()}
                   </span>
                 </div>
               </div>
@@ -4021,6 +4496,161 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                     </div>
                   )
                 ) : (
+                  <div className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-xs text-zinc-500 font-mono">
+                    Enemy / Inactive Unit
+                  </div>
+                )
+              )}
+
+              {/* ACTION PHASE: Unified Actions (Engage, Fight, Shoot, Mission) */}
+              {gameState.phase === 'Action' && (
+                selectedUnit.owner === gameState.activePlayer ? (() => {
+                  const remActions = selectedUnit.actionsRemaining ?? 2;
+                  const maxActions = selectedUnit.maxActions ?? 2;
+                  
+                  const attachedLeaders = (selectedUnit.attachedUnits || [])
+                    .map(id => gameState.units.find(u => u.id === id))
+                    .filter((l): l is Unit => !!l && (l.stats?.lives ?? 0) > 0);
+                  const rangedAttachedLeaders = attachedLeaders.filter(l => l.stats.range > 0);
+
+                  const squadCanShoot = selectedUnit.stats.range > 0;
+                  const canAnyShoot = squadCanShoot || rangedAttachedLeaders.length > 0;
+
+                  // Melee reach check
+                  const inMeleeWithTarget = !!(targetUnit && isUnitInMeleeRange(selectedUnit, targetUnit, DEFAULT_GRID_SIZE));
+
+                  // Engagement reach check (distance > 0.3 and <= mv + 0.3)
+                  let canEngageTarget = false;
+                  if (targetUnit && selectedUnit.position && targetUnit.position) {
+                    const { minModelDistPx } = getUnitsModelDistance(selectedUnit, targetUnit);
+                    const dist = minModelDistPx / DEFAULT_GRID_SIZE;
+                    canEngageTarget = dist > 0.3 && dist <= (selectedUnit.stats.mv + 0.3);
+                  }
+
+                  // Shooting reach check
+                  let canShootTarget = false;
+                  if (targetUnit && canAnyShoot) {
+                    const maxR = Math.max(selectedUnit.stats.range, ...rangedAttachedLeaders.map(l => l.stats.range));
+                    const measuringUnit: Unit = {
+                      ...selectedUnit,
+                      stats: { ...selectedUnit.stats, range: maxR }
+                    };
+                    canShootTarget = isUnitInShootingRange(measuringUnit, targetUnit, DEFAULT_GRID_SIZE);
+                  }
+
+                  return (
+                    <div className="flex items-center space-x-2">
+                      {/* Action Economy Counter Pill */}
+                      <div className={`px-2.5 py-1 rounded-lg border font-mono text-xs flex items-center space-x-1.5 ${
+                        remActions > 0 
+                          ? 'bg-amber-950/50 border-amber-500/70 text-amber-300' 
+                          : 'bg-zinc-850 border-zinc-700 text-zinc-500'
+                      }`}>
+                        <Zap className="w-3.5 h-3.5 text-amber-400" />
+                        <span className="font-bold">{remActions}/{maxActions} Actions</span>
+                      </div>
+
+                      {remActions === 0 ? (
+                        <div className="px-3 py-1.5 bg-zinc-850 border border-zinc-750 rounded-lg text-xs text-zinc-500 font-mono">
+                          ✓ All Actions Exhausted
+                        </div>
+                      ) : (
+                        <>
+                          {/* 1. ENGAGE */}
+                          {canEngageTarget ? (
+                            <button
+                              onClick={handleExecuteEngagement}
+                              className="bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs px-3 py-1.5 rounded-lg flex items-center space-x-1.5 shadow active:scale-95 transition cursor-pointer"
+                              title="Engage enemy into base contact (Costs 1 Action)"
+                            >
+                              <Flame className="w-3.5 h-3.5" />
+                              <span>Engage (1d6)</span>
+                            </button>
+                          ) : (
+                            <button
+                              disabled
+                              className="bg-zinc-800/60 border border-zinc-750 text-zinc-500 text-xs px-2.5 py-1.5 rounded-lg flex items-center space-x-1 cursor-not-allowed opacity-50"
+                              title={`Target enemy within ${selectedUnit.stats.mv} sq to engage`}
+                            >
+                              <Flame className="w-3 h-3" />
+                              <span>Engage</span>
+                            </button>
+                          )}
+
+                          {/* 2. FIGHT */}
+                          {inMeleeWithTarget ? (
+                            <button
+                              onClick={handleExecuteFight}
+                              className="bg-rose-700 hover:bg-rose-600 text-white font-bold text-xs px-3 py-1.5 rounded-lg flex items-center space-x-1.5 shadow active:scale-95 transition cursor-pointer"
+                              title="Fight enemy in melee (Costs 1 Action)"
+                            >
+                              <Swords className="w-3.5 h-3.5" />
+                              <span>Fight</span>
+                            </button>
+                          ) : (
+                            <button
+                              disabled
+                              className="bg-zinc-800/60 border border-zinc-750 text-zinc-500 text-xs px-2.5 py-1.5 rounded-lg flex items-center space-x-1 cursor-not-allowed opacity-50"
+                              title="Must be within 1.0 sq melee contact with target"
+                            >
+                              <Swords className="w-3 h-3" />
+                              <span>Fight</span>
+                            </button>
+                          )}
+
+                          {/* 3. SHOOT */}
+                          {canAnyShoot ? (
+                            canShootTarget ? (
+                              squadCanShoot ? (
+                                <button
+                                  onClick={() => handleExecuteShooting(selectedUnit)}
+                                  className="bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs px-3 py-1.5 rounded-lg flex items-center space-x-1.5 shadow active:scale-95 transition cursor-pointer"
+                                  title={`Fire ranged weapons (${selectedUnit.stats.range} sq) (Costs 1 Action)`}
+                                >
+                                  <Target className="w-3.5 h-3.5" />
+                                  <span>Shoot ({selectedUnit.stats.range} sq)</span>
+                                </button>
+                              ) : (
+                                rangedAttachedLeaders.map(l => (
+                                  <button
+                                    key={l.id}
+                                    onClick={() => handleExecuteShooting(l)}
+                                    className="bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs px-3 py-1.5 rounded-lg flex items-center space-x-1.5 shadow active:scale-95 transition cursor-pointer"
+                                    title={`Fire leader ranged weapons (${l.stats.range} sq) (Costs 1 Action)`}
+                                  >
+                                    <Target className="w-3.5 h-3.5" />
+                                    <span>Shoot: {l.name}</span>
+                                  </button>
+                                ))
+                              )
+                            ) : (
+                              <button
+                                disabled
+                                className="bg-zinc-800/60 border border-zinc-750 text-zinc-500 text-xs px-2.5 py-1.5 rounded-lg flex items-center space-x-1 cursor-not-allowed opacity-50"
+                                title={`Target enemy within ${selectedUnit.stats.range} sq to shoot`}
+                              >
+                                <Target className="w-3 h-3" />
+                                <span>Shoot ({selectedUnit.stats.range} sq)</span>
+                              </button>
+                            )
+                          ) : (
+                            <span className="text-[11px] text-zinc-500 font-mono px-2 py-1 bg-zinc-850 rounded border border-zinc-800">Melee Only</span>
+                          )}
+
+                          {/* 4. MISSION ACTION */}
+                          <button
+                            onClick={handleExecuteMissionAction}
+                            className="bg-emerald-700/80 hover:bg-emerald-600 text-white font-bold text-xs px-3 py-1.5 rounded-lg flex items-center space-x-1.5 shadow active:scale-95 transition cursor-pointer"
+                            title="Perform secondary mission action (Costs 1 Action)"
+                          >
+                            <Sparkles className="w-3.5 h-3.5 text-emerald-300" />
+                            <span>Mission Action</span>
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  );
+                })() : (
                   <div className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-xs text-zinc-500 font-mono">
                     Enemy / Inactive Unit
                   </div>
@@ -4260,7 +4890,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
                   {/* Attach Leader (if this unit is a leader and not attached) */}
                   {(selectedUnit.role === 'Leader' || selectedUnit.role === 'Legendary Leader' || selectedUnit.type === 'Character') && !selectedUnit.attachedTo && (() => {
-                    const canAttach = gameState.phase === 'Deployment' || gameState.phase === 'Command';
+                    const canAttach = gameState.phase === 'Deployment';
                     return (
                       <button
                         onClick={() => {
@@ -4272,7 +4902,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                             ? 'bg-purple-900/60 hover:bg-purple-800 border-purple-500 text-purple-200 cursor-pointer'
                             : 'bg-zinc-800/80 border-zinc-700 text-zinc-500 cursor-not-allowed opacity-60'
                         }`}
-                        title={canAttach ? 'Attach this leader to an infantry squad' : 'Attach Leader only permitted during Deployment or Command Phase'}
+                        title={canAttach ? 'Attach this leader to an infantry squad' : 'Attach Leader only permitted during Deployment Phase'}
                       >
                         <UserPlus className="w-3.5 h-3.5" />
                         <span>Attach to Squad</span>
@@ -4282,7 +4912,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
                   {/* Embark Infantry in Transport */}
                   {selectedUnit.type === 'Infantry' && !selectedUnit.embarkedIn && (() => {
-                    const isFightReembark = gameState.phase === 'Fight' && selectedUnit.lastDisembarkRound === gameState.round && selectedUnit.lastDisembarkPhase !== 'Fight';
+                    const isFightReembark = (gameState.phase === 'Fight' || gameState.phase === 'Action') && selectedUnit.lastDisembarkRound === gameState.round && selectedUnit.lastDisembarkPhase !== gameState.phase;
                     const hasEmbarkedThisPhase = selectedUnit.lastEmbarkPhase === gameState.phase && selectedUnit.lastEmbarkRound === gameState.round;
                     const hasDisembarkedThisPhase = selectedUnit.lastDisembarkPhase === gameState.phase && selectedUnit.lastDisembarkRound === gameState.round;
                     const canEmbark = (gameState.phase === 'Deployment' || gameState.phase === 'Movement' || isFightReembark) && !hasEmbarkedThisPhase && !hasDisembarkedThisPhase;
@@ -5091,7 +5721,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                           })()}
 
                           {isInfantry && !u.embarkedIn && (() => {
-                            const isFightReembark = gameState.phase === 'Fight' && u.lastDisembarkRound === gameState.round && u.lastDisembarkPhase !== 'Fight';
+                            const isFightReembark = (gameState.phase === 'Fight' || gameState.phase === 'Action') && u.lastDisembarkRound === gameState.round && u.lastDisembarkPhase !== gameState.phase;
                             const hasEmbarkedThisPhase = u.lastEmbarkPhase === gameState.phase && u.lastEmbarkRound === gameState.round;
                             const hasDisembarkedThisPhase = u.lastDisembarkPhase === gameState.phase && u.lastDisembarkRound === gameState.round;
                             const canEmbark = (gameState.phase === 'Deployment' || gameState.phase === 'Movement' || isFightReembark) && !hasEmbarkedThisPhase && !hasDisembarkedThisPhase;
@@ -5390,7 +6020,10 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                   <div>
                     <span className="text-xs font-bold text-white block leading-none">{selectedUnit.name}</span>
                     <span className="text-[10px] text-zinc-400 font-mono">
-                      Lives: {selectedUnit.stats.lives}/{selectedUnit.stats.maxLives} | AM: {selectedUnit.stats.am} | Def: {selectedUnit.stats.def + selectedUnit.stats.defModifier} | Mv: {selectedUnit.stats.mv}
+                      {(() => {
+                        const bl = getUnitBodiesAndLives(selectedUnit);
+                        return `Bodies: ${bl.livingBodies}/${bl.totalBodies} (U) | Lives: ${bl.remainingLives}/${bl.maxLives} (L) | AM: ${selectedUnit.stats.am} | Def: ${selectedUnit.stats.def + selectedUnit.stats.defModifier} | Mv: ${selectedUnit.stats.mv}`;
+                      })()}
                     </span>
                   </div>
                 </div>
@@ -5448,6 +6081,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                 const activeCP = gameState.activePlayer === 'player1' ? (gameState.player1CP ?? 3) : (gameState.player2CP ?? 3);
                 const canAfford = activeCP >= strat.cost;
                 const hasValidTarget = !!selectedUnit && selectedUnit.owner === gameState.activePlayer;
+                const alreadyIssued = hasValidTarget && (selectedUnit.issuedStratagemsThisTurn || []).includes(strat.id);
 
                 return (
                   <div
@@ -5466,16 +6100,24 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                     <p className="text-[11px] text-zinc-400">{strat.desc}</p>
                     <button
                       onClick={() => handleActivateStratagem(strat.id)}
-                      disabled={!canAfford || !hasValidTarget}
+                      disabled={!canAfford || !hasValidTarget || alreadyIssued}
                       className={`w-full py-1.5 rounded-lg text-xs font-bold font-mono transition flex items-center justify-center space-x-1 ${
-                        canAfford && hasValidTarget
-                          ? 'bg-amber-500 hover:bg-amber-400 text-black shadow'
-                          : 'bg-zinc-850 text-zinc-500 cursor-not-allowed border border-zinc-800'
+                        alreadyIssued
+                          ? 'bg-zinc-850 text-amber-500/70 border border-amber-900/40 cursor-not-allowed'
+                          : canAfford && hasValidTarget
+                            ? 'bg-amber-500 hover:bg-amber-400 text-black shadow'
+                            : 'bg-zinc-850 text-zinc-500 cursor-not-allowed border border-zinc-800'
                       }`}
                     >
                       <Zap className="w-3 h-3" />
                       <span>
-                        {!canAfford ? 'Needs More CP' : !hasValidTarget ? 'Select Friendly Unit' : 'Activate Stratagem'}
+                        {alreadyIssued
+                          ? '🔒 1x Per Unit / Turn'
+                          : !canAfford
+                            ? 'Needs More CP'
+                            : !hasValidTarget
+                              ? 'Select Friendly Unit'
+                              : 'Activate Stratagem'}
                       </span>
                     </button>
                   </div>
@@ -5962,31 +6604,138 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
         </div>
       )}
 
-      {/* Command Cards Modal */}
-      {showCardDrawer && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-zinc-950 border border-zinc-800 rounded-2xl max-w-3xl w-full p-5 shadow-2xl relative space-y-4">
-            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
-              <h3 className="text-lg font-bold text-white">Active Command &amp; Tactical Cards</h3>
-              <button onClick={() => setShowCardDrawer(false)} className="p-1 text-zinc-400 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              {gameState.player1ActiveCards.map((card, idx) => (
-                <div key={card.id} className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-xs space-y-1">
-                  <div className="flex justify-between font-mono text-amber-400 font-bold">
-                    <span>Card #{idx + 1}</span>
-                    <span>{card.type}</span>
+      {/* Command & Environmental Cards Modal */}
+      {showCardDrawer && (() => {
+        const activeCards = gameState.activePlayer === 'player1' ? gameState.player1ActiveCards : gameState.player2ActiveCards;
+        return (
+          <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-zinc-950 border border-zinc-800 rounded-2xl max-w-4xl w-full p-5 shadow-2xl relative space-y-4 max-h-[90vh] flex flex-col overflow-hidden">
+              <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+                <div className="flex items-center space-x-3">
+                  <div className="p-2 rounded-xl bg-amber-950 border border-amber-800 text-amber-300">
+                    <Layers className="w-5 h-5" />
                   </div>
-                  <h4 className="font-bold text-white">{card.name}</h4>
-                  <p className="text-zinc-400 text-[11px]">{card.objectiveText || card.description}</p>
+                  <div>
+                    <h3 className="text-base font-bold text-white">Tactical &amp; Environmental Cards</h3>
+                    <p className="text-xs text-zinc-400">Secondary objectives, active doctrines, and dynamic field hazards</p>
+                  </div>
                 </div>
-              ))}
+                <button onClick={() => setShowCardDrawer(false)} className="p-1 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-850">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Tab Navigation */}
+              <div className="flex items-center space-x-2 border-b border-zinc-800 pb-2 shrink-0">
+                <button
+                  onClick={() => setCardDrawerTab('missions')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition flex items-center space-x-1.5 ${
+                    cardDrawerTab === 'missions'
+                      ? 'bg-amber-950 text-amber-300 border border-amber-700'
+                      : 'bg-zinc-900 text-zinc-400 hover:text-white border border-transparent'
+                  }`}
+                >
+                  <Target className="w-3.5 h-3.5" />
+                  <span>Tactical Missions &amp; Hand ({activeCards.length})</span>
+                </button>
+                <button
+                  onClick={() => setCardDrawerTab('field_hazards')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition flex items-center space-x-1.5 ${
+                    cardDrawerTab === 'field_hazards'
+                      ? 'bg-rose-950 text-rose-300 border border-rose-700'
+                      : 'bg-zinc-900 text-zinc-400 hover:text-white border border-transparent'
+                  }`}
+                >
+                  <Flame className="w-3.5 h-3.5" />
+                  <span>Field Hazards &amp; Environmental Deck ({FIELD_EFFECT_CARDS.length})</span>
+                </button>
+              </div>
+
+              {/* Tab Content */}
+              <div className="overflow-y-auto flex-1 pr-1 space-y-3">
+                {cardDrawerTab === 'missions' && (
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-mono text-zinc-400">
+                        {gameState.activePlayer === 'player1' ? 'Player 1 (West)' : 'Player 2 (East)'} Active Hand
+                      </span>
+                      <span className="text-[11px] font-mono text-amber-400">
+                        Complete via Action Phase "Mission Action"
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {activeCards.map((card, idx) => (
+                        <div key={card.id} className="bg-zinc-900/90 border border-zinc-800 rounded-xl p-3.5 text-xs space-y-2 hover:border-zinc-700 transition">
+                          <div className="flex justify-between items-center font-mono">
+                            <span className="text-amber-400 font-bold">Slot #{idx + 1}</span>
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              card.type === 'SecondaryMission'
+                                ? 'bg-sky-950 text-sky-300 border border-sky-800'
+                                : card.type === 'Faction'
+                                ? 'bg-purple-950 text-purple-300 border border-purple-800'
+                                : 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                            }`}>
+                              {card.type} {card.pointsValue ? `(+${card.pointsValue} VP)` : ''}
+                            </span>
+                          </div>
+                          <h4 className="font-bold text-white text-sm">{card.name}</h4>
+                          <p className="text-zinc-300 text-[11px] leading-relaxed">{card.objectiveText || card.description}</p>
+                          {card.onReplaceTrigger && (
+                            <div className="text-[10px] text-zinc-500 font-mono italic">
+                              {card.onReplaceTrigger}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {cardDrawerTab === 'field_hazards' && (
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap items-center justify-between bg-rose-950/30 border border-rose-900/50 p-3 rounded-xl gap-2">
+                      <div>
+                        <h4 className="text-xs font-bold text-rose-200">Environmental Shift Deck</h4>
+                        <p className="text-[11px] text-zinc-400">
+                          Hazards dynamically relocate wetlands (Flooded Mire, Sunken Crypt Trench), Rift Fractures, and High Ground across the battlefield.
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => handleTriggerFieldEffect()}
+                        className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-mono text-xs font-bold transition flex items-center space-x-1.5 shadow-lg shadow-rose-900/40"
+                      >
+                        <Zap className="w-3.5 h-3.5" />
+                        <span>Draw &amp; Trigger Random Hazard</span>
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {FIELD_EFFECT_CARDS.map((card) => (
+                        <div key={card.id} className="bg-zinc-900/80 border border-zinc-800 rounded-xl p-3 text-xs space-y-2 hover:border-rose-900/60 transition">
+                          <div className="flex justify-between items-center font-mono">
+                            <span className="text-rose-400 font-bold flex items-center space-x-1">
+                              <span>🌪️</span>
+                              <span>Hazard</span>
+                            </span>
+                            <button
+                              onClick={() => handleTriggerFieldEffect(card)}
+                              className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-rose-950 hover:text-rose-300 text-zinc-400 text-[10px] font-mono border border-zinc-700 transition"
+                            >
+                              Trigger Event ⚡
+                            </button>
+                          </div>
+                          <h4 className="font-bold text-white text-sm">{card.name}</h4>
+                          <p className="text-zinc-300 text-[11px] leading-relaxed">{card.objectiveText || card.description}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Bot Opponent Army Selected Notification Toast */}
       {botSelectedNotice && (

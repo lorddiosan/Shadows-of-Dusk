@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { 
   X, Upload, Image as ImageIcon, ZoomIn, ZoomOut, Move, 
   RotateCcw, Sparkles, Check, Shield, Heart, Zap, Crosshair,
-  ChevronDown, ChevronUp, Search, Tag, Plus, Edit2, Trash2
+  ChevronDown, ChevronUp, Search, Tag, Plus, Edit2, Trash2, Lock
 } from 'lucide-react';
 import { Unit, UnitRole, UnitType, BaseShape, UnitSize, CORE_TRAIT_DEFINITIONS, UnitAbility } from '../../types/game';
 import { StorageService } from '../../services/storageService';
@@ -14,7 +14,24 @@ interface UnitCreatorModalProps {
   onSaveUnit: (unit: Unit) => void;
   initialUnit?: Unit | null;
   factionId: string;
+  mode?: 'cosmetics' | 'full';
 }
+
+export const BORDER_OPTIONS = [
+  { id: 'default', name: 'Standard Faction Ring', rarity: 'Common', icon: '⭕', previewRing: 'border-amber-400' },
+  { id: 'border_gold', name: 'Gilded Imperial Halo', rarity: 'Rare', icon: '👑', previewRing: 'border-yellow-300 ring-4 ring-yellow-400 shadow-[0_0_15px_rgba(234,179,8,0.7)]' },
+  { id: 'border_cyber_neon', name: 'Cybernetic Neon Rim', rarity: 'Epic', icon: '💠', previewRing: 'border-cyan-300 ring-4 ring-cyan-400 shadow-[0_0_16px_rgba(6,182,212,0.8)]' },
+  { id: 'border_crimson_spike', name: 'Barbed Bloodplate Frame', rarity: 'Rare', icon: '🩸', previewRing: 'border-rose-500 ring-4 ring-red-600 shadow-[0_0_15px_rgba(220,38,38,0.7)]' },
+  { id: 'border_void_rune', name: 'Abyssal Void Runes', rarity: 'Mythic', icon: '🔮', previewRing: 'border-violet-400 ring-4 ring-purple-500 shadow-[0_0_18px_rgba(168,85,247,0.8)]' }
+];
+
+export const VFX_OPTIONS = [
+  { id: 'none', name: 'None', rarity: 'Common', icon: '🚫', previewVfx: '' },
+  { id: 'vfx_ethereal_glow', name: 'Ethereal Soulmist Glow', rarity: 'Rare', icon: '✨', previewVfx: 'animate-pulse drop-shadow-[0_0_12px_rgba(56,189,248,0.9)]' },
+  { id: 'vfx_void_flame', name: 'Voidfire Incandescence', rarity: 'Epic', icon: '🔥', previewVfx: 'animate-pulse drop-shadow-[0_0_14px_rgba(147,51,234,0.9)]' },
+  { id: 'vfx_lightning_aura', name: 'Static Tempest Aura', rarity: 'Mythic', icon: '⚡', previewVfx: 'drop-shadow-[0_0_14px_rgba(250,204,21,0.9)]' },
+  { id: 'vfx_blood_mist', name: 'Crimson War Vapour', rarity: 'Epic', icon: '💨', previewVfx: 'drop-shadow-[0_0_15px_rgba(239,68,68,0.9)]' }
+];
 
 const ROLES: UnitRole[] = [
   'Legendary Leader',
@@ -39,17 +56,65 @@ const UNIT_SIZES: { size: UnitSize; label: string; radius: number }[] = [
   { size: 'Colossal', label: 'Colossal (96mm)', radius: 48 }
 ];
 
+const createSvgPortrait = (bgGradient: [string, string], symbol: string, accentColor: string, title: string) => {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+    <defs>
+      <linearGradient id="g_${title.replace(/\s+/g, '_')}" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="${bgGradient[0]}" />
+        <stop offset="100%" stop-color="${bgGradient[1]}" />
+      </linearGradient>
+      <radialGradient id="r_${title.replace(/\s+/g, '_')}" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="${accentColor}" stop-opacity="0.35" />
+        <stop offset="100%" stop-color="${accentColor}" stop-opacity="0" />
+      </radialGradient>
+    </defs>
+    <rect width="200" height="200" fill="url(#g_${title.replace(/\s+/g, '_')})" />
+    <circle cx="100" cy="100" r="85" fill="url(#r_${title.replace(/\s+/g, '_')})" />
+    <circle cx="100" cy="100" r="80" fill="none" stroke="${accentColor}" stroke-width="3" stroke-dasharray="6,4" opacity="0.6" />
+    <text x="100" y="115" font-size="72" text-anchor="middle" dominant-baseline="middle">${symbol}</text>
+    <rect x="20" y="155" width="160" height="26" rx="6" fill="#090a10" opacity="0.85" stroke="${accentColor}" stroke-width="1" />
+    <text x="100" y="172" font-size="11" font-family="monospace" font-weight="bold" fill="#f4f4f5" text-anchor="middle">${title}</text>
+  </svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+};
+
+export const VAULT_PORTRAITS = [
+  { id: 'kaelen_vane', name: 'Warmaster Kaelen Vane', role: 'Leader', avatar: '👑', url: createSvgPortrait(['#450a0a', '#180303'], '👑', '#f59e0b', 'WARMASTER') },
+  { id: 'crimson_marksman', name: 'Imperial Marksman', role: 'Battleline', avatar: '🏹', url: createSvgPortrait(['#7f1d1d', '#200505'], '🏹', '#ef4444', 'MARKSMAN') },
+  { id: 'crimson_beast', name: 'Crucible Mutant Beast', role: 'Monster', avatar: '👹', url: createSvgPortrait(['#450a0a', '#170303'], '👹', '#dc2626', 'MUTANT BEAST') },
+  { id: 'crimson_praetor', name: 'Alchemical Praetor', role: 'Leader', avatar: '⚔️', url: createSvgPortrait(['#500724', '#1f020a'], '⚔️', '#f43f5e', 'PRAETOR') },
+  { id: 'lyssandra', name: 'High Marshal Lyssandra', role: 'Leader', avatar: '👸', url: createSvgPortrait(['#082f49', '#02131e'], '👸', '#38bdf8', 'FIRST DAWN') },
+  { id: 'astraea_paladin', name: 'Silverguard Knight', role: 'Battleline', avatar: '🛡️', url: createSvgPortrait(['#0369a1', '#082f49'], '🛡️', '#67e8f9', 'SILVERGUARD') },
+  { id: 'storm_griffin', name: 'Storm-Crest Hippogryph', role: 'Monster', avatar: '🦅', url: createSvgPortrait(['#0f172a', '#0369a1'], '🦅', '#38bdf8', 'HIPPOGRYPH') },
+  { id: 'astraea_skiff', name: 'Sunfire Skiff Pilot', role: 'Vehicle', avatar: '⛵', url: createSvgPortrait(['#1e1b4b', '#075985'], '⛵', '#38bdf8', 'SUNFIRE SKIFF') },
+  { id: 'malakor', name: 'Arch-General Malakor', role: 'Leader', avatar: '👿', url: createSvgPortrait(['#431407', '#1a0501'], '👿', '#f97316', 'ARCH-GENERAL') },
+  { id: 'infernal_fiend', name: 'Brimstone Cohort', role: 'Battleline', avatar: '👺', url: createSvgPortrait(['#7c2d12', '#2a0802'], '👺', '#fb923c', 'BRIMSTONE') },
+  { id: 'magma_gargant', name: 'Hellforged Ram-Gargant', role: 'Monster', avatar: '🌋', url: createSvgPortrait(['#451a03', '#1c0801'], '🌋', '#ea580c', 'RAM-GARGANT') },
+  { id: 'oros', name: 'Chronarch Prime Oros', role: 'Leader', avatar: '🧙‍♂️', url: createSvgPortrait(['#2e1065', '#0f0524'], '🧙‍♂️', '#a855f7', 'CHRONARCH') },
+  { id: 'chronal_warden', name: 'Paradox Warden', role: 'Battleline', avatar: '⏳', url: createSvgPortrait(['#3b0764', '#120224'], '⏳', '#c084fc', 'PARADOX WARDEN') },
+  { id: 'carmilla', name: 'Countess Carmilla', role: 'Leader', avatar: '🦇', url: createSvgPortrait(['#4c0519', '#140106'], '🦇', '#e11d48', 'NOCTURNE') },
+  { id: 'dwarven_thane', name: 'Runesmith Thane', role: 'Leader', avatar: '⛏️', url: createSvgPortrait(['#713f12', '#231203'], '⛏️', '#eab308', 'RUNESMITH') },
+  { id: 'steam_mech', name: 'Steam Siege Mech', role: 'Vehicle', avatar: '🚜', url: createSvgPortrait(['#18181b', '#09090b'], '🚜', '#fbbf24', 'STEAM MECH') }
+];
+
 export const UnitCreatorModal: React.FC<UnitCreatorModalProps> = ({
   isOpen,
   onClose,
   onSaveUnit,
   initialUnit,
-  factionId
+  factionId,
+  mode = 'cosmetics'
 }) => {
   if (!isOpen) return null;
 
+  const userProfile = StorageService.getUserProfile();
+  const unlockedItems = userProfile?.unlockedItems || [];
+
   const factions = StorageService.getFactions();
   const faction = factions.find(f => f.id === factionId) || factions[0];
+
+  const [borderStyle, setBorderStyle] = useState<string>(initialUnit?.borderStyle || 'default');
+  const [vfxEffect, setVfxEffect] = useState<string>(initialUnit?.vfxEffect || 'none');
 
   // Unit form fields
   const [name, setName] = useState<string>(initialUnit?.name || 'Vanguard Specialist');
@@ -264,6 +329,19 @@ export const UnitCreatorModal: React.FC<UnitCreatorModalProps> = ({
   };
 
   const handleSave = () => {
+    if (mode === 'cosmetics' && initialUnit) {
+      const updatedUnit: Unit = {
+        ...initialUnit,
+        avatar: avatar.trim() || initialUnit.avatar,
+        tokenImageUrl: tokenImageUrl || undefined,
+        borderStyle: borderStyle === 'default' ? undefined : borderStyle,
+        vfxEffect: vfxEffect === 'none' ? undefined : vfxEffect
+      };
+      onSaveUnit(updatedUnit);
+      onClose();
+      return;
+    }
+
     if (!name.trim()) return;
 
     const livesNum = Math.max(1, Number(lives) || 5);
@@ -297,6 +375,8 @@ export const UnitCreatorModal: React.FC<UnitCreatorModalProps> = ({
       points: Number(points) || 75,
       avatar: avatar.trim() || faction?.symbol || '⚔️',
       tokenImageUrl: tokenImageUrl || undefined,
+      borderStyle: borderStyle === 'default' ? undefined : borderStyle,
+      vfxEffect: vfxEffect === 'none' ? undefined : vfxEffect,
       description: description.trim(),
       passives: initialUnit?.passives || ['Veteran Specialists', 'Custom Loadout'],
       traits: selectedTraits,
@@ -357,12 +437,16 @@ export const UnitCreatorModal: React.FC<UnitCreatorModalProps> = ({
             </span>
             <div>
               <h2 className="text-base font-bold text-white flex items-center space-x-2">
-                <span>{initialUnit ? 'Customize Unit & Token' : 'Create Custom Unit'}</span>
+                <span>{mode === 'cosmetics' ? `Customize Appearance: ${initialUnit?.name || name}` : (initialUnit ? 'Edit Unit Datasheet' : 'Create Custom Unit')}</span>
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-300 font-mono">
                   {faction?.shortName || factionId}
                 </span>
               </h2>
-              <p className="text-xs text-zinc-400">Configure combat profile, base geometry, and custom token portrait</p>
+              <p className="text-xs text-zinc-400">
+                {mode === 'cosmetics' 
+                  ? 'Customize token portrait, decorative frame, and visual effects from your armory vault.'
+                  : 'Configure combat profile, base geometry, and custom token portrait.'}
+              </p>
             </div>
           </div>
           <button
@@ -399,48 +483,56 @@ export const UnitCreatorModal: React.FC<UnitCreatorModalProps> = ({
                 <div className="absolute inset-0 opacity-10 bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] [background-size:16px_16px] pointer-events-none rounded-2xl"></div>
 
                 {/* Live Base Shape Preview */}
-                <div 
-                  className={`relative flex items-center justify-center border-4 shadow-2xl transition-all duration-200 overflow-hidden ${shapePreviewClass} ${
-                    isLeaderRole
-                      ? 'border-amber-400 ring-4 ring-amber-500/40 bg-gradient-to-tr from-amber-950 via-zinc-900 to-amber-900'
-                      : 'border-rose-500 ring-4 ring-rose-500/30 bg-gradient-to-tr from-rose-950 via-zinc-900 to-red-950'
-                  }`}
-                  style={{
-                    width: baseShape === 'oval' ? '140px' : baseShape === 'rectangle' ? '150px' : '120px',
-                    height: baseShape === 'oval' ? '95px' : baseShape === 'rectangle' ? '95px' : '120px'
-                  }}
-                >
-                  {tokenImageUrl ? (
-                    <img
-                      src={tokenImageUrl}
-                      alt={name}
-                      className="w-full h-full object-cover select-none pointer-events-none"
-                    />
-                  ) : (
-                    <div className="flex flex-col items-center justify-center text-center p-2">
-                      <span className="text-4xl filter drop-shadow select-none">{avatar}</span>
-                      <span className="text-[9px] text-zinc-500 font-mono mt-1">Default Faction Icon</span>
+                {(() => {
+                  const activeBorder = BORDER_OPTIONS.find(b => b.id === borderStyle) || BORDER_OPTIONS[0];
+                  const activeVfx = VFX_OPTIONS.find(v => v.id === vfxEffect) || VFX_OPTIONS[0];
+                  return (
+                    <div 
+                      className={`relative flex items-center justify-center border-4 shadow-2xl transition-all duration-200 overflow-hidden ${shapePreviewClass} ${
+                        activeBorder.id !== 'default'
+                          ? activeBorder.previewRing
+                          : isLeaderRole
+                          ? 'border-amber-400 ring-4 ring-amber-500/40 bg-gradient-to-tr from-amber-950 via-zinc-900 to-amber-900'
+                          : 'border-rose-500 ring-4 ring-rose-500/30 bg-gradient-to-tr from-rose-950 via-zinc-900 to-red-950'
+                      } ${activeVfx.previewVfx}`}
+                      style={{
+                        width: baseShape === 'oval' ? '140px' : baseShape === 'rectangle' ? '150px' : '120px',
+                        height: baseShape === 'oval' ? '95px' : baseShape === 'rectangle' ? '95px' : '120px'
+                      }}
+                    >
+                      {tokenImageUrl ? (
+                        <img
+                          src={tokenImageUrl}
+                          alt={name}
+                          className="w-full h-full object-cover select-none pointer-events-none"
+                        />
+                      ) : (
+                        <div className="flex flex-col items-center justify-center text-center p-2">
+                          <span className="text-4xl filter drop-shadow select-none">{avatar}</span>
+                          <span className="text-[9px] text-zinc-500 font-mono mt-1">Default Faction Icon</span>
+                        </div>
+                      )}
+
+                      {/* Leader Crown Badge */}
+                      {isLeaderRole && (
+                        <div className="absolute top-1.5 left-1/2 -translate-x-1/2 bg-amber-400 text-black rounded-full px-1.5 py-0.5 text-[9px] font-black leading-none shadow flex items-center space-x-0.5">
+                          <span>★</span>
+                          <span>LEADER</span>
+                        </div>
+                      )}
+
+                      {/* Health / Lives Badge */}
+                      <div className="absolute bottom-1 right-1.5 bg-black/90 text-emerald-400 border border-zinc-700 font-mono font-bold text-[9px] px-1.5 py-0.2 rounded-full leading-none shadow">
+                        {lives}L
+                      </div>
+
+                      {/* Defense Chip */}
+                      <div className="absolute bottom-1 left-1.5 bg-black/90 text-sky-400 border border-zinc-700 font-mono font-bold text-[9px] px-1.5 py-0.2 rounded-full leading-none shadow">
+                        {def}D
+                      </div>
                     </div>
-                  )}
-
-                  {/* Leader Crown Badge */}
-                  {isLeaderRole && (
-                    <div className="absolute top-1.5 left-1/2 -translate-x-1/2 bg-amber-400 text-black rounded-full px-1.5 py-0.5 text-[9px] font-black leading-none shadow flex items-center space-x-0.5">
-                      <span>★</span>
-                      <span>LEADER</span>
-                    </div>
-                  )}
-
-                  {/* Health / Lives Badge */}
-                  <div className="absolute bottom-1 right-1.5 bg-black/90 text-emerald-400 border border-zinc-700 font-mono font-bold text-[9px] px-1.5 py-0.2 rounded-full leading-none shadow">
-                    {lives}L
-                  </div>
-
-                  {/* Defense Chip */}
-                  <div className="absolute bottom-1 left-1.5 bg-black/90 text-sky-400 border border-zinc-700 font-mono font-bold text-[9px] px-1.5 py-0.2 rounded-full leading-none shadow">
-                    {def}D
-                  </div>
-                </div>
+                  );
+                })()}
 
                 {/* Shape Dimension Tag */}
                 <div className="mt-4 flex items-center space-x-2 text-[10px] font-mono text-zinc-400">
@@ -455,38 +547,67 @@ export const UnitCreatorModal: React.FC<UnitCreatorModalProps> = ({
                 </div>
               </div>
 
-              {/* Upload & Crop Controls */}
-              <div className="space-y-3 bg-[#131622] p-4 rounded-xl border border-zinc-800">
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  onChange={handleFileChange}
-                  accept="image/png,image/jpeg,image/webp"
-                  className="hidden"
-                />
-
-                <div className="flex items-center space-x-2">
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="flex-1 py-2 px-3 bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs font-mono rounded-lg shadow flex items-center justify-center space-x-1.5 transition cursor-pointer"
-                  >
-                    <Upload className="w-3.5 h-3.5" />
-                    <span>Upload Token Image</span>
-                  </button>
+              {/* Armory Vault Portrait Gallery (Select from what is available) */}
+              <div className="space-y-2.5 bg-[#131622] p-3.5 rounded-xl border border-zinc-800">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                    <span className="text-xs font-bold text-white font-mono uppercase tracking-wider">
+                      Armory Portrait Vault
+                    </span>
+                  </div>
                   {rawImageSrc && (
                     <button
-                      onClick={handleResetFraming}
-                      className="p-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg transition cursor-pointer"
-                      title="Reset Framing / Centering"
+                      type="button"
+                      onClick={() => {
+                        setRawImageSrc(null);
+                      }}
+                      className="text-[10px] text-zinc-400 hover:text-amber-400 font-mono transition"
+                      title="Reset to default emoji icon"
                     >
-                      <RotateCcw className="w-3.5 h-3.5" />
+                      Clear Portrait
                     </button>
                   )}
                 </div>
 
-                <p className="text-[10px] text-zinc-500 text-center">
-                  Accepts PNG, JPG, WebP. Formatted automatically to the chosen base shape.
+                <p className="text-[10px] text-zinc-400">
+                  Select a portrait from your armory vault. Formatted automatically to the chosen token base.
                 </p>
+
+                {/* Portrait Grid */}
+                <div className="grid grid-cols-4 gap-2 max-h-48 overflow-y-auto pr-1">
+                  {VAULT_PORTRAITS.map(p => {
+                    const isSelected = rawImageSrc === p.url;
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => {
+                          setRawImageSrc(p.url);
+                          setAvatar(p.avatar);
+                        }}
+                        className={`p-1.5 rounded-lg border transition flex flex-col items-center space-y-1 relative group cursor-pointer ${
+                          isSelected
+                            ? 'bg-amber-950/60 border-amber-400 ring-2 ring-amber-400/60 shadow-lg'
+                            : 'bg-[#181b2a] border-zinc-800 hover:border-zinc-700 hover:bg-zinc-800/80'
+                        }`}
+                        title={`${p.name} (${p.role})`}
+                      >
+                        <div className="w-10 h-10 rounded-full overflow-hidden border border-zinc-700 bg-black/40 flex items-center justify-center relative">
+                          <img src={p.url} alt={p.name} className="w-full h-full object-cover" />
+                          {isSelected && (
+                            <div className="absolute inset-0 bg-amber-500/35 flex items-center justify-center">
+                              <Check className="w-4 h-4 text-amber-300 drop-shadow" />
+                            </div>
+                          )}
+                        </div>
+                        <span className="text-[9px] font-mono text-zinc-300 truncate w-full text-center">
+                          {p.name.split(' ')[0]}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
 
                 {/* Framing & Zoom Sliders (Only if image is loaded) */}
                 {rawImageSrc && (
@@ -550,9 +671,164 @@ export const UnitCreatorModal: React.FC<UnitCreatorModalProps> = ({
 
             {/* Right Column: Tactical Parameters & Base Geometry (7 cols) */}
             <div className="lg:col-span-7 space-y-4">
-              <span className="text-xs font-bold uppercase tracking-wider font-mono text-amber-400 block border-b border-zinc-800 pb-2">
-                Combat Specifications & Base Geometry
-              </span>
+              {mode === 'cosmetics' ? (
+                /* Cosmetic Customization Panel */
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
+                    <span className="text-xs font-bold uppercase tracking-wider font-mono text-amber-400 flex items-center space-x-1.5">
+                      <Sparkles className="w-4 h-4" />
+                      <span>Unit Appearance & Cosmetics</span>
+                    </span>
+                    <span className="text-[10px] text-zinc-400 font-mono">Cosmetics Only</span>
+                  </div>
+
+                  {/* Read-only Unit Specs Summary */}
+                  <div className="bg-zinc-950 p-3 rounded-xl border border-zinc-800/80 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <span className="text-sm font-bold text-white">{name}</span>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-850 text-zinc-300 font-mono border border-zinc-800">
+                          {role} • {type}
+                        </span>
+                      </div>
+                      <span className="text-xs font-mono font-bold text-amber-400">{points} pts</span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-zinc-850 text-[10px] font-mono text-zinc-400">
+                      <span className="bg-zinc-900 px-2 py-0.5 rounded border border-zinc-800">Mv: {mv}</span>
+                      <span className="bg-zinc-900 px-2 py-0.5 rounded border border-zinc-800 text-sky-400">Def: {def}</span>
+                      <span className="bg-zinc-900 px-2 py-0.5 rounded border border-zinc-800 text-rose-400">AM: {am}</span>
+                      <span className="bg-zinc-900 px-2 py-0.5 rounded border border-zinc-800 text-emerald-400">Lives: {lives}</span>
+                      <span className="bg-zinc-900 px-2 py-0.5 rounded border border-zinc-800 text-amber-400">CP: {cp}</span>
+                      <span className="bg-zinc-900 px-2 py-0.5 rounded border border-zinc-800 text-purple-400">Rng: {range}</span>
+                    </div>
+
+                    <div className="flex items-center space-x-1.5 text-[9px] text-zinc-500 font-mono pt-1">
+                      <Lock className="w-3 h-3 text-zinc-500" />
+                      <span>Combat stats are fixed by faction datasheet. Customizing appearance does not alter game balance.</span>
+                    </div>
+                  </div>
+
+                  {/* Emoji / Fallback Icon */}
+                  <div>
+                    <label className="text-[11px] font-mono text-zinc-400 block mb-1">
+                      Fallback Token Icon / Emoji
+                    </label>
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="text"
+                        value={avatar}
+                        onChange={e => setAvatar(e.target.value)}
+                        maxLength={4}
+                        className="w-20 bg-zinc-950 border border-zinc-750 px-3 py-1.5 rounded-lg text-lg text-center text-white focus:border-amber-400 focus:outline-none"
+                        placeholder="🛡️"
+                      />
+                      <span className="text-[11px] text-zinc-400">Displayed when no custom token portrait image is provided.</span>
+                    </div>
+                  </div>
+
+                  {/* Token Border / Frame Customization */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-[11px] font-mono text-amber-400 uppercase font-bold block">
+                        👑 Token Border & Frame Style
+                      </label>
+                      <span className="text-[10px] text-zinc-500 font-mono">Vault & Shop</span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {BORDER_OPTIONS.map(b => {
+                        const isUnlocked = b.id === 'default' || unlockedItems.includes(b.id);
+                        const isSelected = borderStyle === b.id;
+                        return (
+                          <button
+                            key={b.id}
+                            type="button"
+                            disabled={!isUnlocked}
+                            onClick={() => setBorderStyle(b.id)}
+                            className={`p-2.5 rounded-xl border text-left flex items-center justify-between transition ${
+                              isSelected
+                                ? 'bg-amber-950/40 border-amber-500 text-white shadow-lg'
+                                : isUnlocked
+                                ? 'bg-zinc-950 border-zinc-800 text-zinc-300 hover:border-zinc-700 cursor-pointer'
+                                : 'bg-zinc-950/40 border-zinc-900 text-zinc-600 cursor-not-allowed opacity-60'
+                            }`}
+                          >
+                            <div className="flex items-center space-x-2">
+                              <span className="text-xl">{b.icon}</span>
+                              <div>
+                                <span className="text-xs font-bold block leading-tight">{b.name}</span>
+                                <span className="text-[9px] font-mono text-zinc-400 block">{b.rarity}</span>
+                              </div>
+                            </div>
+                            {!isUnlocked && (
+                              <div className="flex items-center space-x-1 text-[10px] font-mono text-zinc-500">
+                                <Lock className="w-3 h-3" />
+                                <span>Shop</span>
+                              </div>
+                            )}
+                            {isSelected && (
+                              <Check className="w-4 h-4 text-amber-400" />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Visual Effects (VFX) Customization */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-[11px] font-mono text-amber-400 uppercase font-bold block">
+                        ✨ Token Visual Effect (VFX) / Aura
+                      </label>
+                      <span className="text-[10px] text-zinc-500 font-mono">Vault & Shop</span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {VFX_OPTIONS.map(v => {
+                        const isUnlocked = v.id === 'none' || unlockedItems.includes(v.id);
+                        const isSelected = vfxEffect === v.id;
+                        return (
+                          <button
+                            key={v.id}
+                            type="button"
+                            disabled={!isUnlocked}
+                            onClick={() => setVfxEffect(v.id)}
+                            className={`p-2.5 rounded-xl border text-left flex items-center justify-between transition ${
+                              isSelected
+                                ? 'bg-amber-950/40 border-amber-500 text-white shadow-lg'
+                                : isUnlocked
+                                ? 'bg-zinc-950 border-zinc-800 text-zinc-300 hover:border-zinc-700 cursor-pointer'
+                                : 'bg-zinc-950/40 border-zinc-900 text-zinc-600 cursor-not-allowed opacity-60'
+                            }`}
+                          >
+                            <div className="flex items-center space-x-2">
+                              <span className="text-xl">{v.icon}</span>
+                              <div>
+                                <span className="text-xs font-bold block leading-tight">{v.name}</span>
+                                <span className="text-[9px] font-mono text-zinc-400 block">{v.rarity}</span>
+                              </div>
+                            </div>
+                            {!isUnlocked && (
+                              <div className="flex items-center space-x-1 text-[10px] font-mono text-zinc-500">
+                                <Lock className="w-3 h-3" />
+                                <span>Shop</span>
+                              </div>
+                            )}
+                            {isSelected && (
+                              <Check className="w-4 h-4 text-amber-400" />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                /* Full Datasheet Mode */
+                <div className="space-y-4">
+                  <span className="text-xs font-bold uppercase tracking-wider font-mono text-amber-400 block border-b border-zinc-800 pb-2">
+                    Combat Specifications & Base Geometry
+                  </span>
 
               {/* Identity Row */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -963,17 +1239,18 @@ export const UnitCreatorModal: React.FC<UnitCreatorModalProps> = ({
                 )}
               </div>
 
-              {/* Description */}
-              <div>
-                <label className="text-[11px] font-mono text-zinc-400 block mb-1">Lore / Tactical Notes</label>
-                <textarea
-                  value={description}
-                  onChange={e => setDescription(e.target.value)}
-                  rows={2}
-                  className="w-full bg-zinc-950 border border-zinc-750 px-3 py-1.5 rounded-lg text-xs text-zinc-300 focus:border-amber-400 focus:outline-none"
-                  placeholder="Tactical description of this unit's doctrine and armament..."
-                />
-              </div>
+                  <div>
+                    <label className="text-[11px] font-mono text-zinc-400 block mb-1">Lore / Tactical Notes</label>
+                    <textarea
+                      value={description}
+                      onChange={e => setDescription(e.target.value)}
+                      rows={2}
+                      className="w-full bg-zinc-950 border border-zinc-750 px-3 py-1.5 rounded-lg text-xs text-zinc-300 focus:border-amber-400 focus:outline-none"
+                      placeholder="Tactical description of this unit's doctrine and armament..."
+                    />
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -992,7 +1269,7 @@ export const UnitCreatorModal: React.FC<UnitCreatorModalProps> = ({
             className="px-5 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-black font-bold text-xs font-mono rounded-lg shadow-lg flex items-center space-x-1.5 transition cursor-pointer"
           >
             <Check className="w-4 h-4" />
-            <span>Save Unit & Token</span>
+            <span>{mode === 'cosmetics' ? 'Save Cosmetics' : 'Save Unit & Token'}</span>
           </button>
         </div>
 

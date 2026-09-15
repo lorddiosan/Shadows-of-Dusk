@@ -48,8 +48,106 @@ export const GENERAL_CARDS: Card[] = [
     name: 'Combined Arms Doctrine',
     type: 'General',
     description: 'Synchronized ranged and melee combat.',
-    objectiveText: 'Successfully resolve both a Shooting attack and a Charge in the same round.',
+    objectiveText: 'Successfully resolve both a Ranged attack and an Engagement in the Action Phase in the same round.',
     passiveReward: '+1 bonus point per round.'
+  }
+];
+
+// Secondary Tactical Mission Cards (Achieved via Action Phase "Mission Action")
+export const SECONDARY_MISSION_CARDS: Card[] = [
+  {
+    id: 'sec_teleport_homer',
+    name: 'Deploy Teleport Homers',
+    type: 'SecondaryMission',
+    description: 'Plant high-frequency recall transponders deep behind enemy lines.',
+    objectiveText: 'An Infantry unit performs a Mission Action in the enemy deployment half. (+3 VP)',
+    pointsValue: 3
+  },
+  {
+    id: 'sec_investigate_archeotech',
+    name: 'Investigate Ancient Archeotech',
+    type: 'SecondaryMission',
+    description: 'Analyze strange resonance patterns surrounding sacred monoliths and ancient ruins.',
+    objectiveText: 'A unit performs a Mission Action within 60px of any Point of Interest or Special Tile. (+2 VP)',
+    pointsValue: 2
+  },
+  {
+    id: 'sec_establish_signal_array',
+    name: 'Establish Signal Array',
+    type: 'SecondaryMission',
+    description: 'Raise battlefield communication relays on elevated terrain overlooks.',
+    objectiveText: 'A unit performs a Mission Action while positioned on High Ground (Watchtower / Basalt Crag). (+2 VP)',
+    pointsValue: 2
+  },
+  {
+    id: 'sec_contain_rift',
+    name: 'Contain the Infernal Rift',
+    type: 'SecondaryMission',
+    description: 'Channel stabilization wards into volatile dimensional tears.',
+    objectiveText: 'A unit performs a Mission Action within 80px of a Rift Fracture. (+3 VP)',
+    pointsValue: 3
+  },
+  {
+    id: 'sec_dredge_mire',
+    name: 'Scout the Shifting Mires',
+    type: 'SecondaryMission',
+    description: 'Chart treacherous wetland paths and recover sunken relics before the waters shift.',
+    objectiveText: 'An Infantry unit performs a Mission Action in or adjacent to Flooded Mire. (+3 VP)',
+    pointsValue: 3
+  },
+  {
+    id: 'sec_sabotage_core',
+    name: 'Sabotage Central Nexus',
+    type: 'SecondaryMission',
+    description: 'Disrupt the core aetheric energy flow in the heart of the battlefield.',
+    objectiveText: 'A unit performs a Mission Action on the center Point of Interest. (+3 VP)',
+    pointsValue: 3
+  }
+];
+
+// Random Field Hazard & Environmental Effect Cards (Can shift terrain tiles & alter board hazards)
+export const FIELD_EFFECT_CARDS: Card[] = [
+  {
+    id: 'field_shifting_mires',
+    name: 'Shifting Mires Surge',
+    type: 'FieldEffect',
+    description: 'Subterranean tides surge through the wetlands.',
+    objectiveText: 'The Flooded Mire and Sunken Crypt Trench dynamically shift to new coordinates across the battlefield!'
+  },
+  {
+    id: 'field_rift_migration',
+    name: 'Dimensional Rift Migration',
+    type: 'FieldEffect',
+    description: 'Unstable fault lines tear open at a new dimensional fracture.',
+    objectiveText: 'The Rift Fracture relocates to a new focal coordinate on the battlefield.'
+  },
+  {
+    id: 'field_tectonic_fault',
+    name: 'Tectonic Tremor',
+    type: 'FieldEffect',
+    description: 'A violent tremor shakes the earth, altering high ground vantage points.',
+    objectiveText: 'Watchtowers and crags shift elevations and positions.'
+  },
+  {
+    id: 'field_acid_monsoon',
+    name: 'Corrosive Acid Monsoon',
+    type: 'FieldEffect',
+    description: 'Chemical deluge sweeps over open terrain.',
+    objectiveText: 'All units outside structures suffer 1 Life damage unless CP + Def > 6.'
+  },
+  {
+    id: 'field_dense_fog',
+    name: 'Convergence Mists',
+    type: 'FieldEffect',
+    description: 'Thick violet fog rolls in, blinding long-range spotters.',
+    objectiveText: 'All ranged attacks suffer -2 squares maximum range for 2 rounds.'
+  },
+  {
+    id: 'field_mana_flare',
+    name: 'Aetherial Aurora Flare',
+    type: 'FieldEffect',
+    description: 'A wave of ambient magic washes over the battleline.',
+    objectiveText: 'All units restore 1 CP and gain 1 Advantage stack on their next action.'
   }
 ];
 
@@ -90,7 +188,7 @@ export const FACTION_CARDS: Record<string, Card[]> = {
       type: 'Faction',
       factionId: 'daughters_astraea',
       description: 'Lightning maneuvers across the archipelago.',
-      objectiveText: 'All units gain +2 Movement. Charge rolls of 3-4 count as full movement.',
+      objectiveText: 'All units gain +2 Movement. Engagement moves gain +2 squares.',
       onReplaceTrigger: 'When replaced: Instant reposition 1 unit by 2 squares.'
     }
   ],
@@ -113,12 +211,12 @@ export const FACTION_CARDS: Record<string, Card[]> = {
       factionId: 'chronarch_conclave',
       description: 'Lock time in an inescapable nexus.',
       objectiveText: 'Delay enemy active initiative bonus; reroll one failed combat dice per phase.',
-      onReplaceTrigger: 'When replaced: Force enemy to skip their next shooting activation.'
+      onReplaceTrigger: 'When replaced: Force enemy to skip their next action activation.'
     }
   ]
 };
 
-// Draft v0.4 Events: Acid Rain, Flooding, Mana Surge, Great Shattering
+// Draft v0.4 Events: Acid Rain, Flooding, Mana Surge, Great Shattering, Shifting Mires, Rift Migration
 export const GAME_EVENTS: GameEvent[] = [
   {
     id: 'acid_rain',
@@ -138,6 +236,26 @@ export const GAME_EVENTS: GameEvent[] = [
     cooldownRounds: 10,
     currentCooldown: 0,
     durationRounds: 5,
+    activeRemaining: 0
+  },
+  {
+    id: 'shifting_mires',
+    name: 'Shifting Mires',
+    triggerFormula: '1.5/100 * (round * 2 - 1)',
+    description: 'A subterranean deluge shifts the Flooded Mire and Sunken Crypt Trench to new locations across the battlefield!',
+    cooldownRounds: 6,
+    currentCooldown: 0,
+    durationRounds: 2,
+    activeRemaining: 0
+  },
+  {
+    id: 'rift_migration',
+    name: 'Rift Migration',
+    triggerFormula: '1/100 * (round * 2 - 1)',
+    description: 'Tectonic aether currents cause the Infernal Rift Fracture to relocate to a new fault line!',
+    cooldownRounds: 8,
+    currentCooldown: 0,
+    durationRounds: 3,
     activeRemaining: 0
   },
   {
@@ -239,6 +357,88 @@ export const SHOP_ITEMS: ShopItem[] = [
     previewColor: '#0284c7',
     icon: '🎴',
     rarity: 'Rare'
+  },
+  // Token Border Cosmetics
+  {
+    id: 'border_gold',
+    name: 'Gilded Imperial Halo',
+    category: 'token_border',
+    description: 'A radiant golden filigree frame worthy of veteran champions.',
+    priceShards: 400,
+    previewColor: '#eab308',
+    icon: '👑',
+    rarity: 'Rare'
+  },
+  {
+    id: 'border_cyber_neon',
+    name: 'Cybernetic Neon Rim',
+    category: 'token_border',
+    description: 'Pulsing cyan energy ring with high-frequency telemetry markings.',
+    priceShards: 500,
+    previewColor: '#06b6d4',
+    icon: '💠',
+    rarity: 'Epic'
+  },
+  {
+    id: 'border_crimson_spike',
+    name: 'Barbed Bloodplate Frame',
+    category: 'token_border',
+    description: 'Jagged crimson spikes forged in the heart of the foundry.',
+    priceShards: 450,
+    previewColor: '#dc2626',
+    icon: '🩸',
+    rarity: 'Rare'
+  },
+  {
+    id: 'border_void_rune',
+    name: 'Abyssal Void Runes',
+    category: 'token_border',
+    description: 'Etched runes of the Outer Darkness glowing with violet malice.',
+    priceAether: 200,
+    previewColor: '#a855f7',
+    icon: '🔮',
+    rarity: 'Mythic'
+  },
+  // Token VFX Cosmetics
+  {
+    id: 'vfx_ethereal_glow',
+    name: 'Ethereal Soulmist Glow',
+    category: 'token_vfx',
+    description: 'A soft spiritual luminescence trailing in the unit wake.',
+    priceShards: 350,
+    previewColor: '#38bdf8',
+    icon: '✨',
+    rarity: 'Rare'
+  },
+  {
+    id: 'vfx_void_flame',
+    name: 'Voidfire Incandescence',
+    category: 'token_vfx',
+    description: 'Dark purple flames licking around the perimeter of the unit.',
+    priceShards: 600,
+    previewColor: '#9333ea',
+    icon: '🔥',
+    rarity: 'Epic'
+  },
+  {
+    id: 'vfx_lightning_aura',
+    name: 'Static Tempest Aura',
+    category: 'token_vfx',
+    description: 'Crackling electrical arcs dancing continuously around the token.',
+    priceAether: 250,
+    previewColor: '#facc15',
+    icon: '⚡',
+    rarity: 'Mythic'
+  },
+  {
+    id: 'vfx_blood_mist',
+    name: 'Crimson War Vapour',
+    category: 'token_vfx',
+    description: 'A sinister red vapor that shrouds models in terrifying presence.',
+    priceShards: 500,
+    previewColor: '#ef4444',
+    icon: '💨',
+    rarity: 'Epic'
   }
 ];
 

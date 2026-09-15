@@ -4,15 +4,29 @@ import { Unit, UnitType } from '../types/game';
 export interface CombatResult {
   attackerName: string;
   defenderName: string;
-  attackReceived: number;
-  roll1d3: number;
-  targetCurrentDef: number;
-  damageCategory: 'double_def' | 'normal_damage' | 'glance' | 'absorbed';
-  livesLost: number;
+  isMelee: boolean;
+  totalAttacks: number;
+  hitRolls: number[];       // The d20 hit rolls
+  targetCurrentDef: number; // Target's Def threshold
+  hitsCount: number;        // How many d20 > targetDef
+  damageDie: string;        // 'd3', 'd6', 'd8', etc.
+  damageRolls: number[];    // Individual damage rolls for each hit
+  totalDamage: number;      // Sum of damage
+  livesLost: number;        // Lives lost by target
   defModifierChange: number;
   leaderSaved: boolean;
   logText: string;
+  // Backward compatibility:
+  attackReceived: number;
+  roll1d3: number;
+  damageCategory: 'double_def' | 'normal_damage' | 'glance' | 'absorbed';
   diceRolled: number[];
+}
+
+export function parseDieSides(dieStr?: string): number {
+  if (!dieStr) return 3;
+  const match = dieStr.toLowerCase().match(/d(\d+)/);
+  return match ? parseInt(match[1], 10) : 3;
 }
 
 /**
@@ -29,51 +43,36 @@ export function checkTypeAdvantage(attackerType: UnitType, defenderType: UnitTyp
 }
 
 /**
- * Section 5.3: Advantage & Disadvantage Stacking
- * 0 stacks = 1d3
- * 1 stack = 2d3 (Adv: take highest / Disadv: take lowest)
- * 2 stacks = 3d3 (Adv: take highest / Disadv: take lowest)
- * Advantage and Disadvantage cancel 1-for-1 before rolling.
+ * Advantage & Disadvantage Stacking:
+ * Roll with Advantage: roll 2d20 take highest.
+ * Roll with Disadvantage: roll 2d20 take lowest.
  */
 export function rollAttackD3(netAdvantage: number): { chosenRoll: number; rolls: number[] } {
-  // Net Advantage > 0: Advantage, < 0: Disadvantage, 0: Normal
   const numDice = Math.min(3, 1 + Math.abs(netAdvantage));
   const rolls: number[] = [];
   for (let i = 0; i < numDice; i++) {
-    rolls.push(Math.floor(Math.random() * 3) + 1); // 1, 2, or 3
+    rolls.push(Math.floor(Math.random() * 3) + 1);
   }
-
-  let chosenRoll: number;
-  if (netAdvantage > 0) {
-    chosenRoll = Math.max(...rolls);
-  } else if (netAdvantage < 0) {
-    chosenRoll = Math.min(...rolls);
-  } else {
-    chosenRoll = rolls[0];
-  }
-
+  const chosenRoll = netAdvantage > 0 ? Math.max(...rolls) : netAdvantage < 0 ? Math.min(...rolls) : rolls[0];
   return { chosenRoll, rolls };
 }
 
 /**
- * Section 5.4: Leader Survival Roll
- * When a Leader would lose an L, roll 1d6.
- * If the result is higher than the attack received, Leader survives instead.
+ * Leader Survival Roll:
+ * When a Leader would lose lives, roll 1d6.
+ * If the result is higher than the damage received, Leader survives instead.
  */
-export function rollLeaderSurvival(attackReceived: number): { survived: boolean; roll: number } {
+export function rollLeaderSurvival(damageReceived: number): { survived: boolean; roll: number } {
   const roll = Math.floor(Math.random() * 6) + 1;
-  return { survived: roll > attackReceived, roll };
+  return { survived: roll > damageReceived, roll };
 }
 
 /**
- * Section 5.1 & 5.2: Damage vs Defence Resolution
- * Attack received = AM + 1d3 roll
- * Conditions:
- * - Attack >= 2 * Def: Target loses 1 L, and Def -1 for next turn
- * - Def <= Attack < 2 * Def: Target loses 1 L
- * - 0.5 * Def <= Attack < Def: No effect
- * - Attack < 0.5 * Def: No effect, and Def +1 for next turn
- * Def modifiers are capped at +-3 from base.
+ * Two-Roll Combat Resolution Engine:
+ * 1. Attacks count = livingModelsCount * attacksPerModel (melee or ranged).
+ * 2. Hit Roll: For each attack, roll 1d20. If d20 > target.Def, attack hits!
+ * 3. Damage Roll: For each hit that passed, roll the unit's damage die (d3, d6, d8, etc.).
+ * 4. Sum damage rolls and apply to target lives.
  */
 export function resolveCombat(
   attacker: Unit,
@@ -81,82 +80,112 @@ export function resolveCombat(
   isMelee: boolean,
   extraAdvantageStacks: number = 0
 ): CombatResult {
-  // Calculate Advantage / Disadvantage cancellation
+  // 1. Calculate living models
+  const livingTokens = (attacker.tokens || []).filter(t => t.currentLives > 0);
+  const livingModelCount = livingTokens.length > 0 
+    ? livingTokens.length 
+    : Math.max(1, attacker.stats.modelCount || 1);
+
+  // 2. Determine attack count per model & damage die
+  const attacksPerModel = isMelee 
+    ? (attacker.stats.meleeAttacks ?? 1) 
+    : (attacker.stats.rangedAttacks ?? (attacker.stats.range > 0 ? 1 : 0));
+  
+  const damageDie = isMelee
+    ? (attacker.stats.meleeDamageDice ?? (attacker.type === 'Vehicle' || attacker.type === 'Monster' ? 'd6' : 'd3'))
+    : (attacker.stats.rangedDamageDice ?? (attacker.type === 'Vehicle' ? 'd6' : 'd3'));
+
+  const totalAttacks = Math.max(1, livingModelCount * attacksPerModel);
+
+  // Advantage / Disadvantage
   let adv = attacker.advantageStacks + extraAdvantageStacks;
   let disadv = attacker.disadvantageStacks;
-
   if (isMelee && checkTypeAdvantage(attacker.type, defender.type)) {
     adv += 1;
   }
-
   const netAdvantage = Math.max(-2, Math.min(2, adv - disadv));
-  const { chosenRoll, rolls } = rollAttackD3(netAdvantage);
 
-  const attackReceived = attacker.stats.am + chosenRoll;
-  const currentDef = Math.max(1, defender.stats.baseDef + defender.stats.defModifier);
+  // 3. Roll 1: To-Hit Roll (d20 vs Def)
+  const currentDef = Math.max(1, defender.stats.def + defender.stats.defModifier);
+  const hitRolls: number[] = [];
+  let hitsCount = 0;
 
-  let damageCategory: 'double_def' | 'normal_damage' | 'glance' | 'absorbed';
-  let livesLost = 0;
-  let defModifierChange = 0;
+  for (let i = 0; i < totalAttacks; i++) {
+    let roll = Math.floor(Math.random() * 20) + 1; // 1-20
+    if (netAdvantage > 0) {
+      const advRoll = Math.floor(Math.random() * 20) + 1;
+      roll = Math.max(roll, advRoll);
+    } else if (netAdvantage < 0) {
+      const disadvRoll = Math.floor(Math.random() * 20) + 1;
+      roll = Math.min(roll, disadvRoll);
+    }
+    hitRolls.push(roll);
 
-  if (attackReceived >= 2 * currentDef) {
-    damageCategory = 'double_def';
-    livesLost = 1;
-    defModifierChange = -1;
-  } else if (attackReceived >= currentDef) {
-    damageCategory = 'normal_damage';
-    livesLost = 1;
-    defModifierChange = 0;
-  } else if (attackReceived >= 0.5 * currentDef) {
-    damageCategory = 'glance';
-    livesLost = 0;
-    defModifierChange = 0;
-  } else {
-    damageCategory = 'absorbed';
-    livesLost = 0;
-    defModifierChange = 1;
+    // If roll > target Def: Hit! If <= target Def: Fails
+    if (roll > currentDef) {
+      hitsCount++;
+    }
   }
+
+  // 4. Roll 2: Damage Rolls
+  const dieSides = parseDieSides(damageDie);
+  const damageRolls: number[] = [];
+  for (let i = 0; i < hitsCount; i++) {
+    damageRolls.push(Math.floor(Math.random() * dieSides) + 1);
+  }
+
+  let totalDamage = damageRolls.reduce((a, b) => a + b, 0);
+  const defModifierChange = 0;
 
   // Check Leader survival roll if lives would be lost
   let leaderSaved = false;
-  if (livesLost > 0 && defender.type === 'Character') {
-    const survival = rollLeaderSurvival(attackReceived);
+  if (totalDamage > 0 && defender.type === 'Character') {
+    const survival = rollLeaderSurvival(totalDamage);
     if (survival.survived) {
-      livesLost = 0;
+      totalDamage = 0;
       leaderSaved = true;
     }
   }
 
-  // Construct readable battle log
-  let logText = `${attacker.name} attacked ${defender.name}! Attack received = ${attacker.stats.am} + ${chosenRoll} [${rolls.join(',')}] = ${attackReceived} vs Def ${currentDef}. `;
-  if (damageCategory === 'double_def') {
-    logText += `CRITICAL BLOW! (Attack >= 2x Def). `;
-  } else if (damageCategory === 'normal_damage') {
-    logText += `Direct Hit! `;
-  } else if (damageCategory === 'glance') {
-    logText += `Deflected (0.5x Def <= Attack < Def). No damage. `;
-  } else {
-    logText += `Absorbed with ease! (Attack < 0.5x Def). Def +1 next turn. `;
-  }
+  const livesLost = totalDamage;
+  const damageCategory: 'double_def' | 'normal_damage' | 'glance' | 'absorbed' = 
+    hitsCount >= 2 ? 'double_def' : hitsCount === 1 ? 'normal_damage' : 'glance';
 
-  if (leaderSaved) {
-    logText += `LEADER SURVIVAL ROLL SUCCEEDED! ${defender.name} parried the mortal blow!`;
-  } else if (livesLost > 0) {
-    logText += `${defender.name} lost 1 Life (Remaining: ${Math.max(0, defender.stats.lives - livesLost)}).`;
+  // Construct readable battle log
+  const weaponType = isMelee ? 'Melee' : 'Ranged';
+  let logText = `⚔️ [${weaponType} Attack] ${attacker.name} (${livingModelCount} models) made ${totalAttacks} attack(s) vs Def ${currentDef}. `;
+  logText += `Hit rolls (d20): [${hitRolls.join(', ')}] → ${hitsCount}/${totalAttacks} Hit! `;
+
+  if (hitsCount > 0) {
+    logText += `Damage (${damageDie} x ${hitsCount}): [${damageRolls.join(', ')}] = ${totalDamage} Damage. `;
+    if (leaderSaved) {
+      logText += `👑 Leader Survival Roll Succeeded! ${defender.name} parried the mortal damage!`;
+    } else {
+      logText += `${defender.name} loses ${livesLost} Life (Remaining: ${Math.max(0, defender.stats.lives - livesLost)}).`;
+    }
+  } else {
+    logText += `All attacks failed to beat ${defender.name}'s Defense (${currentDef}).`;
   }
 
   return {
     attackerName: attacker.name,
     defenderName: defender.name,
-    attackReceived,
-    roll1d3: chosenRoll,
+    isMelee,
+    totalAttacks,
+    hitRolls,
     targetCurrentDef: currentDef,
-    damageCategory,
+    hitsCount,
+    damageDie,
+    damageRolls,
+    totalDamage,
     livesLost,
     defModifierChange,
     leaderSaved,
     logText,
-    diceRolled: rolls
+    attackReceived: totalDamage,
+    roll1d3: hitRolls[0] || 0,
+    damageCategory,
+    diceRolled: hitRolls
   };
 }
 
@@ -224,7 +253,8 @@ export function checkAbilityActivation(params: {
   const timingMatches =
     !ability.activationTiming ||
     ability.activationTiming === 'any_time' ||
-    ability.activationTiming.toLowerCase() === currentPhase.toLowerCase();
+    ability.activationTiming.toLowerCase() === currentPhase.toLowerCase() ||
+    (currentPhase.toLowerCase() === 'action' && ['shooting', 'charge', 'fight', 'action'].includes(ability.activationTiming.toLowerCase()));
 
   if (!timingMatches) {
     return {

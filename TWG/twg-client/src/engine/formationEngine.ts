@@ -57,7 +57,8 @@ export function getUnitBaseDiameter(unit: Unit): number {
 export function getUnitBaseDimensions(unit: Unit): { shape: BaseShape; width: number; height: number; radius: number } {
   const shape: BaseShape = unit.baseShape || unit.stats.baseShape || (
     unit.type === 'Vehicle' ? 'rectangle' :
-    unit.role === 'Infantry / Mounted' && unit.stats.mv >= 7 ? 'oval' :
+    unit.type === 'Infantry' ? 'circle' :
+    (unit.traits?.some(t => t.toLowerCase().includes('cavalry') || t.toLowerCase().includes('mounted')) || (unit as any).type === 'Cavalry' || (unit.role === 'Infantry / Mounted' && unit.stats.mv >= 7)) ? 'oval' :
     'circle'
   );
 
@@ -137,9 +138,18 @@ export function calculateFormationOffsets(
     }
 
     case 'stack': {
-      // Clustered squad stack with tight isometric offset
+      // Clustered squad stack: tightly packed hexagonal tangent cluster with tangent base clearance (no base intersection)
+      const spacingX = baseSpacingX + 2;
+      const spacingY = Math.round(spacingX * 0.866);
+      const cols = Math.min(count, Math.max(2, Math.ceil(Math.sqrt(count))));
+      const rows = Math.ceil(count / cols);
       for (let i = 0; i < count; i++) {
-        offsets.push({ offsetX: Math.round((i - (count - 1) / 2) * 5), offsetY: Math.round(-(i - (count - 1) / 2) * 5) });
+        const row = Math.floor(i / cols);
+        const col = i % cols;
+        const staggerX = (row % 2) * (spacingX / 2);
+        const offsetX = (col - (cols - 1) / 2) * spacingX + staggerX;
+        const offsetY = (row - (rows - 1) / 2) * spacingY;
+        offsets.push({ offsetX: Math.round(offsetX), offsetY: Math.round(offsetY) });
       }
       break;
     }
@@ -196,7 +206,7 @@ export function calculateFormationOffsets(
         // Chord distance C = 2 * R * sin(PI / count) >= minChord
         // Therefore R >= minChord / (2 * sin(PI / count))
         const chordRadius = minChord / (2 * Math.sin(Math.PI / count));
-        const radius = Math.ceil(Math.max(spacingMax, chordRadius));
+        const radius = Math.ceil(Math.max(spacingMax / 2, chordRadius));
         for (let i = 0; i < count; i++) {
           const angle = (i * 2 * Math.PI) / count - Math.PI / 2;
           offsets.push({
@@ -613,17 +623,22 @@ export function syncUnitTokens(unit: Unit, allUnits?: Unit[]): Unit {
   const nextTokens: Token[] = activeTokens.map((tok, i) => {
     const hasCustomOffset = unit.hasCustomTokenPositions && typeof tok.offsetX === 'number' && typeof tok.offsetY === 'number';
     const off = hasCustomOffset ? { offsetX: tok.offsetX, offsetY: tok.offsetY } : (offsets[i] || { offsetX: 0, offsetY: 0 });
+    const isLeader = tok.isLeaderToken;
+    const tokShape = isLeader ? (tok.baseShape || shape) : shape;
+    const tokWidth = isLeader ? (tok.baseWidth || width) : width;
+    const tokHeight = isLeader ? (tok.baseHeight || height) : height;
+    const tokRadius = isLeader ? (tok.radius || radius) : radius;
     return {
       ...tok,
       offsetX: off.offsetX,
       offsetY: off.offsetY,
       x: Math.round(unit.position!.x + off.offsetX),
       y: Math.round(unit.position!.y + off.offsetY),
-      baseShape: tok.baseShape || shape,
-      baseWidth: tok.baseWidth || width,
-      baseHeight: tok.baseHeight || height,
-      size: Math.max(tok.baseWidth || width, tok.baseHeight || height),
-      radius: tok.radius || radius,
+      baseShape: tokShape,
+      baseWidth: tokWidth,
+      baseHeight: tokHeight,
+      size: Math.max(tokWidth, tokHeight),
+      radius: tokRadius,
       sprite: tok.sprite || unit.avatar,
       tokenImageUrl: tok.tokenImageUrl || (tok.isLeaderToken ? undefined : unit.tokenImageUrl)
     };
@@ -1450,7 +1465,14 @@ export function validateNormalMovementEnemyProximity(
   minProximityPx: number = ENGAGEMENT_PROXIMITY_PX
 ): { valid: boolean; offendingEnemyUnit?: Unit; minDistancePx: number } {
   const enemyOwner = unit.owner === 'player1' ? 'player2' : 'player1';
-  const enemyUnits = allUnits.filter(u => u.owner === enemyOwner && u.position && u.stats.lives > 0);
+  const enemyUnits = allUnits.filter(u =>
+    u.owner === enemyOwner &&
+    u.position &&
+    u.stats.lives > 0 &&
+    !u.attachedTo &&
+    !u.embarkedIn &&
+    !u.inStrategicReserve
+  );
 
   let closestDist = Infinity;
   let closestEnemy: Unit | undefined;
@@ -1505,7 +1527,8 @@ export function setUnitMutualState(
         embarkedIn: null,
         attachedTo: null,
         position: null,
-        tokens: []
+        tokens: [],
+        hasCustomTokenPositions: false
       };
     case 'embarked':
       return {
@@ -1514,7 +1537,8 @@ export function setUnitMutualState(
         embarkedIn: payload?.vehicleId || null,
         attachedTo: null,
         position: null,
-        tokens: []
+        tokens: [],
+        hasCustomTokenPositions: false
       };
     case 'attached':
       return {
@@ -1523,7 +1547,8 @@ export function setUnitMutualState(
         embarkedIn: null,
         attachedTo: payload?.leaderTargetId || null,
         position: null,
-        tokens: []
+        tokens: [],
+        hasCustomTokenPositions: false
       };
     case 'onBoard':
     default: {
@@ -1533,7 +1558,8 @@ export function setUnitMutualState(
         inStrategicReserve: false,
         embarkedIn: null,
         attachedTo: null,
-        position: pos
+        position: pos,
+        hasCustomTokenPositions: false
       };
       return syncUnitTokens(updated);
     }
@@ -1917,6 +1943,14 @@ export function checkPathCrossesUnits(
       return false; // charge target is the intended destination
     }
     if (u.embarkedIn || u.inStrategicReserve || !u.position || u.stats.lives <= 0) return false;
+
+    // Friendly Infantry Pass-Through Rule: Friendly infantry/characters can move through fellow friendly infantry/characters
+    const isMovingInfantry = unit.type === 'Infantry' || unit.type === 'Character';
+    const isObstacleFriendlyInfantry = (u.type === 'Infantry' || u.type === 'Character') && u.owner === unit.owner;
+    if (isMovingInfantry && isObstacleFriendlyInfantry) {
+      return false;
+    }
+
     return true;
   });
 
@@ -2051,5 +2085,36 @@ export function validateDisembarkPlacement(
   return { valid: true };
 }
 
+/**
+ * Section 2.1: Lives (L) & Bodies (U)
+ * A unit's survivability is tracked as a pool of Lives (L), distributed across its battlefield bodies (U).
+ * Life per body = L / U.
+ * Returns both bodies remaining and total lives remaining as separate numbers.
+ */
+export function getUnitBodiesAndLives(unit: Unit): {
+  livingBodies: number;
+  totalBodies: number;
+  remainingLives: number;
+  maxLives: number;
+  livesPerBody: number;
+  displayString: string;
+} {
+  const livingTokens = (unit.tokens || []).filter(t => !t.isLeaderToken && t.currentLives > 0);
+  const totalTokens = (unit.tokens || []).filter(t => !t.isLeaderToken);
+  const totalBodies = totalTokens.length > 0 ? totalTokens.length : (unit.stats.modelCount || 1);
+  const livingBodies = unit.tokens && unit.tokens.length > 0
+    ? livingTokens.length
+    : (unit.stats.lives > 0 ? (unit.stats.modelCount || 1) : 0);
+  const remainingLives = unit.stats.lives;
+  const maxLives = unit.stats.maxLives || unit.stats.lives;
+  const livesPerBody = Math.max(1, Math.ceil(maxLives / totalBodies));
 
-
+  return {
+    livingBodies,
+    totalBodies,
+    remainingLives,
+    maxLives,
+    livesPerBody,
+    displayString: `Bodies: ${livingBodies}/${totalBodies} (U) | Lives: ${remainingLives}/${maxLives} (L)`
+  };
+}

@@ -94,11 +94,6 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
     setSelectedUnits(selectedUnits.filter(u => u.id !== id));
   };
 
-  const handleOpenCreateUnit = () => {
-    setEditingUnit(null);
-    setShowUnitCreatorModal(true);
-  };
-
   const handleOpenEditUnit = (unit: Unit) => {
     setEditingUnit(unit);
     setShowUnitCreatorModal(true);
@@ -106,16 +101,24 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
 
   const handleSaveUnitFromModal = (unit: Unit) => {
     if (editingUnit) {
-      // Update existing unit in roster
-      setSelectedUnits(prev => prev.map(u => u.id === editingUnit.id ? { ...unit, id: u.id } : u));
-      setSaveNotification(`Updated ${unit.name} with custom token!`);
-    } else {
-      // Add newly created unit to roster
-      setSelectedUnits(prev => [...prev, unit]);
-      setSaveNotification(`Created & enlisted ${unit.name}!`);
+      // Update cosmetics of existing unit in roster without altering any combat stats
+      setSelectedUnits(prev => prev.map(u => u.id === editingUnit.id ? {
+        ...u,
+        avatar: unit.avatar,
+        tokenImageUrl: unit.tokenImageUrl,
+        borderStyle: unit.borderStyle,
+        vfxEffect: unit.vfxEffect
+      } : u));
+      setSaveNotification(`Updated ${unit.name} appearance!`);
+      // Update template cosmetics
+      StorageService.saveUnitTemplate({
+        ...editingUnit,
+        avatar: unit.avatar,
+        tokenImageUrl: unit.tokenImageUrl,
+        borderStyle: unit.borderStyle,
+        vfxEffect: unit.vfxEffect
+      });
     }
-    // Also save as template to Armory
-    StorageService.saveUnitTemplate(unit);
     setTimeout(() => setSaveNotification(null), 3500);
   };
 
@@ -588,17 +591,7 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
         <div className="lg:col-span-5 space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-base font-bold text-white">Faction Armory</h2>
-            <div className="flex items-center space-x-2">
-              <button
-                onClick={handleOpenCreateUnit}
-                className="px-2.5 py-1 bg-amber-500 hover:bg-amber-400 text-black font-bold text-[11px] font-mono rounded shadow flex items-center space-x-1 transition cursor-pointer"
-                title="Create a custom unit with custom stats and uploaded token image"
-              >
-                <Plus className="w-3 h-3" />
-                <span>Create Unit</span>
-              </button>
-              <span className="text-xs text-zinc-400 font-mono">({filteredTemplates.length})</span>
-            </div>
+            <span className="text-xs text-zinc-400 font-mono">({filteredTemplates.length} Datasheets)</span>
           </div>
 
           {/* Role Filter Chips */}
@@ -845,13 +838,14 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
         </div>
       )}
 
-      {/* Custom Unit Creator & Token Image Upload Modal */}
+      {/* Custom Unit Appearance & Token Customization Modal (Cosmetics Only) */}
       <UnitCreatorModal
         isOpen={showUnitCreatorModal}
         onClose={() => setShowUnitCreatorModal(false)}
         onSaveUnit={handleSaveUnitFromModal}
         initialUnit={editingUnit}
         factionId={selectedFactionId}
+        mode="cosmetics"
       />
     </div>
   );

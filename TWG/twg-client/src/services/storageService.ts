@@ -24,7 +24,8 @@ const DEFAULT_PROFILE: UserProfile = {
   xp: 3200,
   unlockedItems: ['board_crimson_foundry', 'dice_brass_steam'],
   equippedBoardSkin: 'board_crimson_foundry',
-  equippedDiceSkin: 'dice_brass_steam'
+  equippedDiceSkin: 'dice_brass_steam',
+  claimedPassTiers: []
 };
 
 function getDefaultPresetArmies(): ArmyRoster[] {

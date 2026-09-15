@@ -184,53 +184,11 @@ export function checkWinConditions(
       };
     }
 
-    // Tiebreaker 1: Objectives Held (POIs)
-    if (pois && pois.length > 0) {
-      const allUnits = [...player1Units, ...player2Units];
-      const poiScoreData = calculatePOIScores(allUnits, pois);
-      const p1PoisHeld = poiScoreData.breakdown.filter(b => b.player1CP > b.player2CP).length;
-      const p2PoisHeld = poiScoreData.breakdown.filter(b => b.player2CP > b.player1CP).length;
-
-      if (p1PoisHeld > p2PoisHeld) {
-        return {
-          isOver: true,
-          winner: 'player1',
-          reason: `Round 10 Cap Reached: Score tied at ${player1Score} VP! Player 1 breaks the tie by controlling ${p1PoisHeld} Objectives (vs ${p2PoisHeld}).`
-        };
-      }
-      if (p2PoisHeld > p1PoisHeld) {
-        return {
-          isOver: true,
-          winner: 'player2',
-          reason: `Round 10 Cap Reached: Score tied at ${player2Score} VP! Player 2 breaks the tie by controlling ${p2PoisHeld} Objectives (vs ${p1PoisHeld}).`
-        };
-      }
-    }
-
-    // Tiebreaker 2: Remaining Squad Lives
-    const p1Lives = player1Units.reduce((sum, u) => sum + Math.max(0, u.stats?.lives || 0), 0);
-    const p2Lives = player2Units.reduce((sum, u) => sum + Math.max(0, u.stats?.lives || 0), 0);
-
-    if (p1Lives > p2Lives) {
-      return {
-        isOver: true,
-        winner: 'player1',
-        reason: `Round 10 Cap Reached: Score and Objectives tied! Player 1 breaks the tie with ${p1Lives} surviving model lives (vs ${p2Lives}).`
-      };
-    }
-    if (p2Lives > p1Lives) {
-      return {
-        isOver: true,
-        winner: 'player2',
-        reason: `Round 10 Cap Reached: Score and Objectives tied! Player 2 breaks the tie with ${p2Lives} surviving model lives (vs ${p1Lives}).`
-      };
-    }
-
-    // Tiebreaker 3: Tactical Draw
+    // Section 15 & DESIGN-010: Do not hardcode tiebreak rules until decided
     return { 
       isOver: true, 
       winner: 'draw', 
-      reason: `Round 10 Cap Reached: Tactical Stalemate! Scores (${player1Score} VP), Objectives, and Remaining Force Power are perfectly equal.` 
+      reason: `Round 10 Cap Reached: Both commanders tied at ${player1Score} VP — Tactical Draw (Tiebreak rule pending DESIGN-010).` 
     };
   }
 

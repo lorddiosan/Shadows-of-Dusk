@@ -15,6 +15,7 @@ export interface UserProfile {
   unlockedItems: string[];
   equippedBoardSkin: string;
   equippedDiceSkin: string;
+  claimedPassTiers?: number[];
 }
 
 export interface BattlePassTier {
@@ -39,7 +40,7 @@ export interface BattlePassTier {
 export interface ShopItem {
   id: string;
   name: string;
-  category: 'board' | 'dice' | 'card_sleeve' | 'avatar';
+  category: 'board' | 'dice' | 'card_sleeve' | 'avatar' | 'token_border' | 'token_vfx';
   description: string;
   priceShards?: number;
   priceAether?: number;

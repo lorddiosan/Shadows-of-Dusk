@@ -1,8 +1,32 @@
-import { GameEvent, Unit } from '../types/game';
+import { GameEvent, Unit, SpecialTile } from '../types/game';
 
 export interface EventResolutionResult {
   triggeredEvent: GameEvent | null;
   logs: string[];
+  specialTiles?: SpecialTile[];
+}
+
+/**
+ * Dynamically shift special terrain tile locations on the board.
+ * Special tiles like Flooded Mire, Sunken Crypt Trench, and Rift Fracture
+ * relocate when triggered by event cards.
+ */
+export function relocateSpecialTiles(
+  specialTiles: SpecialTile[],
+  filter?: (tile: SpecialTile) => boolean
+): { updatedTiles: SpecialTile[]; relocatedNames: string[] } {
+  const relocatedNames: string[] = [];
+  const updatedTiles = specialTiles.map(tile => {
+    if (!filter || filter(tile)) {
+      // Pick random coordinates within reasonable battlefield playable bounds (1200x800 map)
+      const newX = Math.round(250 + Math.random() * 700);
+      const newY = Math.round(200 + Math.random() * 400);
+      relocatedNames.push(`${tile.name} -> (${newX}, ${newY})`);
+      return { ...tile, x: newX, y: newY };
+    }
+    return tile;
+  });
+  return { updatedTiles, relocatedNames };
 }
 
 /**
@@ -13,16 +37,20 @@ export interface EventResolutionResult {
  * Trigger chances:
  * Acid Rain: 2/100 * (round * 1.5 - 1)
  * Flooding: 1/100 * (round * 2 - 1)
+ * Shifting Mires: 1.5/100 * (round * 2 - 1)
+ * Rift Migration: 1/100 * (round * 2 - 1)
  * Mana Surge: 0.5/100 * (round * 3 - 1)
  * Great Shattering: 1/100 * (round * 1.5 - 1)
  */
 export function checkAndTriggerEvents(
   round: number,
   events: GameEvent[],
-  units: Unit[]
+  units: Unit[],
+  specialTiles?: SpecialTile[]
 ): EventResolutionResult {
   const logs: string[] = [];
   let triggeredEvent: GameEvent | null = null;
+  let updatedSpecialTiles = specialTiles ? [...specialTiles] : undefined;
 
   // Process existing active events decrement & cooldowns
   for (const event of events) {
@@ -47,6 +75,10 @@ export function checkAndTriggerEvents(
     if (event.id === 'acid_rain') {
       chance = (2 / 100) * (round * 1.5 - 1);
     } else if (event.id === 'flooding') {
+      chance = (1 / 100) * (round * 2 - 1);
+    } else if (event.id === 'shifting_mires') {
+      chance = (1.5 / 100) * (round * 2 - 1);
+    } else if (event.id === 'rift_migration') {
       chance = (1 / 100) * (round * 2 - 1);
     } else if (event.id === 'mana_surge') {
       chance = (0.5 / 100) * (round * 3 - 1);
@@ -100,6 +132,18 @@ export function checkAndTriggerEvents(
             }
           }
         }
+      } else if (event.id === 'shifting_mires') {
+        if (updatedSpecialTiles) {
+          const shiftRes = relocateSpecialTiles(updatedSpecialTiles, t => t.name.includes('Mire') || t.name.includes('Trench') || t.type === 'Water');
+          updatedSpecialTiles = shiftRes.updatedTiles;
+          logs.push(`🌊 Shifting Mires: Wetland trenches and flooded mires surged and shifted! (${shiftRes.relocatedNames.join(', ')})`);
+        }
+      } else if (event.id === 'rift_migration') {
+        if (updatedSpecialTiles) {
+          const shiftRes = relocateSpecialTiles(updatedSpecialTiles, t => t.type === 'InfernalRift' || t.name.includes('Rift'));
+          updatedSpecialTiles = shiftRes.updatedTiles;
+          logs.push(`⚡ Dimensional Rupture: Infernal Rift has migrated! (${shiftRes.relocatedNames.join(', ')})`);
+        }
       } else if (event.id === 'great_shattering') {
         // "All units' Mv reduced by 2 for 4 rounds."
         for (const u of units) {
@@ -114,5 +158,5 @@ export function checkAndTriggerEvents(
     }
   }
 
-  return { triggeredEvent, logs };
+  return { triggeredEvent, logs, specialTiles: updatedSpecialTiles };
 }

@@ -10,7 +10,7 @@ interface ShopProps {
 }
 
 export const Shop: React.FC<ShopProps> = ({ user, onPurchase, onEquip }) => {
-  const [activeCategory, setActiveCategory] = useState<'all' | 'board' | 'dice' | 'card_sleeve'>('all');
+  const [activeCategory, setActiveCategory] = useState<'all' | 'board' | 'dice' | 'card_sleeve' | 'token_border' | 'token_vfx'>('all');
 
   const filteredItems = activeCategory === 'all' 
     ? SHOP_ITEMS 
@@ -53,8 +53,8 @@ export const Shop: React.FC<ShopProps> = ({ user, onPurchase, onEquip }) => {
       </div>
 
       {/* Category Filter Chips */}
-      <div className="flex items-center space-x-2 border-b border-zinc-800 pb-3">
-        {(['all', 'board', 'dice', 'card_sleeve'] as const).map(cat => (
+      <div className="flex flex-wrap items-center gap-2 border-b border-zinc-800 pb-3">
+        {(['all', 'board', 'dice', 'card_sleeve', 'token_border', 'token_vfx'] as const).map(cat => (
           <button
             key={cat}
             onClick={() => setActiveCategory(cat)}
@@ -64,7 +64,17 @@ export const Shop: React.FC<ShopProps> = ({ user, onPurchase, onEquip }) => {
                 : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
             }`}
           >
-            {cat === 'all' ? 'All Items' : cat === 'board' ? 'Battlefield Skins' : cat === 'dice' ? 'Dice Sets' : 'Card Sleeves'}
+            {cat === 'all'
+              ? 'All Items'
+              : cat === 'board'
+              ? 'Battlefield Skins'
+              : cat === 'dice'
+              ? 'Dice Sets'
+              : cat === 'card_sleeve'
+              ? 'Card Sleeves'
+              : cat === 'token_border'
+              ? 'Unit Borders'
+              : 'Visual Effects (VFX)'}
           </button>
         ))}
       </div>
