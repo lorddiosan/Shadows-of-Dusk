@@ -346,10 +346,29 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
   ]);
 
   // VTT UI Controls
-  const [activeTool, setActiveTool] = useState<'select' | 'move' | 'measure' | 'target'>('select');
+  const [activeTool, setActiveTool] = useState<'select' | 'move' | 'measure' | 'target' | 'inspect'>('select');
   const [zoomLevel, setZoomLevel] = useState<number>(1);
   const [chatInput, setChatInput] = useState<string>('');
   const [rightTab, setRightTab] = useState<'chat' | 'journal' | 'cards' | 'settings'>('chat');
+
+  // VTT Keyboard Shortcut Switcher for Tools
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+      if (e.key === 'i' || e.key === 'I') {
+        setActiveTool('inspect');
+      } else if (e.key === 'v' || e.key === 'V') {
+        setActiveTool('select');
+      } else if (e.key === 'm' || e.key === 'M') {
+        setActiveTool('measure');
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const selectedUnit = gameState.units.find(u => u.id === selectedUnitId && u.stats.lives > 0) || null;
   const targetUnit = gameState.units.find(u => u.id === targetUnitId && u.stats.lives > 0) || null;
@@ -4086,7 +4105,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
         <div className="w-11 bg-[#13151d] border-r border-zinc-800 flex flex-col items-center py-2 space-y-2 shrink-0 z-20">
           <button
             onClick={() => setActiveTool('select')}
-            title="Select / Inspect (V)"
+            title="Select / Move Units (V)"
             className={`p-2 rounded-lg transition ${
               activeTool === 'select' ? 'bg-rose-600 text-white shadow' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
             }`}
@@ -4119,6 +4138,15 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
             }`}
           >
             <Target className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => setActiveTool('inspect')}
+            title="Inspection Tool (I) - Hover over units, terrain, hazards & objectives to inspect details"
+            className={`p-2 rounded-lg transition ${
+              activeTool === 'inspect' ? 'bg-amber-600 text-white shadow ring-2 ring-amber-400/50' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+            }`}
+          >
+            <HelpCircle className="w-4 h-4" />
           </button>
 
           <div className="w-6 h-[1px] bg-zinc-800 my-1"></div>

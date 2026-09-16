@@ -4,7 +4,7 @@ import {
   Crosshair, Compass, Shield, Target, Move, Sparkles, AlertCircle,
   Circle, LayoutGrid, AlignJustify, Layers, AlertTriangle
 } from 'lucide-react';
-import { Unit, Token, FormationType, WorldPoint, POI, SpecialTile, Phase, TerrainFeature, DeploymentZoneConfig, PaintedZone, MultiLevelStructure } from '../../types/game';
+import { Unit, Token, FormationType, WorldPoint, POI, SpecialTile, Phase, TerrainFeature, DeploymentZoneConfig, PaintedZone, MultiLevelStructure, CORE_TRAIT_DEFINITIONS } from '../../types/game';
 import { VfxOverlay } from './VfxOverlay';
 import { 
   DEFAULT_GRID_SIZE, 
@@ -52,7 +52,7 @@ interface TabletopCanvasProps {
   onDropUnitFromTray?: (unitId: string, dropPos: WorldPoint) => void;
   onChangeFormation?: (unitId: string, formation: FormationType) => void;
   onCanvasClick?: () => void;
-  activeTool: 'select' | 'move' | 'measure' | 'target';
+  activeTool: 'select' | 'move' | 'measure' | 'target' | 'inspect';
   zoomLevel?: number;
   onZoomChange?: (newZoom: number) => void;
   coherencyDistanceInches?: number;
@@ -128,6 +128,102 @@ export const getTraitBadgeInfo = (trait: string, isTemp = false): TraitBadgeInfo
     default:
       return { icon: '🏷️', label: t, badgeClass: 'bg-zinc-850 border-zinc-600 text-zinc-300' };
   }
+};
+
+export interface InspectTarget {
+  category: 'unit' | 'hazard' | 'poi' | 'structure' | 'terrain';
+  title: string;
+  subtitle: string;
+  avatarOrIcon?: string;
+  description?: string;
+  unit?: Unit;
+  modelInfo?: {
+    index: number;
+    total: number;
+    isLeader: boolean;
+    leaderName?: string;
+  };
+  stats?: {
+    movement: number;
+    attackModifier: number;
+    defense: number;
+    range: number;
+    lives: number;
+    maxLives: number;
+    cp: number;
+    formation?: string;
+    actionsRemaining?: number;
+  };
+  traits?: string[];
+  tempTraits?: string[];
+  attachedToName?: string;
+  embarkedInName?: string;
+  attachedLeadersNames?: string[];
+  hazardInfo?: {
+    type: string;
+    radiusPx: number;
+    isTemporary: boolean;
+    activeRemaining?: number;
+    durationRounds?: number;
+  };
+  poiInfo?: {
+    type: string;
+    pointsValue: number;
+    captureRadius: number;
+  };
+  structureInfo?: {
+    type: string;
+    totalLevels: number;
+    coverBonus: number;
+    blocksLineOfSight: boolean;
+    blocksLargeUnits: boolean;
+  };
+  terrainInfo?: {
+    type: string;
+    coverBonus?: number;
+    blocksMovement?: boolean;
+    blocksLineOfSight?: boolean;
+  };
+}
+
+export const getTraitExplanation = (trait: string): string => {
+  const t = trait.trim();
+  const lower = t.toLowerCase();
+
+  if (CORE_TRAIT_DEFINITIONS[t]?.summary) {
+    return CORE_TRAIT_DEFINITIONS[t].summary;
+  }
+  
+  const matchedCoreKey = Object.keys(CORE_TRAIT_DEFINITIONS).find(k => k.toLowerCase() === lower);
+  if (matchedCoreKey) {
+    return CORE_TRAIT_DEFINITIONS[matchedCoreKey].summary;
+  }
+
+  if (lower.includes('fire') || lower.includes('burn')) {
+    return 'Takes 1 mortal wound at end of round until extinguished.';
+  }
+  if (lower.includes('poison') || lower.includes('venom') || lower.includes('toxin')) {
+    return 'Suffers -1 to Attack Modifiers and takes periodic toxin damage.';
+  }
+  if (lower.includes('stun') || lower.includes('paralyz') || lower.includes('shock')) {
+    return 'Movement reduced by 2" and reaction abilities disabled.';
+  }
+  if (lower.includes('freeze') || lower.includes('frozen') || lower.includes('frost') || lower.includes('chill')) {
+    return 'Halves movement distance and increases incoming melee damage.';
+  }
+  if (lower.includes('acid') || lower.includes('corrod')) {
+    return 'Corrodes armor: -1 DEF penalty until cleansed.';
+  }
+  if (lower.includes('bleed')) {
+    return 'Takes 1 damage whenever conducting a normal move or charge.';
+  }
+  if (lower.includes('shieldwall')) {
+    return '+1 Defense against ranged attacks while maintaining squad coherency.';
+  }
+  if (lower.includes('skimmer')) {
+    return 'Hovers over low ground obstacles and ignores difficult terrain penalties.';
+  }
+  return 'Special tactical unit trait.';
 };
 
 export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
@@ -214,6 +310,16 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
   // Custom Ruler Measurement State
   const [measureStart, setMeasureStart] = useState<WorldPoint | null>(null);
   const [measureCurrent, setMeasureCurrent] = useState<WorldPoint | null>(null);
+
+  // Inspection Tool Hover & HUD State
+  const [inspectedTarget, setInspectedTarget] = useState<InspectTarget | null>(null);
+  const [inspectScreenPos, setInspectScreenPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  useEffect(() => {
+    if (activeTool !== 'inspect') {
+      setInspectedTarget(null);
+    }
+  }, [activeTool]);
 
   // Active selected and target units
   const selectedUnit = units.find(u => u.id === selectedUnitId && u.stats.lives > 0) || null;
@@ -319,6 +425,10 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
     // Only left-click continues to game actions
     if (e.button !== 0) return;
 
+    if (activeTool === 'inspect') {
+      return;
+    }
+
     const worldPt = screenToWorld(e.clientX, e.clientY);
 
     // Measure tool
@@ -345,6 +455,208 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
     }
 
     const worldPt = screenToWorld(e.clientX, e.clientY);
+
+    // Inspection Tool: Detect hovered battlefield element & build HUD data
+    if (activeTool === 'inspect') {
+      setInspectScreenPos({ x: e.clientX, y: e.clientY });
+
+      let targetFound: InspectTarget | null = null;
+
+      // 1. Check Units and individual models/tokens
+      for (const u of units) {
+        if (u.stats.lives <= 0 || !u.position) continue;
+        if (u.tokens && u.tokens.length > 0) {
+          for (let i = 0; i < u.tokens.length; i++) {
+            const tok = u.tokens[i];
+            const dist = Math.hypot(tok.x - worldPt.x, tok.y - worldPt.y);
+            const tokRadius = Math.max(tok.radius || 20, 24);
+            if (dist <= tokRadius) {
+              const isLeaderModel = i === 0 || !!tok.isLeaderToken;
+              const attachedHost = u.attachedTo ? units.find(host => host.id === u.attachedTo) : null;
+              const vehicleHost = u.embarkedIn ? units.find(veh => veh.id === u.embarkedIn) : null;
+              const leaderUnits = u.attachedUnits ? units.filter(l => u.attachedUnits?.includes(l.id)) : [];
+
+              targetFound = {
+                category: 'unit',
+                title: u.name,
+                subtitle: `${u.owner === 'player1' ? 'Player 1' : 'Player 2'} • ${u.type || 'Infantry'} • ${u.role || 'Combat Squad'}`,
+                avatarOrIcon: u.tokenImageUrl || u.avatar || '🛡️',
+                description: u.description || 'Combat squad deployed on the battlefield.',
+                unit: u,
+                modelInfo: {
+                  index: i + 1,
+                  total: u.tokens.length,
+                  isLeader: isLeaderModel,
+                  leaderName: isLeaderModel ? (tok.isLeaderToken ? 'Attached Commander' : 'Squad Leader') : undefined
+                },
+                stats: {
+                  movement: u.stats.mv,
+                  attackModifier: u.stats.am,
+                  defense: u.stats.def,
+                  range: u.stats.range,
+                  lives: u.stats.lives,
+                  maxLives: u.stats.maxLives,
+                  cp: u.stats.cp,
+                  formation: u.formation || 'circle',
+                  actionsRemaining: u.actionsRemaining ?? 2
+                },
+                traits: u.traits || [],
+                tempTraits: u.tempTraits || [],
+                attachedToName: attachedHost?.name,
+                embarkedInName: vehicleHost?.name,
+                attachedLeadersNames: leaderUnits.map(l => l.name)
+              };
+              break;
+            }
+          }
+        } else {
+          const dist = Math.hypot(u.position.x - worldPt.x, u.position.y - worldPt.y);
+          if (dist <= 30) {
+            targetFound = {
+              category: 'unit',
+              title: u.name,
+              subtitle: `${u.owner === 'player1' ? 'Player 1' : 'Player 2'} • ${u.type || 'Infantry'}`,
+              avatarOrIcon: u.tokenImageUrl || u.avatar || '🛡️',
+              description: u.description || 'Combat unit.',
+              unit: u,
+              stats: {
+                movement: u.stats.mv,
+                attackModifier: u.stats.am,
+                defense: u.stats.def,
+                range: u.stats.range,
+                lives: u.stats.lives,
+                maxLives: u.stats.maxLives,
+                cp: u.stats.cp,
+                formation: u.formation || 'circle',
+                actionsRemaining: u.actionsRemaining ?? 2
+              },
+              traits: u.traits || [],
+              tempTraits: u.tempTraits || []
+            };
+          }
+        }
+        if (targetFound) break;
+      }
+
+      // 2. Check Environmental Hazards / Special Tiles
+      if (!targetFound) {
+        for (const tile of specialTiles) {
+          const tileX = tile.x > 30 ? tile.x : tile.x * GRID_SIZE + GRID_SIZE / 2;
+          const tileY = tile.y > 30 ? tile.y : tile.y * GRID_SIZE + GRID_SIZE / 2;
+          const radiusPx = tile.radius || (
+            tile.type === 'InfernalRift' ? 100 :
+            tile.type === 'Water' ? 95 :
+            tile.type === 'AcidPool' ? 95 :
+            tile.type === 'HighGround' ? 80 : 90
+          );
+
+          if (Math.hypot(tileX - worldPt.x, tileY - worldPt.y) <= radiusPx) {
+            targetFound = {
+              category: 'hazard',
+              title: tile.name,
+              subtitle: `Environmental Hazard Zone (${tile.type})`,
+              avatarOrIcon: tile.emoji || (tile.type === 'InfernalRift' ? '🌋' : tile.type === 'AcidPool' ? '🧪' : tile.type === 'Water' ? '🌊' : '🏔️'),
+              description: tile.effectDescription,
+              hazardInfo: {
+                type: tile.type,
+                radiusPx,
+                isTemporary: !!tile.isTemporary,
+                activeRemaining: tile.activeRemaining,
+                durationRounds: tile.durationRounds
+              }
+            };
+            break;
+          }
+        }
+      }
+
+      // 3. Check Points of Interest / Objectives (POIs)
+      if (!targetFound) {
+        for (const poi of pois) {
+          const poiX = poi.x > 30 ? poi.x : poi.x * GRID_SIZE + GRID_SIZE / 2;
+          const poiY = poi.y > 30 ? poi.y : poi.y * GRID_SIZE + GRID_SIZE / 2;
+          const radiusPx = (typeof poi.radius === 'number' && poi.radius > 10)
+            ? poi.radius
+            : (poi.radius || 1.5) * GRID_SIZE;
+
+          if (Math.hypot(poiX - worldPt.x, poiY - worldPt.y) <= radiusPx) {
+            targetFound = {
+              category: 'poi',
+              title: poi.name,
+              subtitle: `Strategic Objective (${poi.multiplier}x VP)`,
+              avatarOrIcon: '🎯',
+              description: poi.type === 'Special'
+                ? `High-priority objective zone. Awards ${poi.multiplier}x Victory Points during Scoring Phase to whichever side has model superiority within its perimeter.`
+                : `Standard battlefield objective. Secure model presence inside the radiant radius to score victory points each round.`,
+              poiInfo: {
+                type: poi.type,
+                pointsValue: poi.multiplier,
+                captureRadius: radiusPx
+              }
+            };
+            break;
+          }
+        }
+      }
+
+      // 4. Check Multi-Level Structures
+      if (!targetFound && structures) {
+        for (const s of structures) {
+          if (
+            worldPt.x >= s.x - s.width / 2 &&
+            worldPt.x <= s.x + s.width / 2 &&
+            worldPt.y >= s.y - s.height / 2 &&
+            worldPt.y <= s.y + s.height / 2
+          ) {
+            targetFound = {
+              category: 'structure',
+              title: s.name,
+              subtitle: `Multi-Level Structure (${s.type})`,
+              avatarOrIcon: s.icon || '🏛️',
+              description: `Fortified terrain structure offering elevation and cover across ${s.totalLevels} levels.`,
+              structureInfo: {
+                type: s.type,
+                totalLevels: s.totalLevels,
+                coverBonus: s.coverBonus,
+                blocksLineOfSight: s.blocksLineOfSight,
+                blocksLargeUnits: s.blocksLargeUnits
+              }
+            };
+            break;
+          }
+        }
+      }
+
+      // 5. Check Terrain Features
+      if (!targetFound && terrain) {
+        for (const t of terrain) {
+          if (
+            worldPt.x >= t.x - t.width / 2 &&
+            worldPt.x <= t.x + t.width / 2 &&
+            worldPt.y >= t.y - t.height / 2 &&
+            worldPt.y <= t.y + t.height / 2
+          ) {
+            targetFound = {
+              category: 'terrain',
+              title: t.name,
+              subtitle: `Battlefield Terrain Feature (${t.type})`,
+              avatarOrIcon: t.icon || '🪨',
+              description: `Natural terrain providing cover and tactical obstacles.`,
+              terrainInfo: {
+                type: t.type,
+                coverBonus: t.coverBonus,
+                blocksMovement: t.blocksMovement,
+                blocksLineOfSight: t.blocksLineOfSight
+              }
+            };
+            break;
+          }
+        }
+      }
+
+      setInspectedTarget(targetFound);
+      return;
+    }
 
     if (activeTool === 'measure' && measureStart) {
       setMeasureCurrent(worldPt);
@@ -714,6 +1026,11 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
     if (e.button !== 0) return;
     e.stopPropagation();
 
+    if (activeTool === 'inspect') {
+      onSelectUnit(unit.id);
+      return;
+    }
+
     if (activeTool === 'target' || (selectedUnit && unit.owner !== selectedUnit.owner)) {
       onSelectTarget(unit.id);
       return;
@@ -754,6 +1071,11 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
     if (e.button !== 0) return;
 
     e.stopPropagation();
+
+    if (activeTool === 'inspect') {
+      onSelectUnit(unit.id);
+      return;
+    }
 
     // If Target tool or selecting enemy in Combat phases
     if (activeTool === 'target' || (selectedUnit && unit.owner !== selectedUnit.owner)) {
@@ -1004,13 +1326,16 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
+      onMouseLeave={() => {
+        handleMouseUp();
+        setInspectedTarget(null);
+      }}
       onDragEnter={handleCanvasDragEnter}
       onDragOver={handleCanvasDragOver}
       onDragLeave={handleCanvasDragLeave}
       onDrop={handleCanvasDrop}
       className={`relative w-full h-full bg-[#07090e] overflow-hidden select-none ${
-        isPanning || activeTool === 'move' ? 'cursor-grab active:cursor-grabbing' : 'cursor-crosshair'
+        isPanning || activeTool === 'move' ? 'cursor-grab active:cursor-grabbing' : activeTool === 'inspect' ? 'cursor-help' : 'cursor-crosshair'
       }`}
     >
       {/* Real-time Drag & Drop Diagnostic HUD */}
@@ -2427,6 +2752,274 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
         <div className="absolute top-14 left-1/2 -translate-x-1/2 bg-rose-950/95 border-2 border-rose-500 text-white px-4 py-2.5 rounded-xl shadow-2xl z-50 flex items-center space-x-2 text-xs font-mono font-bold">
           <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />
           <span>{rejectedPlacementNotice}</span>
+        </div>
+      )}
+
+      {/* Floating Inspection Tool HUD Card */}
+      {activeTool === 'inspect' && inspectedTarget && (
+        <div
+          style={{
+            position: 'fixed',
+            left: `${
+              inspectScreenPos.x + 20 + 340 > window.innerWidth
+                ? Math.max(10, inspectScreenPos.x - 350)
+                : inspectScreenPos.x + 20
+            }px`,
+            top: `${
+              inspectScreenPos.y + 20 + 400 > window.innerHeight
+                ? Math.max(10, inspectScreenPos.y - 410)
+                : inspectScreenPos.y + 20
+            }px`,
+            pointerEvents: 'none',
+            zIndex: 100
+          }}
+          className="w-84 max-w-[340px] bg-[#0c0e15]/95 border-2 border-amber-500/80 rounded-2xl p-3.5 shadow-[0_0_35px_rgba(0,0,0,0.95)] backdrop-blur-md text-white select-none transition-all duration-75"
+        >
+          {/* Header */}
+          <div className="flex items-start space-x-3 pb-2.5 border-b border-zinc-800">
+            <div className="w-11 h-11 rounded-xl bg-zinc-900/90 border border-amber-400/60 flex items-center justify-center text-2xl shrink-0 overflow-hidden shadow-md">
+              {inspectedTarget.avatarOrIcon?.startsWith('data:') || inspectedTarget.avatarOrIcon?.startsWith('http') ? (
+                <img src={inspectedTarget.avatarOrIcon} alt={inspectedTarget.title} className="w-full h-full object-cover" />
+              ) : (
+                <span>{inspectedTarget.avatarOrIcon || '🔍'}</span>
+              )}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between gap-1">
+                <span className="text-[10px] uppercase font-mono font-extrabold tracking-wider px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                  {inspectedTarget.category === 'unit' ? 'UNIT / MODEL' :
+                   inspectedTarget.category === 'hazard' ? 'HAZARD ZONE' :
+                   inspectedTarget.category === 'poi' ? 'OBJECTIVE' :
+                   inspectedTarget.category === 'structure' ? 'STRUCTURE' : 'TERRAIN'}
+                </span>
+                {inspectedTarget.modelInfo && (
+                  <span className="text-[10px] font-mono text-zinc-400">
+                    Model {inspectedTarget.modelInfo.index}/{inspectedTarget.modelInfo.total}
+                  </span>
+                )}
+              </div>
+              <h4 className="text-sm font-black text-white truncate mt-1">
+                {inspectedTarget.title}
+              </h4>
+              <p className="text-[11px] text-zinc-400 truncate">
+                {inspectedTarget.subtitle}
+              </p>
+            </div>
+          </div>
+
+          {/* Body Content */}
+          <div className="py-2.5 space-y-2.5 max-h-[460px] overflow-y-auto">
+            {/* Unit Specific Details */}
+            {inspectedTarget.category === 'unit' && inspectedTarget.stats && (
+              <>
+                {/* Stat Matrix */}
+                <div className="grid grid-cols-6 gap-1 text-center font-mono">
+                  <div className="bg-zinc-900/80 border border-zinc-800 rounded p-1">
+                    <span className="block text-[9px] text-zinc-500 font-bold">MV</span>
+                    <span className="text-xs font-black text-sky-300">{inspectedTarget.stats.movement}"</span>
+                  </div>
+                  <div className="bg-zinc-900/80 border border-zinc-800 rounded p-1">
+                    <span className="block text-[9px] text-zinc-500 font-bold">AM</span>
+                    <span className="text-xs font-black text-rose-300">+{inspectedTarget.stats.attackModifier}</span>
+                  </div>
+                  <div className="bg-zinc-900/80 border border-zinc-800 rounded p-1">
+                    <span className="block text-[9px] text-zinc-500 font-bold">DEF</span>
+                    <span className="text-xs font-black text-blue-300">{inspectedTarget.stats.defense}+</span>
+                  </div>
+                  <div className="bg-zinc-900/80 border border-zinc-800 rounded p-1">
+                    <span className="block text-[9px] text-zinc-500 font-bold">RNG</span>
+                    <span className="text-xs font-black text-amber-300">{inspectedTarget.stats.range ? `${inspectedTarget.stats.range}"` : 'Melee'}</span>
+                  </div>
+                  <div className="bg-zinc-900/80 border border-zinc-800 rounded p-1">
+                    <span className="block text-[9px] text-zinc-500 font-bold">CP</span>
+                    <span className="text-xs font-black text-purple-300">{inspectedTarget.stats.cp}</span>
+                  </div>
+                  <div className="bg-zinc-900/80 border border-zinc-800 rounded p-1">
+                    <span className="block text-[9px] text-zinc-500 font-bold">HP</span>
+                    <span className="text-xs font-black text-emerald-300">{inspectedTarget.stats.lives}/{inspectedTarget.stats.maxLives}</span>
+                  </div>
+                </div>
+
+                {/* Model Status Tag */}
+                {inspectedTarget.modelInfo?.isLeader && (
+                  <div className="text-[10px] font-mono text-amber-300 bg-amber-950/60 border border-amber-600/40 rounded px-2 py-0.5 flex items-center space-x-1">
+                    <span>★</span>
+                    <span>{inspectedTarget.modelInfo.leaderName || 'Squad Commander Model'}</span>
+                  </div>
+                )}
+
+                {/* Bodyguard / Embarkation / Leaders Links */}
+                {inspectedTarget.attachedToName && (
+                  <div className="text-[10px] font-mono text-yellow-300 bg-yellow-950/50 border border-yellow-600/40 rounded px-2 py-0.5">
+                    👑 Attached to Bodyguard: <span className="font-bold">{inspectedTarget.attachedToName}</span>
+                  </div>
+                )}
+                {inspectedTarget.attachedLeadersNames && inspectedTarget.attachedLeadersNames.length > 0 && (
+                  <div className="text-[10px] font-mono text-yellow-300 bg-yellow-950/50 border border-yellow-600/40 rounded px-2 py-0.5">
+                    🛡️ Escorted by Leader: <span className="font-bold">{inspectedTarget.attachedLeadersNames.join(', ')}</span>
+                  </div>
+                )}
+                {inspectedTarget.embarkedInName && (
+                  <div className="text-[10px] font-mono text-cyan-300 bg-cyan-950/50 border border-cyan-600/40 rounded px-2 py-0.5">
+                    🚜 Loaded inside Transport: <span className="font-bold">{inspectedTarget.embarkedInName}</span>
+                  </div>
+                )}
+
+                {/* Tactical Traits & Statuses with explanations */}
+                {((inspectedTarget.traits && inspectedTarget.traits.length > 0) || (inspectedTarget.tempTraits && inspectedTarget.tempTraits.length > 0)) && (
+                  <div className="space-y-1.5 pt-0.5">
+                    <span className="text-[10px] uppercase font-mono font-bold text-zinc-400 block">
+                      Traits & Status Effects
+                    </span>
+                    <div className="space-y-1">
+                      {(inspectedTarget.tempTraits || []).map((t, idx) => {
+                        const badge = getTraitBadgeInfo(t, true);
+                        const explanation = getTraitExplanation(t);
+                        return (
+                          <div key={`temp_${idx}`} className="bg-red-950/40 border border-red-500/40 rounded px-2 py-1 flex items-start space-x-1.5 text-[11px]">
+                            <span className="text-sm shrink-0">{badge.icon}</span>
+                            <div className="flex-1 min-w-0">
+                              <span className="font-bold text-red-300 mr-1.5">{badge.label}</span>
+                              <span className="text-[10px] text-zinc-300">{explanation}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {(inspectedTarget.traits || []).map((t, idx) => {
+                        const badge = getTraitBadgeInfo(t, false);
+                        const explanation = getTraitExplanation(t);
+                        return (
+                          <div key={`trait_${idx}`} className="bg-zinc-900/90 border border-zinc-800 rounded px-2 py-1 flex items-start space-x-1.5 text-[11px]">
+                            <span className="text-sm shrink-0">{badge.icon}</span>
+                            <div className="flex-1 min-w-0">
+                              <span className="font-bold text-amber-300 mr-1.5">{badge.label}</span>
+                              <span className="text-[10px] text-zinc-300">{explanation}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Unit Abilities */}
+                {inspectedTarget.unit?.abilities && inspectedTarget.unit.abilities.length > 0 && (
+                  <div className="space-y-1 pt-0.5">
+                    <span className="text-[10px] uppercase font-mono font-bold text-zinc-400 block">
+                      Unit Abilities
+                    </span>
+                    {inspectedTarget.unit.abilities.map(ab => (
+                      <div key={ab.id} className="bg-zinc-900/60 border border-zinc-800 rounded px-2 py-1 text-[10px]">
+                        <div className="flex items-center justify-between text-zinc-200 font-bold">
+                          <span>✨ {ab.name}</span>
+                          <span className="text-[9px] text-amber-400 font-mono">{(ab.cost || ab.type).replace(/_/g, ' ')}</span>
+                        </div>
+                        <p className="text-zinc-400 mt-0.5 leading-tight">{ab.summary || ab.effect}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* Hazard Specific Details */}
+            {inspectedTarget.category === 'hazard' && inspectedTarget.hazardInfo && (
+              <div className="space-y-2 text-xs">
+                <div className="bg-amber-950/40 border border-amber-500/40 rounded-lg p-2 space-y-1">
+                  <div className="flex items-center justify-between text-[11px] font-mono">
+                    <span className="text-zinc-400">Radiant Radius:</span>
+                    <span className="text-amber-300 font-bold">{inspectedTarget.hazardInfo.radiusPx}px (~{Math.round(inspectedTarget.hazardInfo.radiusPx / 50)}")</span>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] font-mono">
+                    <span className="text-zinc-400">Hazard Duration:</span>
+                    <span className={inspectedTarget.hazardInfo.isTemporary ? 'text-amber-400 font-bold' : 'text-zinc-300'}>
+                      {inspectedTarget.hazardInfo.isTemporary
+                        ? `⏳ ${inspectedTarget.hazardInfo.activeRemaining ?? inspectedTarget.hazardInfo.durationRounds ?? 1} Rnds Remaining`
+                        : 'Permanent Environmental Zone'}
+                    </span>
+                  </div>
+                </div>
+                <div className="bg-zinc-900/80 border border-zinc-800 rounded-lg p-2">
+                  <span className="text-[10px] uppercase font-mono font-bold text-amber-400 block mb-1">Tactical Zone Effect:</span>
+                  <p className="text-zinc-300 text-[11px] leading-relaxed">
+                    {inspectedTarget.description}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* POI Specific Details */}
+            {inspectedTarget.category === 'poi' && inspectedTarget.poiInfo && (
+              <div className="space-y-2 text-xs">
+                <div className="bg-emerald-950/40 border border-emerald-500/40 rounded-lg p-2 space-y-1 font-mono text-[11px]">
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-400">VP Multiplier:</span>
+                    <span className="text-emerald-300 font-bold">{inspectedTarget.poiInfo.pointsValue}x Victory Points</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-400">Capture Radius:</span>
+                    <span className="text-zinc-200">{Math.round(inspectedTarget.poiInfo.captureRadius / 50)}" (~{inspectedTarget.poiInfo.captureRadius}px)</span>
+                  </div>
+                </div>
+                <div className="bg-zinc-900/80 border border-zinc-800 rounded-lg p-2 text-[11px] text-zinc-300 leading-relaxed">
+                  {inspectedTarget.description}
+                </div>
+              </div>
+            )}
+
+            {/* Structure Specific Details */}
+            {inspectedTarget.category === 'structure' && inspectedTarget.structureInfo && (
+              <div className="space-y-2 text-xs">
+                <div className="grid grid-cols-2 gap-1.5 font-mono text-[11px]">
+                  <div className="bg-zinc-900/80 border border-zinc-800 rounded p-1.5">
+                    <span className="text-zinc-500 block text-[9px]">TOTAL LEVELS</span>
+                    <span className="text-white font-bold">{inspectedTarget.structureInfo.totalLevels} Floors</span>
+                  </div>
+                  <div className="bg-zinc-900/80 border border-zinc-800 rounded p-1.5">
+                    <span className="text-zinc-500 block text-[9px]">COVER BONUS</span>
+                    <span className="text-blue-300 font-bold">+{inspectedTarget.structureInfo.coverBonus} DEF</span>
+                  </div>
+                </div>
+                <div className="bg-zinc-900/80 border border-zinc-800 rounded-lg p-2 space-y-1 text-[11px] text-zinc-300">
+                  <div>• {inspectedTarget.structureInfo.blocksLineOfSight ? 'Blocks Line of Sight through ground levels' : 'Open sightlines'}</div>
+                  <div>• {inspectedTarget.structureInfo.blocksLargeUnits ? 'Impassable to Vehicles and Huge units' : 'Vehicles may traverse'}</div>
+                </div>
+              </div>
+            )}
+
+            {/* Terrain Specific Details */}
+            {inspectedTarget.category === 'terrain' && inspectedTarget.terrainInfo && (
+              <div className="space-y-2 text-xs">
+                <div className="bg-zinc-900/80 border border-zinc-800 rounded-lg p-2 font-mono text-[11px] space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-zinc-400">Cover Bonus:</span>
+                    <span className="text-blue-300 font-bold">+{inspectedTarget.terrainInfo.coverBonus || 1} DEF</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-zinc-400">Blocks Movement:</span>
+                    <span className={inspectedTarget.terrainInfo.blocksMovement ? 'text-rose-400 font-bold' : 'text-emerald-400'}>
+                      {inspectedTarget.terrainInfo.blocksMovement ? 'Yes' : 'No'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-zinc-400">Blocks Sight:</span>
+                    <span className={inspectedTarget.terrainInfo.blocksLineOfSight ? 'text-rose-400 font-bold' : 'text-emerald-400'}>
+                      {inspectedTarget.terrainInfo.blocksLineOfSight ? 'Yes' : 'No'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Footer Hint */}
+          <div className="pt-2 border-t border-zinc-800/80 flex items-center justify-between text-[9px] font-mono text-zinc-500">
+            <span className="flex items-center space-x-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+              <span>INSPECTION TOOL</span>
+            </span>
+            <span>Hovering Target</span>
+          </div>
         </div>
       )}
     </div>

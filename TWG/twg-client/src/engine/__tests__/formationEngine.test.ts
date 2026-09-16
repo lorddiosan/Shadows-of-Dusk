@@ -675,6 +675,41 @@ describe('Infiltration and Leader Attachment Rules', () => {
       expect(updatedLeader.position).toBeDefined();
     });
   });
+
+  describe('Inspection Tool & Trait Explanations', () => {
+    it('provides accurate explanations for core tactical traits', async () => {
+      const { getTraitExplanation, getTraitBadgeInfo } = await import('../../components/game/TabletopCanvas');
+
+      expect(getTraitExplanation('Infiltrator')).toContain('deployment');
+      expect(getTraitExplanation('Flying')).toContain('intervening');
+      expect(getTraitExplanation('Leader')).toContain('infantry');
+      expect(getTraitExplanation('Transport')).toContain('infantry');
+      expect(getTraitExplanation('Rapid Fire')).toContain('re-roll');
+
+      const badge = getTraitBadgeInfo('Infiltrator');
+      expect(badge.icon).toBe('🥷');
+      expect(badge.label).toBe('Infiltrator');
+    });
+
+    it('provides accurate explanations for temporary status conditions', async () => {
+      const { getTraitExplanation, getTraitBadgeInfo } = await import('../../components/game/TabletopCanvas');
+
+      expect(getTraitExplanation('On Fire')).toContain('mortal wound');
+      expect(getTraitExplanation('Poisoned')).toContain('toxin');
+      expect(getTraitExplanation('Acid Corroded')).toContain('DEF penalty');
+      expect(getTraitExplanation('Stunned')).toContain('disabled');
+      expect(getTraitExplanation('Frozen')).toContain('Halves movement');
+
+      const fireBadge = getTraitBadgeInfo('On Fire', true);
+      expect(fireBadge.icon).toBe('🔥');
+      expect(fireBadge.isTemp).toBe(true);
+
+      const poisonBadge = getTraitBadgeInfo('Poisoned', true);
+      expect(poisonBadge.icon).toBe('🧪');
+      expect(poisonBadge.isTemp).toBe(true);
+    });
+  });
 });
+
 
 
