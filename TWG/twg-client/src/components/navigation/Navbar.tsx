@@ -18,7 +18,11 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenProfile
 }) => {
   return (
-    <header className="w-full bg-[#110e0b] border-b border-[#2e2319] sticky top-0 z-50 px-3 py-2 flex items-center justify-between shadow-lg select-none">
+    <header className={`w-full sticky top-0 z-50 px-3 py-2 flex items-center justify-between shadow-lg select-none transition-colors duration-300 ${
+      currentTab === 'home'
+        ? 'bg-black/60 backdrop-blur-md border-b border-white/10'
+        : 'bg-[#110e0b] border-b border-[#2e2319]'
+    }`}>
       {/* Brand Title / Home link */}
       <div className="flex items-center space-x-2.5 cursor-pointer" onClick={() => setTab('home')}>
         <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-[#9a281e] to-[#c94a29] flex items-center justify-center shadow-md border border-[#e07b53]/40">

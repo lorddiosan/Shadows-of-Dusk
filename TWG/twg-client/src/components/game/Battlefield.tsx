@@ -3888,33 +3888,57 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
   return (
     <div className="w-full h-[calc(100vh-50px)] flex flex-col bg-[#0b0d13] select-none overflow-hidden">
-      {/* Roll20 Style Top Control Strip */}
-      <div className="h-10 bg-[#161922] border-b border-zinc-800 flex items-center justify-between px-3 shrink-0 text-xs">
-        <div className="flex items-center space-x-4 font-mono">
+      {/* ═══ AAA Tactical HUD — Top Control Strip ═══ */}
+      <div className="h-10 bg-gradient-to-r from-[#0b0d14] via-[#131725] to-[#0b0d14] border-b border-amber-900/40 shadow-[0_2px_18px_rgba(0,0,0,0.8),inset_0_-1px_0_rgba(251,191,36,0.10)] flex items-center justify-between px-3 shrink-0 text-xs">
+        <div className="flex items-center space-x-3 font-mono">
+          {/* Round beacon */}
           <div className="flex items-center space-x-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping"></span>
-            <span className="font-bold text-white uppercase">Round {gameState.round}</span>
-            <span className="px-2 py-0.5 rounded bg-rose-950 text-rose-300 border border-rose-800 font-bold">
-              {gameState.phase} Phase
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-500 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-600"></span>
+            </span>
+            <span className="font-black text-white uppercase tracking-wider text-[11px] drop-shadow-[0_0_6px_rgba(239,68,68,0.6)]">Round {gameState.round}</span>
+            <span className={`px-2 py-0.5 rounded-md font-black text-[10px] border shadow-lg tracking-wide uppercase ${
+              gameState.phase === 'Deployment' ? 'bg-amber-950/80 text-amber-300 border-amber-700/70 shadow-[0_0_10px_rgba(245,158,11,0.2)]'
+              : gameState.phase === 'Command' ? 'bg-purple-950/80 text-purple-300 border-purple-700/70 shadow-[0_0_10px_rgba(168,85,247,0.2)]'
+              : gameState.phase === 'Movement' ? 'bg-sky-950/80 text-sky-300 border-sky-700/70 shadow-[0_0_10px_rgba(56,189,248,0.2)]'
+              : gameState.phase === 'Shooting' ? 'bg-cyan-950/80 text-cyan-300 border-cyan-700/70 shadow-[0_0_10px_rgba(34,211,238,0.2)]'
+              : gameState.phase === 'Action' ? 'bg-rose-950/80 text-rose-300 border-rose-700/70 shadow-[0_0_10px_rgba(244,63,94,0.2)]'
+              : gameState.phase === 'Fight' ? 'bg-red-950/80 text-red-300 border-red-700/70 shadow-[0_0_10px_rgba(239,68,68,0.3)]'
+              : gameState.phase === 'Scoring' ? 'bg-emerald-950/80 text-emerald-300 border-emerald-700/70 shadow-[0_0_10px_rgba(52,211,153,0.2)]'
+              : 'bg-zinc-900/80 text-zinc-300 border-zinc-700'
+            }`}>
+              {gameState.phase}
             </span>
           </div>
-          <span className="text-zinc-600">|</span>
-          <div className="text-zinc-300">
-            <span>Turn: </span>
-            <span className={gameState.activePlayer === 'player1' ? 'text-rose-400 font-bold' : 'text-sky-400 font-bold'}>
-              {gameState.activePlayer === 'player1' ? 'Player 1 (West)' : 'Player 2 (East / Bot)'}
-            </span>
+
+          <span className="text-amber-900/50 font-bold">│</span>
+
+          {/* Active player indicator */}
+          <div className={`flex items-center space-x-1.5 px-2.5 py-0.5 rounded-md border text-[10px] font-bold tracking-wide ${
+            gameState.activePlayer === 'player1'
+              ? 'bg-rose-950/60 text-rose-300 border-rose-800/50 shadow-[0_0_8px_rgba(244,63,94,0.12)]'
+              : 'bg-sky-950/60 text-sky-300 border-sky-800/50 shadow-[0_0_8px_rgba(56,189,248,0.12)]'
+          }`}>
+            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${gameState.activePlayer === 'player1' ? 'bg-rose-400' : 'bg-sky-400'} animate-pulse`}></span>
+            <span>{gameState.activePlayer === 'player1' ? 'Player 1 (West)' : 'Player 2 (East / Bot)'}</span>
           </div>
-          <div className="flex items-center space-x-3 text-[11px]">
-            <span className="text-rose-400 font-bold">P1: {gameState.player1Score} pts ({gameState.player1CP ?? 3} CP)</span>
-            <span className="text-zinc-500">vs</span>
-            <span className="text-sky-400 font-bold">P2: {gameState.player2Score} pts ({gameState.player2CP ?? 3} CP)</span>
-            
+
+          {/* Score readout */}
+          <div className="flex items-center space-x-1.5 text-[11px]">
+            <span className="text-rose-400 font-bold tabular-nums">⚔️ {gameState.player1Score}<span className="text-rose-600/60 text-[10px]"> pts</span></span>
+            <span className="text-rose-700/60 font-mono text-[9px]">•</span>
+            <span className="text-rose-500/70 font-mono text-[10px] tabular-nums">{gameState.player1CP ?? 3}<span className="text-rose-700/50"> CP</span></span>
+            <span className="text-amber-600/80 font-black text-[10px] px-0.5">VS</span>
+            <span className="text-sky-500/70 font-mono text-[10px] tabular-nums">{gameState.player2CP ?? 3}<span className="text-sky-700/50"> CP</span></span>
+            <span className="text-sky-700/60 font-mono text-[9px]">•</span>
+            <span className="text-sky-400 font-bold tabular-nums">🛡️ {gameState.player2Score}<span className="text-sky-600/60 text-[10px]"> pts</span></span>
+
             {/* Scoring Rules Popover */}
             <div className="relative group cursor-help">
-              <span className="px-1.5 py-0.5 rounded bg-amber-950/60 border border-amber-500/50 text-amber-300 font-mono text-[10px] hover:bg-amber-900/60 transition flex items-center space-x-1">
+              <span className="px-1.5 py-0.5 rounded-md bg-amber-950/50 border border-amber-800/40 text-amber-500/70 font-mono text-[10px] hover:bg-amber-900/60 hover:text-amber-300 transition flex items-center space-x-1">
                 <HelpCircle className="w-3 h-3" />
-                <span>Scoring Rules</span>
+                <span>Rules</span>
               </span>
               <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 hidden group-hover:block w-72 p-3 bg-zinc-950/95 border border-amber-500/60 rounded-xl shadow-2xl z-50 text-[11px] text-zinc-300 font-sans backdrop-blur pointer-events-none">
                 <div className="font-bold text-amber-300 font-mono text-xs uppercase mb-1.5 flex items-center space-x-1">
@@ -3932,7 +3956,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
         </div>
 
         {/* Phase & Drawer Quick Controllers */}
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center space-x-1.5">
           {gameState.phase === 'Deployment' && (() => {
             const currentDeployer = gameState.deployingPlayer || gameState.activePlayer;
             const deployableCount = gameState.units.filter(
@@ -3948,10 +3972,10 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                   setReservesDrawerOpen(false);
                   setEmbarkedDrawerOpen(false);
                 }}
-                className={`px-2.5 py-1 rounded shadow text-xs font-bold font-mono flex items-center space-x-1.5 transition ${
+                className={`px-2 py-1 rounded-md shadow text-[11px] font-bold font-mono flex items-center space-x-1.5 transition border cursor-pointer ${
                   armyTrayDrawerOpen 
-                    ? 'bg-amber-400 text-black shadow-lg ring-2 ring-amber-300' 
-                    : 'bg-zinc-850 hover:bg-zinc-750 text-amber-300 border border-amber-500/50'
+                    ? 'bg-amber-500/90 text-black border-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.4)] ring-1 ring-amber-300/50' 
+                    : 'bg-[#1a1d2a] hover:bg-[#21253a] text-amber-300/90 border-amber-800/50 hover:border-amber-600/60'
                 }`}
                 title="Toggle Army Tray (Deploy Units) Drawer"
               >
@@ -3969,8 +3993,8 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
               setReservesDrawerOpen(false);
               setEmbarkedDrawerOpen(false);
             }}
-            className={`px-2.5 py-1 rounded shadow text-xs font-bold font-mono flex items-center space-x-1.5 transition ${
-              diceDrawerOpen ? 'bg-amber-500 text-black shadow-lg' : 'bg-zinc-850 hover:bg-zinc-750 text-amber-300 border border-amber-500/30'
+            className={`px-2 py-1 rounded-md shadow text-[11px] font-bold font-mono flex items-center space-x-1.5 transition border cursor-pointer ${
+              diceDrawerOpen ? 'bg-amber-500/90 text-black border-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.35)]' : 'bg-[#1a1d2a] hover:bg-[#21253a] text-amber-300/90 border-amber-800/40 hover:border-amber-600/50'
             }`}
             title="Toggle Dice Tray Drawer"
           >
@@ -3986,8 +4010,8 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
               setReservesDrawerOpen(false);
               setEmbarkedDrawerOpen(false);
             }}
-            className={`px-2.5 py-1 rounded shadow text-xs font-bold font-mono flex items-center space-x-1.5 transition ${
-              commandDrawerOpen ? 'bg-amber-400 text-black shadow-lg' : 'bg-zinc-850 hover:bg-zinc-750 text-amber-400 border border-amber-400/40'
+            className={`px-2 py-1 rounded-md shadow text-[11px] font-bold font-mono flex items-center space-x-1.5 transition border cursor-pointer ${
+              commandDrawerOpen ? 'bg-purple-500/80 text-white border-purple-400 shadow-[0_0_12px_rgba(168,85,247,0.35)]' : 'bg-[#1a1d2a] hover:bg-[#21253a] text-purple-300/90 border-purple-800/40 hover:border-purple-600/50'
             }`}
             title="Toggle Command Phase Drawer"
           >
@@ -4003,8 +4027,8 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
               setCommandDrawerOpen(false);
               setEmbarkedDrawerOpen(false);
             }}
-            className={`px-2.5 py-1 rounded shadow text-xs font-bold font-mono flex items-center space-x-1.5 transition ${
-              reservesDrawerOpen ? 'bg-amber-500 text-black shadow-lg' : 'bg-zinc-850 hover:bg-zinc-750 text-amber-300 border border-amber-500/30'
+            className={`px-2 py-1 rounded-md shadow text-[11px] font-bold font-mono flex items-center space-x-1.5 transition border cursor-pointer ${
+              reservesDrawerOpen ? 'bg-amber-500/90 text-black border-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.35)]' : 'bg-[#1a1d2a] hover:bg-[#21253a] text-amber-300/80 border-amber-800/40 hover:border-amber-600/50'
             }`}
             title="Toggle Strategic Reserves Drawer"
           >
@@ -4020,8 +4044,8 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
               setCommandDrawerOpen(false);
               setReservesDrawerOpen(false);
             }}
-            className={`px-2.5 py-1 rounded shadow text-xs font-bold font-mono flex items-center space-x-1.5 transition ${
-              embarkedDrawerOpen ? 'bg-sky-400 text-black shadow-lg' : 'bg-zinc-850 hover:bg-zinc-750 text-sky-400 border border-sky-400/40'
+            className={`px-2 py-1 rounded-md shadow text-[11px] font-bold font-mono flex items-center space-x-1.5 transition border cursor-pointer ${
+              embarkedDrawerOpen ? 'bg-sky-500/80 text-black border-sky-400 shadow-[0_0_12px_rgba(56,189,248,0.35)]' : 'bg-[#1a1d2a] hover:bg-[#21253a] text-sky-400/80 border-sky-800/40 hover:border-sky-600/50'
             }`}
             title="Toggle Embarked Units Drawer"
           >
@@ -4034,10 +4058,10 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
               setCardDrawerTab('missions');
               setShowCardDrawer(true);
             }}
-            className={`px-2.5 py-1 rounded shadow text-xs font-bold font-mono flex items-center space-x-1.5 transition ${
+            className={`px-2 py-1 rounded-md shadow text-[11px] font-bold font-mono flex items-center space-x-1.5 transition border cursor-pointer ${
               showCardDrawer && cardDrawerTab === 'missions'
-                ? 'bg-amber-400 text-black shadow-lg'
-                : 'bg-zinc-850 hover:bg-zinc-750 text-amber-300 border border-amber-400/40'
+                ? 'bg-amber-500/80 text-black border-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.35)]'
+                : 'bg-[#1a1d2a] hover:bg-[#21253a] text-amber-300/80 border-amber-800/40 hover:border-amber-600/50'
             }`}
             title="Open Secondary Tactical Objectives Deck"
           >
@@ -4050,10 +4074,10 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
               setCardDrawerTab('field_hazards');
               setShowCardDrawer(true);
             }}
-            className={`px-2.5 py-1 rounded shadow text-xs font-bold font-mono flex items-center space-x-1.5 transition ${
+            className={`px-2 py-1 rounded-md shadow text-[11px] font-bold font-mono flex items-center space-x-1.5 transition border cursor-pointer ${
               showCardDrawer && cardDrawerTab === 'field_hazards'
-                ? 'bg-rose-500 text-white shadow-lg'
-                : 'bg-zinc-850 hover:bg-zinc-750 text-rose-300 border border-rose-500/40'
+                ? 'bg-rose-600/90 text-white border-rose-500 shadow-[0_0_12px_rgba(244,63,94,0.35)]'
+                : 'bg-[#1a1d2a] hover:bg-[#21253a] text-rose-400/80 border-rose-800/40 hover:border-rose-600/50'
             }`}
             title="Open Mid-Game Events & Hazard Disasters Deck (Shifting Terrain)"
           >
@@ -4061,12 +4085,12 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
             <span>Event Deck ({gameState.activeEvents.filter(e => e.activeRemaining > 0).length > 0 ? gameState.activeEvents.filter(e => e.activeRemaining > 0)[0].name : '6 Hazards'})</span>
           </button>
 
-          <div className="w-[1px] h-5 bg-zinc-700 mx-1" />
+          <div className="w-px h-5 bg-gradient-to-b from-transparent via-amber-800/50 to-transparent mx-1" />
 
           {gameState.activePlayer === 'player2' ? (
             <button
               onClick={handleExecuteBotAction}
-              className="bg-sky-600 hover:bg-sky-500 text-white font-bold px-3 py-1 rounded shadow text-xs flex items-center space-x-1"
+              className="bg-gradient-to-r from-sky-700 to-sky-600 hover:from-sky-600 hover:to-sky-500 text-white font-black px-3 py-1 rounded-md shadow-lg text-[11px] flex items-center space-x-1.5 border border-sky-500/60 shadow-[0_0_10px_rgba(56,189,248,0.25)] cursor-pointer"
             >
               <span>Bot Action</span>
               <ArrowRight className="w-3 h-3" />
@@ -4074,22 +4098,22 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
           ) : (
             <button
               onClick={handleAdvancePhase}
-              className="bg-rose-600 hover:bg-rose-500 text-white font-bold px-3 py-1 rounded shadow text-xs flex items-center space-x-1"
+              className="bg-gradient-to-r from-rose-700 via-rose-600 to-rose-700 hover:from-rose-600 hover:via-rose-500 hover:to-rose-600 text-white font-black px-3.5 py-1 rounded-md shadow-lg text-[11px] flex items-center space-x-1.5 border border-rose-500/60 shadow-[0_0_12px_rgba(244,63,94,0.3)] cursor-pointer tracking-wide"
             >
               <span>Next Turn / Phase</span>
-              <ArrowRight className="w-3 h-3" />
+              <ArrowRight className="w-3.5 h-3.5" />
             </button>
           )}
 
-          <div className="w-[1px] h-5 bg-zinc-700 mx-1" />
+          <div className="w-px h-5 bg-gradient-to-b from-transparent via-amber-800/50 to-transparent mx-1" />
 
           {/* UI-004: Right Sidebar Collapse Toggle */}
           <button
             onClick={() => setShowRightSidebar(prev => !prev)}
-            className={`px-2.5 py-1 rounded shadow text-xs font-bold font-mono flex items-center space-x-1.5 transition cursor-pointer ${
+            className={`px-2 py-1 rounded-md shadow text-[11px] font-bold font-mono flex items-center space-x-1.5 transition border cursor-pointer ${
               showRightSidebar 
-                ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700' 
-                : 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/50'
+                ? 'bg-[#1a1d2a] hover:bg-[#21253a] text-zinc-400 border-zinc-700/60 hover:border-zinc-600' 
+                : 'bg-amber-900/20 hover:bg-amber-900/30 text-amber-400 border-amber-700/50 shadow-[0_0_8px_rgba(245,158,11,0.15)]'
             }`}
             title={showRightSidebar ? "Collapse Sidebar (Full Canvas Mode)" : "Expand Sidebar (Combat Log, Chat, Cards)"}
           >
@@ -4099,15 +4123,16 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
         </div>
       </div>
 
+
       {/* Main Workspace (VTT Canvas + Roll20 Sidebars) */}
       <div className="flex-1 flex overflow-hidden relative">
-        {/* Left Toolbar (Roll20 Style) */}
-        <div className="w-11 bg-[#13151d] border-r border-zinc-800 flex flex-col items-center py-2 space-y-2 shrink-0 z-20">
+        {/* ─── Left Toolbar (Gem-Coloured Tool Pillar) ─── */}
+        <div className="w-11 bg-gradient-to-b from-[#0f1120] via-[#0d0f1c] to-[#0a0c18] border-r border-amber-900/25 shadow-[inset_-1px_0_0_rgba(251,191,36,0.05)] flex flex-col items-center py-2 space-y-1.5 shrink-0 z-20">
           <button
             onClick={() => setActiveTool('select')}
             title="Select / Move Units (V)"
-            className={`p-2 rounded-lg transition ${
-              activeTool === 'select' ? 'bg-rose-600 text-white shadow' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+            className={`p-2 rounded-lg transition-all cursor-pointer ${
+              activeTool === 'select' ? 'bg-rose-600/90 text-white shadow-lg shadow-rose-900/40 ring-1 ring-rose-500/50' : 'text-zinc-500 hover:text-rose-300 hover:bg-rose-950/40'
             }`}
           >
             <Play className="w-4 h-4" />
@@ -4115,8 +4140,8 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
           <button
             onClick={() => setActiveTool('move')}
             title="Free Hand Pan / Move"
-            className={`p-2 rounded-lg transition ${
-              activeTool === 'move' ? 'bg-rose-600 text-white shadow' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+            className={`p-2 rounded-lg transition-all cursor-pointer ${
+              activeTool === 'move' ? 'bg-sky-600/90 text-white shadow-lg shadow-sky-900/40 ring-1 ring-sky-500/50' : 'text-zinc-500 hover:text-sky-300 hover:bg-sky-950/40'
             }`}
           >
             <Move className="w-4 h-4" />
@@ -4124,8 +4149,8 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
           <button
             onClick={() => setActiveTool('measure')}
             title="Ruler / Range Measure (M)"
-            className={`p-2 rounded-lg transition ${
-              activeTool === 'measure' ? 'bg-rose-600 text-white shadow' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+            className={`p-2 rounded-lg transition-all cursor-pointer ${
+              activeTool === 'measure' ? 'bg-amber-600/90 text-white shadow-lg shadow-amber-900/40 ring-1 ring-amber-500/50' : 'text-zinc-500 hover:text-amber-300 hover:bg-amber-950/40'
             }`}
           >
             <Compass className="w-4 h-4" />
@@ -4133,8 +4158,8 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
           <button
             onClick={() => setActiveTool('target')}
             title="Target Reticle"
-            className={`p-2 rounded-lg transition ${
-              activeTool === 'target' ? 'bg-rose-600 text-white shadow' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+            className={`p-2 rounded-lg transition-all cursor-pointer ${
+              activeTool === 'target' ? 'bg-red-700/90 text-white shadow-lg shadow-red-900/40 ring-1 ring-red-500/50' : 'text-zinc-500 hover:text-red-300 hover:bg-red-950/40'
             }`}
           >
             <Target className="w-4 h-4" />
@@ -4142,45 +4167,48 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
           <button
             onClick={() => setActiveTool('inspect')}
             title="Inspection Tool (I) - Hover over units, terrain, hazards & objectives to inspect details"
-            className={`p-2 rounded-lg transition ${
-              activeTool === 'inspect' ? 'bg-amber-600 text-white shadow ring-2 ring-amber-400/50' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+            className={`p-2 rounded-lg transition-all cursor-pointer ${
+              activeTool === 'inspect' ? 'bg-amber-500/90 text-black shadow-lg shadow-amber-900/40 ring-1 ring-amber-400/60 animate-pulse' : 'text-zinc-500 hover:text-amber-300 hover:bg-amber-950/40'
             }`}
           >
             <HelpCircle className="w-4 h-4" />
           </button>
 
-          <div className="w-6 h-[1px] bg-zinc-800 my-1"></div>
+          <div className="w-7 h-px bg-gradient-to-r from-transparent via-amber-900/40 to-transparent my-0.5"></div>
 
           <button
             onClick={() => setShowCardDrawer(true)}
             title="Command Cards Deck"
-            className="p-2 text-zinc-400 hover:text-amber-400 hover:bg-zinc-800 rounded-lg transition"
+            className="p-2 text-zinc-500 hover:text-amber-400 hover:bg-amber-950/30 rounded-lg transition-all cursor-pointer"
           >
             <Layers className="w-4 h-4" />
           </button>
 
+          <div className="w-7 h-px bg-gradient-to-r from-transparent via-zinc-800/60 to-transparent my-0.5"></div>
+
           <button
             onClick={() => setZoomLevel(prev => Math.min(2.5, Math.round((prev + 0.15) * 100) / 100))}
             title="Zoom In"
-            className="p-2 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-lg transition"
+            className="p-2 text-zinc-500 hover:text-white hover:bg-zinc-800/60 rounded-lg transition-all cursor-pointer"
           >
             <ZoomIn className="w-4 h-4" />
           </button>
           <button
             onClick={() => setZoomLevel(prev => Math.max(0.4, Math.round((prev - 0.15) * 100) / 100))}
             title="Zoom Out"
-            className="p-2 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-lg transition"
+            className="p-2 text-zinc-500 hover:text-white hover:bg-zinc-800/60 rounded-lg transition-all cursor-pointer"
           >
             <ZoomOut className="w-4 h-4" />
           </button>
           <button
             onClick={() => setZoomLevel(1.0)}
             title="Reset Zoom (100%)"
-            className="p-1 text-[10px] font-mono font-bold text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-lg transition"
+            className="px-1 py-1 text-[10px] font-mono font-black text-zinc-500 hover:text-amber-300 hover:bg-amber-950/30 rounded-lg transition-all border border-transparent hover:border-amber-900/40 cursor-pointer tabular-nums"
           >
             {Math.round(zoomLevel * 100)}%
           </button>
         </div>
+
 
         {/* Center: Tactical Virtual Tabletop (VTT) Canvas */}
         <div className="flex-1 flex flex-col bg-[#07090e] overflow-hidden relative">
@@ -4193,12 +4221,12 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
             const trayUnits = gameState.units.filter(u => !u.position && !u.inStrategicReserve && !u.embarkedIn && !u.attachedTo && u.stats.lives > 0 && u.owner === currentDeployer);
 
             return isDeployStagingMinimized ? (
-              <div className="w-full bg-[#141724]/95 border-b border-amber-800/80 px-4 py-1.5 shadow-xl flex items-center justify-between gap-2 z-10 shrink-0 text-xs">
+              <div className="w-full bg-gradient-to-r from-[#0e1018]/97 via-[#121525]/97 to-[#0e1018]/97 border-b border-amber-800/50 shadow-[0_4px_16px_rgba(0,0,0,0.6),inset_0_-1px_0_rgba(245,158,11,0.08)] px-4 py-1.5 flex items-center justify-between gap-2 z-10 shrink-0 text-xs">
                 <div className="flex items-center space-x-3">
                   <span className="text-[11px] font-mono text-amber-300 font-bold">
                     🪙 Deploying: <strong className={currentDeployer === 'player1' ? 'text-rose-400' : 'text-sky-400'}>{currentDeployer === 'player1' ? 'Player 1 (West)' : 'Player 2 (East / Bot)'}</strong>
                   </span>
-                  <span className="text-[10px] font-mono text-zinc-400">P1: {p1Remaining} left | P2: {p2Remaining} left</span>
+                  <span className="text-[10px] font-mono text-zinc-500">P1: {p1Remaining} left | P2: {p2Remaining} left</span>
                   {isBotDeploying && (
                     <span className="text-[11px] font-mono text-sky-400 font-bold flex items-center space-x-1 animate-pulse">
                       <span className="w-2 h-2 rounded-full bg-sky-400 animate-ping"></span>
@@ -4208,13 +4236,13 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                 </div>
                 <button
                   onClick={() => setIsDeployStagingMinimized(false)}
-                  className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-amber-300 border border-amber-600/40 font-mono text-[10px] flex items-center space-x-1 cursor-pointer transition"
+                  className="px-2 py-0.5 rounded-md bg-amber-950/60 hover:bg-amber-900/70 text-amber-400 border border-amber-700/50 font-mono text-[10px] flex items-center space-x-1 cursor-pointer transition"
                 >
                   <span>Show Unit Cards ▾</span>
                 </button>
               </div>
             ) : (
-              <div className="w-full bg-[#141724]/95 border-b border-amber-800/80 px-4 py-2 shadow-2xl flex flex-wrap items-center justify-between gap-2 z-10 shrink-0">
+              <div className="w-full bg-gradient-to-r from-[#0e1018]/97 via-[#121525]/97 to-[#0e1018]/97 border-b border-amber-800/50 shadow-[0_4px_20px_rgba(0,0,0,0.7),inset_0_-1px_0_rgba(245,158,11,0.08)] px-4 py-2 flex flex-wrap items-center justify-between gap-2 z-10 shrink-0">
                 <div className="flex items-center space-x-3">
                   <div className="flex items-center space-x-1.5 px-2.5 py-1 rounded bg-amber-950/80 border border-amber-700/80 text-amber-300 font-mono text-[11px] font-bold">
                     <span>🪙 First:</span>
@@ -4284,7 +4312,11 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                           onDragEnd={() => {
                             vttDragBridge.endDrag();
                           }}
-                          className="flex items-center space-x-1.5 px-2.5 py-1 bg-zinc-900 border border-zinc-700 hover:border-amber-400 rounded-lg text-xs text-white shadow shrink-0 cursor-grab active:cursor-grabbing select-none"
+                          className={`flex items-center space-x-1.5 px-2 py-1 bg-gradient-to-b from-[#141628] to-[#0e1020] border ${
+                            isLeader
+                              ? 'border-purple-700/60 hover:border-purple-500/80 shadow-[0_0_6px_rgba(168,85,247,0.1)]'
+                              : 'border-amber-800/50 hover:border-amber-500/70 shadow-[0_0_6px_rgba(245,158,11,0.08)]'
+                          } rounded-lg text-xs text-white shadow-lg shrink-0 cursor-grab active:cursor-grabbing select-none transition-all`}
                         >
                           {u.tokenImageUrl ? (
                             <img src={u.tokenImageUrl} alt={u.name} draggable={false} className="w-6 h-6 rounded-md object-cover border border-amber-500/50 shrink-0 pointer-events-none select-none" />
@@ -4376,20 +4408,20 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
             />
           </div>
 
-          {/* Bottom-left Party Portrait / Badge */}
-          <div className="absolute bottom-3 left-3 flex items-center space-x-2 bg-black/85 border border-zinc-700 px-3 py-1.5 rounded-full shadow-2xl z-20 pointer-events-none">
-            <div className="w-8 h-8 rounded-full border-2 border-amber-400 bg-zinc-900 flex items-center justify-center text-lg">
-              🛡️
+          {/* Bottom-left Faction Crest Badge */}
+          <div className="absolute bottom-3 left-3 flex items-center space-x-2 bg-gradient-to-r from-[#0c0e17]/95 to-[#101320]/95 border border-amber-800/50 px-3 py-1.5 rounded-full shadow-[0_4px_20px_rgba(0,0,0,0.7),0_0_12px_rgba(245,158,11,0.08)] z-20 pointer-events-none backdrop-blur-sm">
+            <div className="w-7 h-7 rounded-full border-2 border-amber-500/70 bg-gradient-to-br from-amber-900/60 to-black flex items-center justify-center text-base shadow-inner">
+              ⚔️
             </div>
             <div>
-              <span className="text-[10px] uppercase font-black tracking-wider text-zinc-300 block leading-none">VTT Tabletop</span>
-              <span className="text-xs font-bold text-white">Convergence Front</span>
+              <span className="text-[9px] uppercase font-black tracking-widest text-amber-600/80 block leading-none">Tactical VTT</span>
+              <span className="text-[11px] font-bold text-amber-200/90 tracking-wide">Convergence Front</span>
             </div>
           </div>
 
           {/* Bottom Context Action Bar */}
           {selectedUnit && (
-            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-[#14161f]/95 border border-zinc-700 rounded-xl px-4 py-2.5 shadow-2xl flex items-center space-x-4 z-30">
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-gradient-to-r from-[#0d0f1c]/97 via-[#111425]/97 to-[#0d0f1c]/97 border border-amber-800/40 shadow-[0_8px_32px_rgba(0,0,0,0.85),0_0_20px_rgba(0,0,0,0.5)] rounded-xl px-4 py-2.5 flex items-center space-x-4 z-30 backdrop-blur-md">
               <div className="flex items-center space-x-2">
                 {selectedUnit.tokenImageUrl ? (
                   <img src={selectedUnit.tokenImageUrl} alt={selectedUnit.name} className="w-7 h-7 rounded-lg object-cover border border-amber-400 shrink-0" />
@@ -5281,35 +5313,38 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
           </div>
         </div>
 
-        {/* Right Sidebar (Roll20 Style: Chat, Journal, Ledger) */}
+        {/* ─── Right Sidebar (Dark Fantasy Combat Panel) ─── */}
         {showRightSidebar && (
-          <div className="w-72 bg-[#12141c] border-l border-zinc-800 flex flex-col shrink-0 text-xs animate-in slide-in-from-right duration-200">
+          <div className="w-72 bg-gradient-to-b from-[#0f1120] via-[#0c0e1a] to-[#0a0c17] border-l border-amber-900/30 shadow-[-4px_0_20px_rgba(0,0,0,0.5)] flex flex-col shrink-0 text-xs animate-in slide-in-from-right duration-200">
           {/* Tabs header */}
-          <div className="flex items-center justify-between border-b border-zinc-800 bg-[#161922] px-2 py-1.5">
+          <div className="flex items-center justify-between border-b border-amber-900/25 bg-gradient-to-r from-[#0f1120] to-[#111428] px-2 py-1.5 shadow-[0_1px_8px_rgba(0,0,0,0.4)]">
             <button
               onClick={() => setRightTab('chat')}
-              className={`p-1.5 rounded transition ${rightTab === 'chat' ? 'text-white bg-zinc-800' : 'text-zinc-400 hover:text-white'}`}
+              className={`p-1.5 rounded-md transition-all cursor-pointer relative ${rightTab === 'chat' ? 'text-white bg-rose-900/40 ring-1 ring-rose-700/40' : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800/50'}`}
               title="Chat & Dice Rolls"
             >
               <MessageSquare className="w-4 h-4" />
+              {rightTab === 'chat' && <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-3 h-0.5 bg-rose-500 rounded-full"></span>}
             </button>
             <button
               onClick={() => setRightTab('journal')}
-              className={`p-1.5 rounded transition ${rightTab === 'journal' ? 'text-white bg-zinc-800' : 'text-zinc-400 hover:text-white'}`}
+              className={`p-1.5 rounded-md transition-all cursor-pointer relative ${rightTab === 'journal' ? 'text-white bg-amber-900/40 ring-1 ring-amber-700/40' : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800/50'}`}
               title="Unit Journal & Dossiers"
             >
               <BookOpen className="w-4 h-4" />
+              {rightTab === 'journal' && <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-3 h-0.5 bg-amber-500 rounded-full"></span>}
             </button>
             <button
               onClick={() => setRightTab('cards')}
-              className={`p-1.5 rounded transition ${rightTab === 'cards' ? 'text-white bg-zinc-800' : 'text-zinc-400 hover:text-white'}`}
+              className={`p-1.5 rounded-md transition-all cursor-pointer relative ${rightTab === 'cards' ? 'text-white bg-purple-900/40 ring-1 ring-purple-700/40' : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800/50'}`}
               title="Command Cards"
             >
               <Layers className="w-4 h-4" />
+              {rightTab === 'cards' && <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-3 h-0.5 bg-purple-500 rounded-full"></span>}
             </button>
             <button
               onClick={() => setRightTab('settings')}
-              className={`p-1.5 rounded transition ${rightTab === 'settings' ? 'text-white bg-zinc-800' : 'text-zinc-400 hover:text-white'}`}
+              className={`p-1.5 rounded-md transition-all cursor-pointer relative ${rightTab === 'settings' ? 'text-white bg-zinc-700/50 ring-1 ring-zinc-600/40' : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800/50'}`}
               title="Map Settings"
             >
               <Settings className="w-4 h-4" />
@@ -5329,14 +5364,16 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                 {gameState.logs.map(log => (
                   <div
                     key={log.id}
-                    className={`p-2 rounded-lg border ${
+                    className={`pl-2.5 pr-2 py-1.5 rounded-r-lg border-l-2 border bg-zinc-900/50 ${
                       log.type === 'combat'
-                        ? 'bg-rose-950/40 border-rose-900/50 text-rose-200'
+                        ? 'border-l-rose-600 border-rose-900/30 text-rose-200'
                         : log.type === 'event'
-                        ? 'bg-amber-950/40 border-amber-900/50 text-amber-200'
+                        ? 'border-l-amber-500 border-amber-900/30 text-amber-200'
                         : log.type === 'score'
-                        ? 'bg-emerald-950/40 border-emerald-900/50 text-emerald-200'
-                        : 'bg-zinc-900/70 border-zinc-800 text-zinc-300'
+                        ? 'border-l-emerald-500 border-emerald-900/30 text-emerald-200'
+                        : log.type === 'charge'
+                        ? 'border-l-orange-500 border-orange-900/30 text-orange-200'
+                        : 'border-l-zinc-700 border-zinc-800/40 text-zinc-300'
                     }`}
                   >
                     <div className="flex justify-between items-center text-[9px] text-zinc-500 mb-0.5">
@@ -5349,17 +5386,20 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
               </div>
 
               {/* Chat Input form */}
-              <form onSubmit={handleSendChat} className="p-2 border-t border-zinc-800 bg-[#161922] flex items-center space-x-1.5">
-                <input
-                  type="text"
-                  value={chatInput}
-                  onChange={e => setChatInput(e.target.value)}
-                  placeholder="Type message or /roll 1d6..."
-                  className="flex-1 bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1 text-xs text-white focus:border-rose-500 focus:outline-none font-mono"
-                />
+              <form onSubmit={handleSendChat} className="p-2 border-t border-amber-900/20 bg-gradient-to-r from-[#0d0f1c] to-[#0f1120] flex items-center space-x-1.5">
+                <div className="flex-1 relative">
+                  <span className="absolute left-2 top-1/2 -translate-y-1/2 text-zinc-600 text-xs">💬</span>
+                  <input
+                    type="text"
+                    value={chatInput}
+                    onChange={e => setChatInput(e.target.value)}
+                    placeholder="Type message or /roll 1d6..."
+                    className="w-full bg-[#0a0c15] border border-zinc-800/80 hover:border-zinc-700 focus:border-rose-800/70 rounded-lg pl-6 pr-2.5 py-1 text-[11px] text-white focus:outline-none font-mono placeholder-zinc-600 transition"
+                  />
+                </div>
                 <button
                   type="submit"
-                  className="p-1.5 bg-rose-700 hover:bg-rose-600 text-white rounded transition"
+                  className="p-1.5 bg-rose-800/80 hover:bg-rose-700/90 text-rose-200 hover:text-white rounded-lg transition border border-rose-800/50 cursor-pointer"
                 >
                   <Send className="w-3.5 h-3.5" />
                 </button>
@@ -5367,16 +5407,21 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
             </div>
           )}
 
+
           {/* Tab 2: Journal & Inspect */}
           {rightTab === 'journal' && (
-            <div className="flex-1 overflow-y-auto p-3 space-y-3">
-              <span className="text-xs uppercase font-mono tracking-wider text-zinc-400 block font-bold">Active Force Dossiers</span>
+            <div className="flex-1 overflow-y-auto p-3 space-y-2">
+              <span className="text-[10px] uppercase font-mono tracking-widest text-amber-700/70 block font-bold border-b border-amber-900/20 pb-1 mb-2">⚔️ Force Dossiers</span>
               {gameState.units.filter(u => u.stats.lives > 0).map(u => (
                 <div
                   key={u.id}
                   onClick={() => setSelectedUnitId(u.id)}
-                  className={`p-2.5 rounded-lg border cursor-pointer transition ${
-                    selectedUnitId === u.id ? 'bg-zinc-900 border-amber-500' : 'bg-zinc-950 border-zinc-800 hover:border-zinc-700'
+                  className={`p-2 rounded-lg border cursor-pointer transition-all ${
+                    selectedUnitId === u.id
+                      ? u.owner === 'player1'
+                        ? 'bg-rose-950/40 border-rose-700/60 shadow-[0_0_8px_rgba(244,63,94,0.15)]'
+                        : 'bg-sky-950/40 border-sky-700/60 shadow-[0_0_8px_rgba(56,189,248,0.15)]'
+                      : 'bg-[#0d0f1c]/80 border-zinc-800/60 hover:border-zinc-700/70 hover:bg-zinc-900/50'
                   }`}
                 >
                   <div className="flex items-center space-x-2">

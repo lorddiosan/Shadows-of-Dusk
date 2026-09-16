@@ -115,7 +115,7 @@ export function App() {
         onOpenProfile={() => setIsProfileModalOpen(true)}
       />
 
-      <main className={`flex-1 ${currentTab === 'play' ? 'overflow-hidden' : 'pb-16'}`}>
+      <main className={`flex-1 ${currentTab === 'play' || currentTab === 'home' ? 'overflow-hidden' : 'pb-16'}`}>
         {currentTab === 'home' && (
           <WarRoomHome
             onNavigate={handleSetTab}

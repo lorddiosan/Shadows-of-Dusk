@@ -26,6 +26,39 @@ const SUGGESTED_TAGS = [
   'Aggro', 'Balanced', 'Siege', 'Mobile', 'Elite', 'Horde', 'Defensive', 'Artillery'
 ];
 
+const FACTION_THEME_MAP: Record<string, { activeBtn: string; badge: string; text: string }> = {
+  crimson_empire: {
+    activeBtn: 'bg-gradient-to-r from-rose-950 to-rose-900/90 text-rose-100 border-rose-500 shadow-[0_0_14px_rgba(244,63,94,0.35)] ring-1 ring-rose-400/50',
+    badge: 'bg-rose-950/80 text-rose-300 border-rose-800',
+    text: 'text-rose-400'
+  },
+  astreas_concord: {
+    activeBtn: 'bg-gradient-to-r from-amber-950 to-amber-900/90 text-amber-100 border-amber-400 shadow-[0_0_14px_rgba(251,191,36,0.35)] ring-1 ring-amber-400/50',
+    badge: 'bg-amber-950/80 text-amber-300 border-amber-800',
+    text: 'text-amber-400'
+  },
+  infernalis_legion: {
+    activeBtn: 'bg-gradient-to-r from-orange-950 to-orange-900/90 text-orange-100 border-orange-500 shadow-[0_0_14px_rgba(249,115,22,0.35)] ring-1 ring-orange-400/50',
+    badge: 'bg-orange-950/80 text-orange-300 border-orange-800',
+    text: 'text-orange-400'
+  },
+  chronarchs: {
+    activeBtn: 'bg-gradient-to-r from-purple-950 to-purple-900/90 text-purple-100 border-purple-400 shadow-[0_0_14px_rgba(168,85,247,0.35)] ring-1 ring-purple-400/50',
+    badge: 'bg-purple-950/80 text-purple-300 border-purple-800',
+    text: 'text-purple-400'
+  },
+  nocturne_cabal: {
+    activeBtn: 'bg-gradient-to-r from-indigo-950 to-indigo-900/90 text-indigo-100 border-indigo-400 shadow-[0_0_14px_rgba(99,102,241,0.35)] ring-1 ring-indigo-400/50',
+    badge: 'bg-indigo-950/80 text-indigo-300 border-indigo-800',
+    text: 'text-indigo-400'
+  },
+  ironclad_forge: {
+    activeBtn: 'bg-gradient-to-r from-cyan-950 to-cyan-900/90 text-cyan-100 border-cyan-400 shadow-[0_0_14px_rgba(6,182,212,0.35)] ring-1 ring-cyan-400/50',
+    badge: 'bg-cyan-950/80 text-cyan-300 border-cyan-800',
+    text: 'text-cyan-400'
+  }
+};
+
 export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle }) => {
   const allFactions = StorageService.getFactions();
   const allTemplates = StorageService.getUnitTemplates();
@@ -263,44 +296,49 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
   });
 
   return (
-    <div className="w-full max-w-7xl mx-auto p-4 space-y-6">
+    <div className="w-full max-w-7xl mx-auto p-4 md:p-6 space-y-6 select-none">
       {/* Toast Save Notification */}
       {saveNotification && (
-        <div className="fixed top-16 right-6 z-50 bg-emerald-950 border border-emerald-500 text-emerald-200 px-4 py-3 rounded-xl shadow-2xl flex items-center space-x-2.5 animate-in fade-in slide-in-from-top-4 duration-200">
-          <Sparkles className="w-4 h-4 text-emerald-400" />
-          <span className="text-xs font-bold font-mono">{saveNotification}</span>
+        <div className="fixed top-16 right-6 z-50 bg-gradient-to-r from-emerald-950 to-emerald-900 border border-emerald-400/80 text-emerald-200 px-4 py-3 rounded-xl shadow-[0_8px_30px_rgba(0,0,0,0.8),0_0_15px_rgba(16,185,129,0.3)] flex items-center space-x-2.5 animate-in fade-in slide-in-from-top-4 duration-200 backdrop-blur-md">
+          <Sparkles className="w-4 h-4 text-emerald-300 animate-pulse" />
+          <span className="text-xs font-bold font-mono tracking-wide">{saveNotification}</span>
         </div>
       )}
 
-      {/* Top Banner & Faction Selector */}
-      <div className="bg-[#12141c] border border-zinc-800 rounded-2xl p-5 shadow-2xl space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-4">
+      {/* ═══ Top Banner & Faction Selector ═══ */}
+      <div className="bg-gradient-to-br from-[#121526]/95 via-[#0e101d]/95 to-[#080a13]/95 border border-amber-900/40 shadow-[0_12px_45px_rgba(0,0,0,0.85),inset_0_1px_0_rgba(251,191,36,0.12)] rounded-2xl p-5 md:p-6 space-y-5 backdrop-blur-md relative overflow-hidden">
+        {/* Subtle ambient lighting flare */}
+        <div className="absolute top-0 left-1/4 w-96 h-32 bg-amber-500/5 rounded-full blur-3xl pointer-events-none" />
+
+        <div className="flex flex-wrap items-center justify-between gap-4 relative z-10">
           <div>
             <div className="flex items-center space-x-2">
-              <span className="text-xs uppercase tracking-widest text-rose-400 font-bold font-mono">Muster of Arms</span>
-              <span className="text-zinc-600">•</span>
-              <span className="text-xs font-mono text-zinc-400">Army ID: {currentArmyId.slice(-8)}</span>
+              <span className="px-2 py-0.5 rounded-md bg-rose-950/80 border border-rose-800/80 text-rose-300 text-[10px] uppercase tracking-widest font-black font-mono shadow-[0_0_8px_rgba(244,63,94,0.2)]">
+                ⚔️ Muster of Arms
+              </span>
+              <span className="text-amber-900/60 font-bold">│</span>
+              <span className="text-[11px] font-mono text-zinc-400">Army ID: <strong className="text-amber-400 font-bold">{currentArmyId.slice(-8)}</strong></span>
             </div>
-            <h1 className="text-2xl font-black text-white flex items-center space-x-2 mt-0.5">
+            <h1 className="text-2xl md:text-3xl font-black text-white flex items-center space-x-3 mt-1.5 drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)]">
               <FactionLogo faction={selectedFaction} size="md" />
-              <span>{selectedFaction.name}</span>
+              <span className="tracking-wide">{selectedFaction.name}</span>
             </h1>
-            <p className="text-xs text-zinc-400 italic font-serif mt-0.5">"{selectedFaction.quote}"</p>
+            <p className="text-xs text-amber-200/60 italic font-serif mt-1">"{selectedFaction.quote}"</p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
             <button
               onClick={() => setShowLibraryModal(true)}
-              className="px-3.5 py-2 bg-zinc-900 hover:bg-zinc-800 text-amber-300 border border-amber-500/40 rounded-lg text-xs font-bold font-mono flex items-center space-x-1.5 transition shadow cursor-pointer"
+              className="px-3.5 py-2 bg-gradient-to-b from-[#1c1f2e] to-[#121420] hover:from-[#252a3f] hover:to-[#171a2b] text-amber-300 border border-amber-500/50 hover:border-amber-400 rounded-xl text-xs font-bold font-mono flex items-center space-x-1.5 transition shadow-lg shadow-black/40 cursor-pointer"
               title="Browse and load your saved armies"
             >
-              <FolderOpen className="w-3.5 h-3.5" />
+              <FolderOpen className="w-3.5 h-3.5 text-amber-400" />
               <span>Saved Armies ({savedRosters.length})</span>
             </button>
 
             <button
               onClick={handleNewArmy}
-              className="px-3 py-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-700 rounded-lg text-xs font-mono flex items-center space-x-1 transition cursor-pointer"
+              className="px-3 py-2 bg-gradient-to-b from-[#181a26] to-[#0f111a] hover:from-[#222536] hover:to-[#141622] text-zinc-300 hover:text-white border border-zinc-750 hover:border-zinc-600 rounded-xl text-xs font-mono font-bold flex items-center space-x-1 transition shadow-lg cursor-pointer"
               title="Start a fresh blank army roster"
             >
               <RefreshCw className="w-3.5 h-3.5" />
@@ -309,7 +347,7 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
 
             <button
               onClick={handleSaveArmy}
-              className="px-3.5 py-2 bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs font-mono rounded-lg shadow flex items-center space-x-1.5 transition cursor-pointer"
+              className="px-4 py-2 bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 hover:from-amber-400 hover:via-amber-300 hover:to-amber-400 text-black font-black text-xs font-mono rounded-xl shadow-[0_0_20px_rgba(245,158,11,0.4)] flex items-center space-x-1.5 transition active:scale-95 cursor-pointer border border-amber-300"
               title="Save army to your account library"
             >
               <Save className="w-3.5 h-3.5" />
@@ -319,10 +357,10 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
             <button
               onClick={handleDeploy}
               disabled={errors.length > 0}
-              className={`px-4 py-2 rounded-lg font-bold text-xs shadow-lg flex items-center space-x-2 transition ${
+              className={`px-5 py-2 rounded-xl font-black text-xs font-mono uppercase tracking-wider shadow-xl flex items-center space-x-2 transition border ${
                 errors.length === 0
-                  ? 'bg-rose-600 hover:bg-rose-500 text-white cursor-pointer shadow-rose-950/50'
-                  : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
+                  ? 'bg-gradient-to-r from-rose-700 via-rose-600 to-rose-700 hover:from-rose-600 hover:via-rose-500 hover:to-rose-600 text-white cursor-pointer shadow-[0_0_22px_rgba(244,63,94,0.45)] border-rose-500/80 active:scale-95'
+                  : 'bg-zinc-800/80 text-zinc-500 border-zinc-700 cursor-not-allowed'
               }`}
             >
               <Swords className="w-3.5 h-3.5" />
@@ -331,11 +369,11 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
           </div>
         </div>
 
-        {/* Name Your Army & Metadata Config */}
-        <div className="p-4 bg-zinc-950/80 rounded-xl border border-zinc-850 space-y-3">
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+        {/* Name Your Army & Metadata Config Slate */}
+        <div className="p-4 md:p-5 bg-gradient-to-br from-[#090b14]/95 via-[#0c0e18]/95 to-[#070910]/95 rounded-xl border border-amber-900/30 shadow-[inset_0_2px_8px_rgba(0,0,0,0.6)] space-y-4 backdrop-blur-sm">
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5 items-end">
             <div className="md:col-span-8">
-              <label className="text-[11px] uppercase font-bold text-amber-400 block mb-1 font-mono flex items-center space-x-1">
+              <label className="text-[11px] uppercase font-bold text-amber-400 block mb-1 font-mono flex items-center space-x-1.5">
                 <span>Name Your Army</span>
                 <span className="text-zinc-500 font-normal">(stored on your account &amp; used for filtering)</span>
               </label>
@@ -344,7 +382,7 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
                 value={rosterName}
                 onChange={e => setRosterName(e.target.value)}
                 placeholder="e.g. Crimson Vanguard Shock Cadre..."
-                className="w-full bg-[#12141c] border border-zinc-700 px-3 py-1.5 rounded-lg text-sm text-white font-bold focus:border-amber-400 focus:outline-none placeholder-zinc-600"
+                className="w-full bg-[#0e101b] border border-amber-900/40 focus:border-amber-400 focus:ring-1 focus:ring-amber-400/50 rounded-xl px-3.5 py-2 text-sm text-white font-bold placeholder-zinc-600 shadow-inner transition"
               />
             </div>
 
@@ -353,36 +391,36 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
               <select
                 value={maxPoints}
                 onChange={e => setMaxPoints(Number(e.target.value))}
-                className="w-full bg-[#12141c] border border-zinc-700 px-3 py-1.5 rounded-lg text-xs text-white font-medium focus:border-amber-400 focus:outline-none"
+                className="w-full bg-[#0e101b] border border-amber-900/40 focus:border-amber-400 focus:ring-1 focus:ring-amber-400/50 rounded-xl px-3.5 py-2 text-xs text-amber-200 font-bold transition cursor-pointer"
               >
-                <option value={500}>Skirmish (500 pts)</option>
-                <option value={750}>Clash (750 pts)</option>
-                <option value={1000}>Battle (1,000 pts)</option>
+                <option value={500}>⚔️ Skirmish (500 pts)</option>
+                <option value={750}>🛡️ Clash (750 pts)</option>
+                <option value={1000}>👑 Battle (1,000 pts)</option>
               </select>
             </div>
           </div>
 
           {/* Tagging System */}
-          <div className="pt-2 border-t border-zinc-850 space-y-2">
+          <div className="pt-3 border-t border-amber-900/20 space-y-2.5">
             <div className="flex items-center justify-between">
-              <span className="text-[10px] font-mono uppercase text-zinc-400 font-bold flex items-center space-x-1">
+              <span className="text-[10px] font-mono uppercase text-zinc-400 font-bold flex items-center space-x-1.5">
                 <Tag className="w-3 h-3 text-amber-400" />
                 <span>Doctrinal Tags &amp; Labels</span>
               </span>
               <span className="text-[10px] text-zinc-500 font-mono">Filterable during pre-battle selection</span>
             </div>
 
-            <div className="flex flex-wrap items-center gap-1.5">
+            <div className="flex flex-wrap items-center gap-2">
               {/* Active Tags */}
               {tags.map(t => (
                 <span
                   key={t}
-                  className="px-2 py-0.5 rounded-md bg-amber-950/80 border border-amber-600/70 text-amber-300 font-mono text-[11px] font-bold flex items-center space-x-1 shadow-sm"
+                  className="px-2.5 py-1 rounded-lg bg-gradient-to-r from-amber-950/90 to-[#1c150a] border border-amber-500/60 text-amber-300 font-mono text-[11px] font-bold flex items-center space-x-1.5 shadow-[0_0_8px_rgba(245,158,11,0.15)]"
                 >
                   <span>#{t}</span>
                   <button
                     onClick={() => handleRemoveTag(t)}
-                    className="hover:text-white transition ml-0.5 cursor-pointer"
+                    className="hover:text-white transition ml-0.5 cursor-pointer text-amber-400/70 hover:text-amber-200"
                     title="Remove tag"
                   >
                     <X className="w-3 h-3" />
@@ -391,17 +429,17 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
               ))}
 
               {/* Custom Tag Input */}
-              <form onSubmit={handleAddCustomTag} className="flex items-center space-x-1">
+              <form onSubmit={handleAddCustomTag} className="flex items-center space-x-1.5">
                 <input
                   type="text"
                   value={customTagInput}
                   onChange={e => setCustomTagInput(e.target.value)}
                   placeholder="+ Custom tag..."
-                  className="bg-[#12141c] border border-zinc-750 px-2 py-0.5 rounded-md text-[11px] text-white font-mono focus:border-amber-400 focus:outline-none w-28"
+                  className="bg-[#0e101b] border border-zinc-750 focus:border-amber-400 px-2.5 py-1 rounded-lg text-[11px] text-white font-mono focus:outline-none w-32 transition placeholder-zinc-600"
                 />
                 <button
                   type="submit"
-                  className="px-2 py-0.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded text-[11px] font-mono transition cursor-pointer"
+                  className="px-2.5 py-1 bg-gradient-to-b from-[#212435] to-[#141624] hover:from-[#2a2f47] hover:to-[#1a1d30] text-zinc-200 border border-zinc-700 rounded-lg text-[11px] font-mono font-bold transition cursor-pointer"
                 >
                   Add
                 </button>
@@ -409,7 +447,7 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
             </div>
 
             {/* Quick Tag Suggestions */}
-            <div className="flex flex-wrap items-center gap-1 pt-1">
+            <div className="flex flex-wrap items-center gap-1.5 pt-1">
               <span className="text-[9px] text-zinc-500 font-mono uppercase mr-1">Quick Suggestions:</span>
               {SUGGESTED_TAGS.map(s => {
                 const isSelected = tags.includes(s);
@@ -418,10 +456,10 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
                     key={s}
                     type="button"
                     onClick={() => handleToggleSuggestedTag(s)}
-                    className={`px-2 py-0.5 rounded text-[10px] font-mono transition cursor-pointer ${
+                    className={`px-2 py-0.5 rounded-md text-[10px] font-mono transition cursor-pointer border ${
                       isSelected
-                        ? 'bg-amber-500 text-black font-bold'
-                        : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-800'
+                        ? 'bg-amber-500/90 text-black border-amber-400 font-bold shadow-[0_0_8px_rgba(245,158,11,0.25)]'
+                        : 'bg-[#10121d] hover:bg-[#181b2b] text-zinc-400 hover:text-white border-zinc-800'
                     }`}
                   >
                     {isSelected ? '✓ ' : '+ '}{s}
@@ -433,62 +471,89 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
         </div>
 
         {/* Faction selector chips */}
-        <div className="flex items-center space-x-2 overflow-x-auto pb-1 border-t border-zinc-800/80 pt-3">
-          {allFactions.map(f => (
-            <button
-              key={f.id}
-              onClick={() => handleFactionChange(f.id)}
-              className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition border ${
-                selectedFactionId === f.id
-                  ? 'bg-rose-950/80 text-rose-200 border-rose-500 shadow-md'
-                  : 'bg-zinc-900/60 text-zinc-400 border-zinc-800 hover:text-white'
-              }`}
-            >
-              <FactionLogo faction={f} size="xs" />
-              <span>{f.shortName}</span>
-            </button>
-          ))}
+        <div className="flex items-center space-x-2 overflow-x-auto pb-1 border-t border-amber-900/25 pt-3.5">
+          {allFactions.map(f => {
+            const isSelected = selectedFactionId === f.id;
+            const theme = FACTION_THEME_MAP[f.id] || {
+              activeBtn: 'bg-rose-950/80 text-rose-200 border-rose-500 shadow-md',
+              badge: 'bg-zinc-900 text-zinc-400',
+              text: 'text-zinc-400'
+            };
+
+            return (
+              <button
+                key={f.id}
+                onClick={() => handleFactionChange(f.id)}
+                className={`flex items-center space-x-2 px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all border cursor-pointer ${
+                  isSelected
+                    ? theme.activeBtn
+                    : 'bg-[#0f111c]/80 text-zinc-400 border-zinc-800/80 hover:text-white hover:border-zinc-700 hover:bg-[#141726]'
+                }`}
+              >
+                <FactionLogo faction={f} size="xs" />
+                <span>{f.shortName}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      {/* Force Summary Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="bg-[#12141c] border border-zinc-800 p-3.5 rounded-xl">
-          <span className="text-[11px] text-zinc-400 uppercase font-mono block">Force Cost</span>
-          <div className="text-xl font-black font-mono mt-0.5">
-            <span className={totalPoints > maxPoints ? 'text-rose-500' : 'text-emerald-400'}>
+
+      {/* Force Summary Stats (Glassmorphic HUD Pods) */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
+        <div className={`bg-gradient-to-br from-[#121526]/90 via-[#0e101d]/90 to-[#090b14]/90 border ${
+          totalPoints > maxPoints ? 'border-rose-600/80 shadow-[0_0_18px_rgba(244,63,94,0.25)] ring-1 ring-rose-500/40' : 'border-amber-900/40 shadow-lg'
+        } p-4 rounded-2xl relative overflow-hidden backdrop-blur-sm`}>
+          <div className={`absolute top-0 left-0 right-0 h-1 ${totalPoints > maxPoints ? 'bg-gradient-to-r from-rose-600 to-rose-400' : 'bg-gradient-to-r from-emerald-600 to-emerald-400'}`} />
+          <span className="text-[11px] text-zinc-400 uppercase font-mono font-bold block tracking-wider flex items-center space-x-1">
+            <span>🪙 Force Cost</span>
+          </span>
+          <div className="text-2xl font-black font-mono mt-1 tracking-tight">
+            <span className={totalPoints > maxPoints ? 'text-rose-400 drop-shadow-[0_0_8px_rgba(244,63,94,0.5)]' : 'text-emerald-400 drop-shadow-[0_0_8px_rgba(52,211,153,0.3)]'}>
               {totalPoints}
             </span>
-            <span className="text-zinc-500 text-xs"> / {maxPoints} pts</span>
+            <span className="text-zinc-500 text-xs font-normal"> / {maxPoints} pts</span>
           </div>
         </div>
-        <div className="bg-[#12141c] border border-zinc-800 p-3.5 rounded-xl">
-          <span className="text-[11px] text-zinc-400 uppercase font-mono block">Enrolled Squads</span>
-          <div className="text-xl font-black text-white font-mono mt-0.5">{totalSquads}</div>
+
+        <div className="bg-gradient-to-br from-[#121526]/90 via-[#0e101d]/90 to-[#090b14]/90 border border-amber-900/40 p-4 rounded-2xl relative overflow-hidden backdrop-blur-sm shadow-lg">
+          <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-amber-600 to-amber-400" />
+          <span className="text-[11px] text-zinc-400 uppercase font-mono font-bold block tracking-wider flex items-center space-x-1">
+            <span>🛡️ Enrolled Squads</span>
+          </span>
+          <div className="text-2xl font-black text-white font-mono mt-1 tracking-tight drop-shadow-[0_0_8px_rgba(255,255,255,0.2)]">{totalSquads}</div>
         </div>
-        <div className="bg-[#12141c] border border-zinc-800 p-3.5 rounded-xl">
-          <span className="text-[11px] text-zinc-400 uppercase font-mono block">Total Models</span>
-          <div className="text-xl font-black text-sky-400 font-mono mt-0.5">
-            {totalModels} <span className="text-xs text-zinc-500 font-normal">models (5–25 req)</span>
+
+        <div className="bg-gradient-to-br from-[#121526]/90 via-[#0e101d]/90 to-[#090b14]/90 border border-amber-900/40 p-4 rounded-2xl relative overflow-hidden backdrop-blur-sm shadow-lg">
+          <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-sky-600 to-sky-400" />
+          <span className="text-[11px] text-zinc-400 uppercase font-mono font-bold block tracking-wider flex items-center space-x-1">
+            <span>👥 Total Models</span>
+          </span>
+          <div className="text-2xl font-black text-sky-400 font-mono mt-1 tracking-tight drop-shadow-[0_0_8px_rgba(56,189,248,0.3)]">
+            {totalModels} <span className="text-xs text-zinc-500 font-normal font-sans">(5–25 req)</span>
           </div>
         </div>
-        <div className="bg-[#12141c] border border-zinc-800 p-3.5 rounded-xl">
-          <span className="text-[11px] text-zinc-400 uppercase font-mono block">Squad Life Pool</span>
-          <div className="text-xl font-black text-amber-400 font-mono mt-0.5">{totalLives} L</div>
+
+        <div className="bg-gradient-to-br from-[#121526]/90 via-[#0e101d]/90 to-[#090b14]/90 border border-amber-900/40 p-4 rounded-2xl relative overflow-hidden backdrop-blur-sm shadow-lg">
+          <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-amber-500 to-amber-300" />
+          <span className="text-[11px] text-zinc-400 uppercase font-mono font-bold block tracking-wider flex items-center space-x-1">
+            <span>❤️ Squad Life Pool</span>
+          </span>
+          <div className="text-2xl font-black text-amber-300 font-mono mt-1 tracking-tight drop-shadow-[0_0_8px_rgba(251,191,36,0.3)]">{totalLives} L</div>
         </div>
       </div>
 
       {/* Errors and Warnings */}
       {(errors.length > 0 || warnings.length > 0) && (
-        <div className="space-y-2">
+        <div className="space-y-2.5">
           {errors.map((err, i) => (
-            <div key={`err_${i}`} className="bg-rose-950/60 border border-rose-600/60 text-rose-200 px-4 py-2.5 rounded-lg text-xs flex items-center space-x-2">
-              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-              <span>{err}</span>
+            <div key={`err_${i}`} className="bg-gradient-to-r from-rose-950/95 via-[#250d14]/95 to-rose-950/95 border border-rose-500/80 text-rose-200 px-4 py-3 rounded-xl shadow-[0_0_18px_rgba(244,63,94,0.3)] text-xs font-mono flex items-center space-x-3 backdrop-blur-sm">
+              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 animate-pulse" />
+              <span className="font-bold">{err}</span>
             </div>
           ))}
           {warnings.map((warn, i) => (
-            <div key={`warn_${i}`} className="bg-amber-950/40 border border-amber-600/50 text-amber-200 px-4 py-2.5 rounded-lg text-xs flex items-center space-x-2">
+            <div key={`warn_${i}`} className="bg-gradient-to-r from-amber-950/95 via-[#24170c]/95 to-amber-950/95 border border-amber-500/80 text-amber-200 px-4 py-3 rounded-xl shadow-[0_0_18px_rgba(245,158,11,0.25)] text-xs font-mono flex items-center space-x-3 backdrop-blur-sm">
               <Shield className="w-4 h-4 text-amber-400 shrink-0" />
               <span>{warn}</span>
             </div>
@@ -496,50 +561,59 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
         </div>
       )}
 
-      {/* Two Column Layout */}
+      {/* Two Column Layout (Roster & Armory) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column: Grouped Units by Role (7 cols) */}
         <div className="lg:col-span-7 space-y-4">
-          <h2 className="text-base font-bold text-white flex items-center justify-between">
-            <span>Enlisted Force Roster</span>
-            <span className="text-xs text-zinc-400 font-mono">{selectedUnits.length} Squads</span>
-          </h2>
+          <div className="flex items-center justify-between pb-1 border-b border-amber-900/25">
+            <h2 className="text-base font-black text-white flex items-center space-x-2">
+              <span className="text-rose-400">⚔️</span>
+              <span className="tracking-wide">Enlisted Force Roster</span>
+            </h2>
+            <span className="px-2 py-0.5 rounded-md bg-amber-950/70 border border-amber-700/60 text-amber-300 text-xs font-bold font-mono">
+              {selectedUnits.length} Squads Enlisted
+            </span>
+          </div>
 
           {selectedUnits.length === 0 ? (
-            <div className="bg-zinc-950 border border-dashed border-zinc-800 rounded-xl p-8 text-center text-zinc-500 text-xs">
-              No units currently recruited. Click '+' on the Armory to add units.
+            <div className="bg-gradient-to-b from-[#0e101b] to-[#070910] border-2 border-dashed border-amber-900/30 rounded-2xl p-10 text-center text-zinc-500 text-xs space-y-2">
+              <Shield className="w-8 h-8 mx-auto text-amber-900/40" />
+              <p className="font-mono">No units currently recruited.</p>
+              <p className="text-[11px] text-zinc-600">Select datasheets from the Faction Armory on the right and click "+ Enlist".</p>
             </div>
           ) : (
             <div className="space-y-4">
               {groupedSelected.map(group => (
                 <div key={group.role} className="space-y-2">
-                  <div className="flex items-center space-x-2 border-b border-zinc-800 pb-1">
-                    <span className="text-xs uppercase font-bold tracking-wider font-mono text-amber-400">
+                  <div className="flex items-center space-x-2 border-b border-amber-900/25 pb-1">
+                    <span className="text-xs uppercase font-black tracking-wider font-mono text-amber-400 drop-shadow-[0_0_6px_rgba(251,191,36,0.2)]">
                       {group.role}
                     </span>
-                    <span className="text-[10px] text-zinc-500 font-mono">({group.units.length})</span>
+                    <span className="px-1.5 py-0.2 rounded-full bg-[#151828] border border-amber-800/40 text-amber-300 font-mono text-[10px] font-bold">
+                      {group.units.length}
+                    </span>
                   </div>
 
                   <div className="space-y-2">
                     {group.units.map(unit => (
                       <div
                         key={unit.id}
-                        className="bg-[#12141c] border border-zinc-800 rounded-xl p-3 flex items-center justify-between hover:border-zinc-700 transition"
+                        className="bg-gradient-to-r from-[#111424]/90 via-[#0e101d]/90 to-[#0a0c16]/90 border border-amber-900/30 hover:border-amber-600/50 rounded-xl p-3 flex items-center justify-between transition-all duration-200 shadow-md hover:shadow-[0_4px_16px_rgba(0,0,0,0.6)]"
                       >
                         <div className="flex items-center space-x-3">
                           {unit.tokenImageUrl ? (
                             <img
                               src={unit.tokenImageUrl}
                               alt={unit.name}
-                              className="w-10 h-10 rounded-xl object-cover border border-amber-500/60 shadow shrink-0"
+                              className="w-10 h-10 rounded-xl object-cover border-2 border-amber-500/70 shadow-[0_0_8px_rgba(245,158,11,0.2)] shrink-0"
                             />
                           ) : (
-                            <span className="text-2xl bg-zinc-950 p-2 rounded-lg border border-zinc-800 shrink-0">{unit.avatar}</span>
+                            <span className="text-2xl bg-gradient-to-br from-zinc-900 to-black p-2 rounded-xl border border-amber-900/40 shrink-0 shadow-inner">{unit.avatar}</span>
                           )}
                           <div>
                             <div className="flex items-center space-x-2">
-                              <span className="font-bold text-white text-xs">{unit.name}</span>
-                              <span className="text-[10px] px-1.5 py-0.2 rounded bg-zinc-800 text-zinc-300 font-mono">
+                              <span className="font-bold text-white text-xs tracking-wide">{unit.name}</span>
+                              <span className="text-[10px] px-2 py-0.5 rounded-md bg-[#16192b] text-amber-300 border border-amber-800/40 font-mono font-bold">
                                 {unit.type}
                               </span>
                             </div>
@@ -549,30 +623,30 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
                           </div>
                         </div>
 
-                        {/* Statline */}
+                        {/* Statline Capsules */}
                         <div className="flex items-center space-x-1.5 font-mono text-[10px]">
-                          <span className="bg-zinc-950 px-1.5 py-0.5 rounded border border-zinc-800 text-zinc-300">
+                          <span className="bg-[#080a13] px-2 py-0.5 rounded-md border border-zinc-800 text-zinc-300 font-bold">
                             Mv:{unit.stats.mv}
                           </span>
-                          <span className="bg-zinc-950 px-1.5 py-0.5 rounded border border-zinc-800 text-sky-400">
+                          <span className="bg-[#080a13] px-2 py-0.5 rounded-md border border-sky-900/50 text-sky-400 font-bold">
                             Def:{unit.stats.def}
                           </span>
-                          <span className="bg-zinc-950 px-1.5 py-0.5 rounded border border-zinc-800 text-rose-400">
+                          <span className="bg-[#080a13] px-2 py-0.5 rounded-md border border-rose-900/50 text-rose-400 font-bold">
                             AM:{unit.stats.am}
                           </span>
-                          <span className="bg-zinc-950 px-1.5 py-0.5 rounded border border-zinc-800 text-amber-400 font-bold">
+                          <span className="bg-gradient-to-r from-amber-950 to-amber-900/80 px-2 py-0.5 rounded-md border border-amber-500/60 text-amber-300 font-black shadow-[0_0_6px_rgba(245,158,11,0.2)]">
                             {unit.points} pts
                           </span>
                           <button
                             onClick={() => handleOpenEditUnit(unit)}
-                            className="p-1.5 text-zinc-400 hover:text-amber-300 bg-zinc-900 hover:bg-zinc-800 border border-zinc-750 rounded transition ml-1 cursor-pointer"
+                            className="p-1.5 text-zinc-400 hover:text-amber-300 bg-[#161827] hover:bg-[#20243a] border border-amber-900/40 rounded-lg transition ml-1 cursor-pointer"
                             title="Customize unit & upload custom token image"
                           >
                             <ImageIcon className="w-3.5 h-3.5" />
                           </button>
                           <button
                             onClick={() => handleRemoveUnit(unit.id)}
-                            className="p-1.5 text-zinc-400 hover:text-rose-400 transition ml-0.5 cursor-pointer"
+                            className="p-1.5 text-zinc-400 hover:text-rose-400 bg-[#161827] hover:bg-rose-950/60 border border-zinc-800 hover:border-rose-800/60 rounded-lg transition ml-0.5 cursor-pointer"
                             title="Remove from roster"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -589,21 +663,24 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
 
         {/* Right Column: Armory Catalog with Role Filter (5 cols) */}
         <div className="lg:col-span-5 space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-base font-bold text-white">Faction Armory</h2>
-            <span className="text-xs text-zinc-400 font-mono">({filteredTemplates.length} Datasheets)</span>
+          <div className="flex items-center justify-between pb-1 border-b border-amber-900/25">
+            <h2 className="text-base font-black text-white flex items-center space-x-2">
+              <span className="text-amber-400">🛡️</span>
+              <span className="tracking-wide">Faction Armory</span>
+            </h2>
+            <span className="text-xs text-zinc-400 font-mono font-bold">({filteredTemplates.length} Datasheets)</span>
           </div>
 
           {/* Role Filter Chips */}
-          <div className="flex flex-wrap gap-1 border-b border-zinc-800 pb-2">
+          <div className="flex flex-wrap gap-1.5 border-b border-amber-900/20 pb-2.5">
             {['All', ...ROLES_LIST].map(r => (
               <button
                 key={r}
                 onClick={() => setActiveRoleFilter(r)}
-                className={`px-2.5 py-1 rounded-md text-[10px] font-bold font-mono transition ${
+                className={`px-2.5 py-1 rounded-lg text-[10px] font-bold font-mono transition-all border cursor-pointer ${
                   activeRoleFilter === r
-                    ? 'bg-rose-600 text-white'
-                    : 'bg-zinc-900 text-zinc-400 hover:text-white'
+                    ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-black border-amber-400 font-black shadow-[0_0_10px_rgba(245,158,11,0.3)]'
+                    : 'bg-[#0e101d] text-zinc-400 hover:text-white border-zinc-800 hover:border-zinc-700'
                 }`}
               >
                 {r}
@@ -616,7 +693,7 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
             {filteredTemplates.map(template => (
               <div
                 key={template.templateId}
-                className="bg-[#12141c] border border-zinc-800 rounded-xl p-3 flex flex-col justify-between hover:border-zinc-700 transition space-y-2"
+                className="bg-gradient-to-br from-[#111424]/90 via-[#0e101d]/90 to-[#0a0c16]/90 border border-amber-900/30 hover:border-amber-600/50 rounded-xl p-3.5 flex flex-col justify-between transition-all duration-200 shadow-md hover:shadow-[0_4px_20px_rgba(0,0,0,0.6)] space-y-2.5"
               >
                 <div className="flex items-start justify-between">
                   <div className="flex items-start space-x-2.5">
@@ -624,34 +701,36 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
                       <img
                         src={template.tokenImageUrl}
                         alt={template.name}
-                        className="w-9 h-9 rounded-lg object-cover border border-amber-500/40 shadow shrink-0"
+                        className="w-10 h-10 rounded-xl object-cover border-2 border-amber-500/50 shadow shrink-0"
                       />
                     ) : (
-                      <span className="text-2xl bg-zinc-950 p-1.5 rounded-lg border border-zinc-800 shrink-0">{template.avatar}</span>
+                      <span className="text-2xl bg-gradient-to-br from-zinc-900 to-black p-2 rounded-xl border border-amber-900/30 shrink-0 shadow-inner">{template.avatar}</span>
                     )}
                     <div>
-                      <div className="flex items-center space-x-1.5">
-                        <span className="font-bold text-white text-xs">{template.name}</span>
-                        <span className="text-[9px] px-1 rounded bg-zinc-800 text-zinc-300 font-mono">
+                      <div className="flex items-center space-x-2">
+                        <span className="font-bold text-white text-xs tracking-wide">{template.name}</span>
+                        <span className="text-[9px] px-1.5 py-0.2 rounded-md bg-[#16192b] text-amber-300 border border-amber-800/40 font-mono font-bold">
                           {template.role || template.type}
                         </span>
                       </div>
-                      <p className="text-[11px] text-zinc-400 mt-0.5">
+                      <p className="text-[11px] text-zinc-400 mt-0.5 font-mono">
                         {template.stats.modelCount || 1} models • {template.stats.hpPerModel || 1} HP/model ({template.stats.lives} Total Lives)
                       </p>
                     </div>
                   </div>
-                  <span className="text-xs font-bold text-amber-400 font-mono">{template.points} pts</span>
+                  <span className="bg-gradient-to-r from-amber-950 to-amber-900 px-2 py-0.5 rounded-md border border-amber-500/50 text-amber-300 font-black font-mono text-xs shadow">
+                    {template.points} pts
+                  </span>
                 </div>
 
-                <div className="flex items-center justify-between pt-1 border-t border-zinc-800 text-[10px] font-mono">
-                  <span className="text-zinc-400">
+                <div className="flex items-center justify-between pt-2 border-t border-amber-900/20 text-[10px] font-mono">
+                  <span className="text-zinc-400 font-bold">
                     Mv:{template.stats.mv} Def:{template.stats.def} AM:{template.stats.am} CP:{template.stats.cp}
                   </span>
-                  <div className="flex items-center space-x-1.5">
+                  <div className="flex items-center space-x-2">
                     <button
                       onClick={() => handleOpenEditUnit(template)}
-                      className="flex items-center space-x-1 bg-zinc-850 hover:bg-zinc-750 text-amber-300 border border-amber-500/40 font-bold px-2 py-1 rounded shadow text-xs transition cursor-pointer"
+                      className="flex items-center space-x-1 bg-gradient-to-b from-[#1c1f2e] to-[#121422] hover:from-[#252a3f] hover:to-[#181b2e] text-amber-300 border border-amber-500/40 font-bold px-2.5 py-1 rounded-lg shadow text-xs transition cursor-pointer"
                       title="Customize unit stats or upload custom token image"
                     >
                       <ImageIcon className="w-3 h-3" />
@@ -659,7 +738,7 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
                     </button>
                     <button
                       onClick={() => handleAddUnit(template)}
-                      className="flex items-center space-x-1 bg-rose-600 hover:bg-rose-500 text-white font-bold px-2.5 py-1 rounded shadow text-xs cursor-pointer"
+                      className="flex items-center space-x-1 bg-gradient-to-r from-rose-700 to-rose-600 hover:from-rose-600 hover:to-rose-500 text-white font-black px-3 py-1 rounded-lg shadow-[0_0_10px_rgba(244,63,94,0.3)] border border-rose-500/50 text-xs cursor-pointer active:scale-95 transition"
                     >
                       <Plus className="w-3 h-3" />
                       <span>Enlist</span>
@@ -674,41 +753,43 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
 
       {/* Saved Armies Library Modal */}
       {showLibraryModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#11131c] border border-zinc-700 rounded-2xl max-w-3xl w-full p-6 shadow-2xl flex flex-col max-h-[85vh] overflow-hidden space-y-4">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-gradient-to-b from-[#121526] via-[#0d0f1b] to-[#080913] border border-amber-900/50 rounded-2xl max-w-3xl w-full p-6 shadow-[0_16px_60px_rgba(0,0,0,0.9),0_0_20px_rgba(245,158,11,0.1)] flex flex-col max-h-[85vh] overflow-hidden space-y-4">
             {/* Header */}
-            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+            <div className="flex items-center justify-between border-b border-amber-900/25 pb-3">
               <div className="flex items-center space-x-2.5">
-                <FolderOpen className="w-5 h-5 text-amber-400" />
+                <FolderOpen className="w-5 h-5 text-amber-400 drop-shadow-[0_0_8px_rgba(251,191,36,0.3)]" />
                 <div>
-                  <h3 className="text-base font-bold text-white">Your Saved Armies Library</h3>
-                  <p className="text-xs text-zinc-400">Load or manage your saved forces across all factions</p>
+                  <h3 className="text-base font-black text-white tracking-wide">Saved Armies Library</h3>
+                  <p className="text-xs text-amber-200/60 font-serif">Load or manage your saved forces across all factions</p>
                 </div>
               </div>
               <button
                 onClick={() => setShowLibraryModal(false)}
-                className="p-1 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800 transition cursor-pointer"
+                className="p-1.5 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800/60 transition cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             {/* Search & Filters */}
-            <div className="space-y-2">
+            <div className="space-y-2.5">
               <input
                 type="text"
                 value={librarySearch}
                 onChange={e => setLibrarySearch(e.target.value)}
                 placeholder="Search by army name or tag (e.g. Vanguard, Aggro)..."
-                className="w-full bg-zinc-950 border border-zinc-750 px-3 py-2 rounded-lg text-xs text-white focus:border-amber-400 focus:outline-none font-mono"
+                className="w-full bg-[#0a0c16] border border-amber-900/30 focus:border-amber-400 focus:ring-1 focus:ring-amber-400/50 px-3.5 py-2 rounded-xl text-xs text-white placeholder-zinc-600 focus:outline-none font-mono transition"
               />
 
               <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
-                <span className="text-zinc-500 uppercase">Faction:</span>
+                <span className="text-zinc-500 uppercase font-bold mr-1">Faction:</span>
                 <button
                   onClick={() => setLibraryFactionFilter('All')}
-                  className={`px-2 py-0.5 rounded transition cursor-pointer ${
-                    libraryFactionFilter === 'All' ? 'bg-amber-400 text-black font-bold' : 'bg-zinc-900 text-zinc-400 hover:text-white'
+                  className={`px-2.5 py-1 rounded-lg transition cursor-pointer border ${
+                    libraryFactionFilter === 'All'
+                      ? 'bg-amber-500 text-black font-black border-amber-400 shadow-[0_0_8px_rgba(245,158,11,0.25)]'
+                      : 'bg-[#10121e] text-zinc-400 hover:text-white border-zinc-800'
                   }`}
                 >
                   All
@@ -717,8 +798,10 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
                   <button
                     key={f.id}
                     onClick={() => setLibraryFactionFilter(f.id)}
-                    className={`px-2 py-0.5 rounded transition cursor-pointer inline-flex items-center space-x-1.5 ${
-                      libraryFactionFilter === f.id ? 'bg-amber-400 text-black font-bold' : 'bg-zinc-900 text-zinc-400 hover:text-white'
+                    className={`px-2.5 py-1 rounded-lg transition cursor-pointer inline-flex items-center space-x-1.5 border ${
+                      libraryFactionFilter === f.id
+                        ? 'bg-amber-500 text-black font-black border-amber-400 shadow-[0_0_8px_rgba(245,158,11,0.25)]'
+                        : 'bg-[#10121e] text-zinc-400 hover:text-white border-zinc-800'
                     }`}
                   >
                     <FactionLogo faction={f} size="xs" />
@@ -731,8 +814,8 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
             {/* Armies List */}
             <div className="flex-1 overflow-y-auto space-y-3 pr-1">
               {filteredSavedArmies.length === 0 ? (
-                <div className="p-10 text-center border border-dashed border-zinc-800 rounded-xl space-y-2 text-zinc-500 text-xs">
-                  <FolderOpen className="w-8 h-8 mx-auto text-zinc-700" />
+                <div className="p-12 text-center border-2 border-dashed border-amber-900/25 rounded-xl space-y-2 text-zinc-500 text-xs font-mono">
+                  <FolderOpen className="w-8 h-8 mx-auto text-amber-900/30" />
                   <span>No saved armies match your search criteria.</span>
                 </div>
               ) : (
@@ -743,8 +826,10 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
                   return (
                     <div
                       key={army.id}
-                      className={`p-3.5 bg-zinc-950 rounded-xl border transition space-y-2.5 ${
-                        isCurrent ? 'border-amber-400/80 ring-1 ring-amber-400/50' : 'border-zinc-850 hover:border-zinc-700'
+                      className={`p-4 bg-gradient-to-r from-[#0d0f1b]/95 via-[#111424]/95 to-[#0d0f1b]/95 rounded-xl border transition-all duration-200 space-y-3 ${
+                        isCurrent
+                          ? 'border-amber-400/90 shadow-[0_0_15px_rgba(245,158,11,0.25)] ring-1 ring-amber-400/50'
+                          : 'border-amber-900/20 hover:border-amber-600/40 shadow-md'
                       }`}
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -752,9 +837,9 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
                           <FactionLogo faction={faction} size="md" />
                           <div>
                             <div className="flex items-center space-x-2">
-                              <h4 className="font-bold text-white text-sm">{army.name}</h4>
+                              <h4 className="font-bold text-white text-sm tracking-wide">{army.name}</h4>
                               {isCurrent && (
-                                <span className="px-1.5 py-0.2 rounded bg-amber-950 text-amber-300 border border-amber-600 font-mono text-[9px]">
+                                <span className="px-2 py-0.5 rounded-full bg-amber-950 text-amber-300 border border-amber-500/70 font-mono text-[9px] font-bold shadow-[0_0_6px_rgba(245,158,11,0.2)]">
                                   Active in Builder
                                 </span>
                               )}
@@ -765,23 +850,23 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
                           </div>
                         </div>
 
-                        <div className="flex items-center space-x-1.5">
+                        <div className="flex items-center space-x-2">
                           <button
                             onClick={() => handleLoadArmy(army)}
-                            className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-lg transition shadow cursor-pointer"
+                            className="px-3.5 py-1.5 bg-gradient-to-r from-rose-700 to-rose-600 hover:from-rose-600 hover:to-rose-500 text-white font-black text-xs rounded-xl shadow-[0_0_10px_rgba(244,63,94,0.3)] border border-rose-500/50 cursor-pointer active:scale-95 transition"
                           >
                             Load into Builder
                           </button>
                           <button
                             onClick={() => handleDuplicateArmy(army)}
-                            className="p-1.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 rounded-lg border border-zinc-750 transition cursor-pointer"
+                            className="p-2 bg-[#161827] hover:bg-[#20243a] text-zinc-300 hover:text-white rounded-xl border border-zinc-750 transition cursor-pointer"
                             title="Duplicate Army"
                           >
                             <Copy className="w-3.5 h-3.5" />
                           </button>
                           <button
                             onClick={() => handleDeleteArmy(army.id)}
-                            className="p-1.5 bg-zinc-900 hover:bg-rose-950 text-zinc-400 hover:text-rose-400 rounded-lg border border-zinc-750 transition cursor-pointer"
+                            className="p-2 bg-[#161827] hover:bg-rose-950 text-zinc-400 hover:text-rose-400 rounded-xl border border-zinc-750 hover:border-rose-900/60 transition cursor-pointer"
                             title="Delete Army"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -790,11 +875,11 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
                       </div>
 
                       {/* Tags & Unit Avatars Preview */}
-                      <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-zinc-900 text-[10px] font-mono">
-                        <div className="flex flex-wrap items-center gap-1">
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-amber-900/15 text-[10px] font-mono">
+                        <div className="flex flex-wrap items-center gap-1.5">
                           {army.tags && army.tags.length > 0 ? (
                             army.tags.map(t => (
-                              <span key={t} className="px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-amber-300">
+                              <span key={t} className="px-2 py-0.5 rounded-md bg-amber-950/60 border border-amber-700/40 text-amber-300">
                                 #{t}
                               </span>
                             ))
@@ -803,12 +888,12 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
                           )}
                         </div>
 
-                        <div className="flex items-center space-x-1">
+                        <div className="flex items-center space-x-1.5">
                           {army.units.slice(0, 6).map((u, i) => (
                             u.tokenImageUrl ? (
-                              <img key={i} src={u.tokenImageUrl} alt={u.name} title={u.name} className="w-5 h-5 rounded object-cover border border-zinc-700 shrink-0" />
+                              <img key={i} src={u.tokenImageUrl} alt={u.name} title={u.name} className="w-6 h-6 rounded-md object-cover border border-amber-600/40 shrink-0" />
                             ) : (
-                              <span key={i} title={u.name} className="text-xs bg-zinc-900 px-1 py-0.5 rounded border border-zinc-800">
+                              <span key={i} title={u.name} className="text-xs bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-800">
                                 {u.avatar}
                               </span>
                             )
@@ -825,11 +910,11 @@ export const ArmyBuilder: React.FC<ArmyBuilderProps> = ({ onDeployRosterToBattle
             </div>
 
             {/* Footer */}
-            <div className="flex justify-between items-center pt-2 border-t border-zinc-800 text-xs text-zinc-500 font-mono">
+            <div className="flex justify-between items-center pt-3 border-t border-amber-900/25 text-xs text-zinc-500 font-mono">
               <span>{filteredSavedArmies.length} armies found</span>
               <button
                 onClick={() => setShowLibraryModal(false)}
-                className="px-4 py-1.5 bg-zinc-850 hover:bg-zinc-800 text-zinc-300 rounded-lg cursor-pointer"
+                className="px-4 py-1.5 bg-[#171a29] hover:bg-[#202438] text-zinc-300 hover:text-white border border-zinc-700 rounded-xl cursor-pointer transition font-bold"
               >
                 Close
               </button>
