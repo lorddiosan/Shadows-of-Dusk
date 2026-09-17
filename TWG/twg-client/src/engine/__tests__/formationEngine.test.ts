@@ -11,9 +11,13 @@ import {
   checkPathCrossesUnits,
   getUnitBaseDimensions,
   setUnitMutualState,
-  executeAbandonShipProtocol
+  executeAbandonShipProtocol,
+  applyDamageToTokens,
+  findValidEngagementPosition,
+  getUnitCollisionRadius,
+  moveUnit
 } from '../formationEngine';
-import { resolveCombat } from '../combatEngine';
+import { resolveCombat, calculateArmorSaveTarget } from '../combatEngine';
 import { checkWinConditions } from '../scoringEngine';
 import { Token, Unit } from '../../types/game';
 
@@ -440,7 +444,7 @@ describe('Infiltration and Leader Attachment Rules', () => {
       });
 
       // 2 models * 2 attacks = 4 total attacks
-      const res = resolveCombat(attacker, defender, true);
+      const res = resolveCombat(attacker, defender, true, 0, { skipSaves: true });
       expect(res.totalAttacks).toBe(4);
       expect(res.hitRolls.length).toBe(4);
       expect(res.targetCurrentDef).toBe(5);
@@ -707,6 +711,170 @@ describe('Infiltration and Leader Attachment Rules', () => {
       const poisonBadge = getTraitBadgeInfo('Poisoned', true);
       expect(poisonBadge.icon).toBe('🧪');
       expect(poisonBadge.isTemp).toBe(true);
+    });
+  });
+
+  describe('Combined Attached Leader Attacks and Armor Save System', () => {
+    it('combines squad attacks and attached leader attacks into a single pool', () => {
+      const bodyguard = makeUnit({
+        id: 'bg_knights',
+        name: 'Iron Knights',
+        stats: { lives: 6, maxLives: 6, mv: 5, am: 5, def: 5, baseDef: 5, defModifier: 0, modelCount: 3, hpPerModel: 2, cp: 1, range: 4, rangedAttacks: 1, rangedDamageDice: 'd3' }
+      });
+      const leader = makeUnit({
+        id: 'lead_captain',
+        name: 'Iron Captain',
+        type: 'Character',
+        role: 'Leader',
+        stats: { lives: 4, maxLives: 4, mv: 5, am: 6, def: 6, baseDef: 6, defModifier: 0, modelCount: 1, hpPerModel: 4, cp: 2, range: 6, rangedAttacks: 2, rangedDamageDice: 'd6' }
+      });
+      const defender = makeUnit({
+        id: 'def_orkz',
+        name: 'Grot Vanguard',
+        stats: { lives: 10, maxLives: 10, mv: 4, am: 4, def: 4, baseDef: 4, defModifier: 0, modelCount: 5, hpPerModel: 2, cp: 0, range: 0 }
+      });
+
+      const res = resolveCombat(bodyguard, defender, false, 0, { attachedLeaders: [leader] });
+
+      // Squad has 3 models * 1 attack = 3. Leader has 1 model * 2 attacks = 2. Total attacks = 5
+      expect(res.totalAttacks).toBe(5);
+      expect(res.hitRolls.length).toBe(5);
+      expect(res.attackGroups?.length).toBe(2);
+      expect(res.attackGroups?.[0].unitName).toBe('Iron Knights');
+      expect(res.attackGroups?.[0].attacksCount).toBe(3);
+      expect(res.attackGroups?.[1].unitName).toBe('Iron Captain');
+      expect(res.attackGroups?.[1].attacksCount).toBe(2);
+      expect(res.attackerName).toContain('Iron Knights');
+      expect(res.attackerName).toContain('Iron Captain');
+    });
+
+    it('rolls 1d6 armor saves for defender and deflects saved hits', () => {
+      const attacker = makeUnit({
+        id: 'atk_squad',
+        name: 'Assault Squad',
+        stats: { lives: 4, maxLives: 4, mv: 6, am: 6, def: 5, baseDef: 5, defModifier: 0, modelCount: 2, hpPerModel: 2, cp: 1, range: 0, meleeAttacks: 3, meleeDamageDice: 'd6' }
+      });
+      // Def 6 defender -> Def 5-8 tier = 5+ armor save (or 4+ in cover)
+      const armoredDefender = makeUnit({
+        id: 'def_tank',
+        name: 'Dreadnought',
+        type: 'Vehicle',
+        stats: { lives: 12, maxLives: 12, mv: 4, am: 5, def: 6, baseDef: 6, defModifier: 0, modelCount: 1, hpPerModel: 12, cp: 1, range: 6 }
+      });
+
+      const res = resolveCombat(attacker, armoredDefender, true, 0);
+
+      expect(res.saveTarget).toBe(5); // 5+ save on 1d6 for Def 6
+      expect(res.saveRolls.length).toBe(res.hitsCount);
+      expect(res.savesCount + res.penetratingHits).toBe(res.hitsCount);
+      expect(res.damageRolls.length).toBe(res.penetratingHits);
+      expect(res.hitExplanations).toBeDefined();
+      expect(res.saveExplanations).toBeDefined();
+    });
+
+    it('protects attached leader tokens by allocating damage to bodyguard models first', () => {
+      const unitWithLeader: Unit = {
+        ...makeUnit({ id: 'squad_with_lead', stats: { lives: 6, maxLives: 6, mv: 5, am: 5, def: 5, baseDef: 5, defModifier: 0, modelCount: 2, hpPerModel: 2, cp: 1, range: 0 } }),
+        tokens: [
+          { id: 'bg_tok_1', unitId: 'squad_with_lead', currentLives: 2, maxLives: 2, x: 100, y: 100, offsetX: 0, offsetY: 0, rotation: 0, size: 40, isLeaderToken: false },
+          { id: 'lead_tok_1', unitId: 'squad_with_lead', currentLives: 4, maxLives: 4, x: 120, y: 100, offsetX: 20, offsetY: 0, rotation: 0, size: 40, isLeaderToken: true }
+        ]
+      };
+
+      // Deal 2 damage - should eliminate bodyguard token while preserving the leader token intact
+      const damagedUnit = applyDamageToTokens(unitWithLeader, 2);
+      expect(damagedUnit.tokens?.length).toBe(1);
+      expect(damagedUnit.tokens?.[0].isLeaderToken).toBe(true);
+      expect(damagedUnit.tokens?.[0].currentLives).toBe(4);
+    });
+
+    it('smoothly scales armor saves across full Def 1-20 range without negative numbers or overflow', () => {
+      const makeDefUnit = (def: number, armorSave?: number): Unit => makeUnit({
+        id: `unit_def_${def}`,
+        stats: { lives: 5, maxLives: 5, mv: 4, am: 4, def, baseDef: def, defModifier: 0, modelCount: 1, hpPerModel: 5, cp: 0, range: 0, armorSave }
+      });
+
+      // Def 1-4: 6+ Save
+      expect(calculateArmorSaveTarget(makeDefUnit(1))).toBe(6);
+      expect(calculateArmorSaveTarget(makeDefUnit(4))).toBe(6);
+
+      // Def 5-8: 5+ Save
+      expect(calculateArmorSaveTarget(makeDefUnit(5))).toBe(5);
+      expect(calculateArmorSaveTarget(makeDefUnit(8))).toBe(5);
+
+      // Def 9-12: 4+ Save
+      expect(calculateArmorSaveTarget(makeDefUnit(9))).toBe(4);
+      expect(calculateArmorSaveTarget(makeDefUnit(12))).toBe(4);
+
+      // Def 13-16: 3+ Save
+      expect(calculateArmorSaveTarget(makeDefUnit(13))).toBe(3);
+      expect(calculateArmorSaveTarget(makeDefUnit(16))).toBe(3);
+
+      // Def 17-20: 2+ Save (capped at 2+ so natural 1 always fails)
+      expect(calculateArmorSaveTarget(makeDefUnit(17))).toBe(2);
+      expect(calculateArmorSaveTarget(makeDefUnit(20))).toBe(2);
+
+      // Cover provides +1 improvement to save target (e.g. 5+ -> 4+, min 2+)
+      expect(calculateArmorSaveTarget(makeDefUnit(6), true)).toBe(4);
+      expect(calculateArmorSaveTarget(makeDefUnit(10), true)).toBe(3);
+      expect(calculateArmorSaveTarget(makeDefUnit(18), true)).toBe(2);
+
+      // Explicit custom armorSave override (2-6) is honored
+      expect(calculateArmorSaveTarget(makeDefUnit(4, 3))).toBe(3);
+      expect(calculateArmorSaveTarget(makeDefUnit(18, 4))).toBe(4);
+    });
+
+    it('accurately calculates collision radius for multi-model squads even without tokens', () => {
+      const fiveModelSquad = makeUnit({
+        id: 'squad_5m',
+        stats: { lives: 10, maxLives: 10, mv: 5, am: 5, def: 5, baseDef: 5, defModifier: 0, modelCount: 5, hpPerModel: 2, cp: 0, range: 0 }
+      });
+      // 5 models in circle formation have radius ~61px, not single-model 20px
+      const radius = getUnitCollisionRadius(fiveModelSquad);
+      expect(radius).toBeGreaterThanOrEqual(50);
+      expect(radius).toBeLessThanOrEqual(75);
+    });
+
+    it('findValidEngagementPosition strictly places charger in non-overlapping melee contact', () => {
+      const charger = makeUnit({
+        id: 'atk_squad',
+        position: { x: 300, y: 300 },
+        formation: 'circle',
+        stats: { lives: 10, maxLives: 10, mv: 6, am: 5, def: 5, baseDef: 5, defModifier: 0, modelCount: 5, hpPerModel: 2, cp: 0, range: 0 }
+      });
+      const target = makeUnit({
+        id: 'def_squad',
+        position: { x: 400, y: 300 },
+        formation: 'circle',
+        stats: { lives: 10, maxLives: 10, mv: 5, am: 5, def: 5, baseDef: 5, defModifier: 0, modelCount: 5, hpPerModel: 2, cp: 0, range: 0 }
+      });
+
+      const allUnits = [charger, target];
+      const res = findValidEngagementPosition(charger, target, allUnits, 300);
+
+      expect(res.valid).toBe(true);
+      // Verify charger at new position does NOT collide with target
+      const movedCharger = moveUnit(charger, res.position, allUnits);
+      const colCheck = checkUniversalTokenCollisions(movedCharger.tokens || [], [target], charger.id);
+      expect(colCheck.hasCollision).toBe(false);
+    });
+
+    it('findValidEngagementPosition rejects engagement if an impassable obstacle surrounds target', () => {
+      const charger = makeUnit({
+        id: 'atk_squad',
+        position: { x: 100, y: 100 },
+        stats: { lives: 2, maxLives: 2, mv: 5, am: 5, def: 5, baseDef: 5, defModifier: 0, modelCount: 1, hpPerModel: 2, cp: 0, range: 0 }
+      });
+      const target = makeUnit({
+        id: 'def_target',
+        position: { x: 500, y: 500 },
+        stats: { lives: 2, maxLives: 2, mv: 5, am: 5, def: 5, baseDef: 5, defModifier: 0, modelCount: 1, hpPerModel: 2, cp: 0, range: 0 }
+      });
+
+      // Target is 400px away, but maxMoveDistancePx is only 50px
+      const res = findValidEngagementPosition(charger, target, [charger, target], 50);
+      expect(res.valid).toBe(false);
+      expect(res.position).toEqual(charger.position);
     });
   });
 });

@@ -23,6 +23,10 @@ import { TabletopCanvas, getTraitBadgeInfo } from './TabletopCanvas';
 import { vttDragBridge } from '../../services/dragBridge';
 import { vfxDispatcher } from '../../services/audioVfxService';
 import { FactionLogo } from '../common/FactionLogo';
+import { CrpgInitiativeQueue } from './crpg-hud/CrpgInitiativeQueue';
+import { CrpgPartyColumn } from './crpg-hud/CrpgPartyColumn';
+import { CrpgActionDock } from './crpg-hud/CrpgActionDock';
+import { CrpgSkillHotbar } from './crpg-hud/CrpgSkillHotbar';
 import { 
   gridDistance, worldDistance, moveUnit, setUnitFormation, 
   syncUnitTokens, applyDamageToTokens, isInsideDeploymentZone, 
@@ -34,7 +38,7 @@ import {
   getUnitCollisionRadius, isUnitInShootingRange, isUnitInMeleeRange,
   getUnitsModelDistance, findValidMovePositionForBot, findNearestNonOverlappingPosition,
   checkPathCrossesUnits, validateDisembarkPlacement, getUnitBodiesAndLives,
-  executeAbandonShipProtocol
+  executeAbandonShipProtocol, findValidEngagementPosition
 } from '../../engine/formationEngine';
 
 interface BattlefieldProps {
@@ -292,6 +296,14 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
   // UI-004: Right Sidebar collapse toggle (enables full-width tactical canvas)
   const [showRightSidebar, setShowRightSidebar] = useState<boolean>(true);
 
+  // Collapsible HUD character displays (turn queue & party column)
+  const [showInitiativeQueue, setShowInitiativeQueue] = useState<boolean>(false);
+  const [showPartyColumn, setShowPartyColumn] = useState<boolean>(true);
+
+  // Collapsible lower Action Dock and Skill Hotbar
+  const [showActionDock, setShowActionDock] = useState<boolean>(true);
+  const [showHotbar, setShowHotbar] = useState<boolean>(true);
+
   // BUG-026: Deployment error toast & Bot action status indicators
   const [deploymentErrorNotice, setDeploymentErrorNotice] = useState<string | null>(null);
   const [abandonShipNotice, setAbandonShipNotice] = useState<string | null>(null);
@@ -334,16 +346,56 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
   const [diceThreshold, setDiceThreshold] = useState<number>(4);
   const [diceResults, setDiceResults] = useState<number[]>([4, 6]);
   const [isRolling, setIsRolling] = useState<boolean>(false);
+  const [diceExplanation, setDiceExplanation] = useState<string | null>(null);
+  const [diceDieExplanations, setDiceDieExplanations] = useState<string[]>([]);
   const [diceHistory, setDiceHistory] = useState<Array<{
     id: string;
     notation: string;
     rolls: number[];
     sum: number;
     successes?: number;
+    explanation?: string;
+    dieExplanations?: string[];
     timestamp: string;
   }>>([
-    { id: 'roll_init', notation: '2d6', rolls: [4, 6], sum: 10, successes: 2, timestamp: 'Start' }
+    { id: 'roll_init', notation: '2d6', rolls: [4, 6], sum: 10, successes: 2, explanation: 'Initial deployment roll', timestamp: 'Start' }
   ]);
+
+  // Auto-open and display live rolling dice in the Virtual Dice Tray whenever dice are rolled
+  const displayCombatDiceInTray = (
+    rolls: number[],
+    sides: number = 6,
+    threshold: number = 0,
+    notation: string = 'Combat Roll',
+    explanation?: string,
+    dieExplanations?: string[]
+  ) => {
+    if (!rolls || rolls.length === 0) return;
+    setDiceDrawerOpen(true);
+    setDiceCount(rolls.length);
+    setDiceSides(sides);
+    setDiceThreshold(threshold);
+    setIsRolling(true);
+    setDiceExplanation(explanation || null);
+    setDiceDieExplanations(dieExplanations || []);
+    setTimeout(() => {
+      setDiceResults(rolls);
+      const sum = rolls.reduce((a, b) => a + b, 0);
+      const successes = threshold > 0 ? rolls.filter(r => r >= threshold).length : undefined;
+      const record = {
+        id: `roll_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+        notation,
+        rolls,
+        sum,
+        successes,
+        explanation,
+        dieExplanations,
+        timestamp: new Date().toLocaleTimeString()
+      };
+      setDiceHistory(prev => [record, ...prev.slice(0, 19)]);
+      setIsRolling(false);
+    }, 450);
+  };
 
   // VTT UI Controls
   const [activeTool, setActiveTool] = useState<'select' | 'move' | 'measure' | 'target' | 'inspect'>('select');
@@ -413,6 +465,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       const rolls = Array.from({ length: count }, () => Math.floor(Math.random() * sides) + 1);
       const sum = rolls.reduce((a, b) => a + b, 0);
       addLog(`🎲 Rolled ${dice}: [${rolls.join(', ')}] = ${sum}`, 'combat', 'Dice');
+      displayCombatDiceInTray(rolls, sides, 0, `Manual Roll (${dice})`);
     } else {
       addLog(msg, 'info', 'GM');
     }
@@ -1344,8 +1397,10 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
       const tokenToMove = unit.tokens?.find(t => t.id === tokenId);
       if (tokenToMove) {
+        const otherSquadToks = (unit.tokens || []).filter(t => t.id !== tokenId && t.currentLives > 0);
         const candidateTok = { ...tokenToMove, x: newWorldPos.x, y: newWorldPos.y };
-        const colCheck = checkUniversalTokenCollisions([candidateTok], gameState.units, unit.id, tokenId);
+        const fullSquad = [...otherSquadToks, candidateTok];
+        const colCheck = checkUniversalTokenCollisions(fullSquad, gameState.units, unit.id);
         if (colCheck.hasCollision) {
           const msg = `⛔ Placement Rejected: Model base overlaps with ${colCheck.collidingUnitName}!`;
           addLog(msg, 'info');
@@ -1409,7 +1464,9 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       }
 
       // Universal Collision Check (No model base overlap, tangents permitted)
-      const colCheck = checkUniversalTokenCollisions([candidateTok], gameState.units, unit.id, tokenId);
+      const otherSquadToks = (unit.tokens || []).filter(t => t.id !== tokenId && t.currentLives > 0);
+      const fullSquad = [...otherSquadToks, candidateTok];
+      const colCheck = checkUniversalTokenCollisions(fullSquad, gameState.units, unit.id);
       if (colCheck.hasCollision) {
         addLog(`⛔ Movement Rejected: Model base overlaps with ${colCheck.collidingUnitName}! (Tangents permitted, no intersections).`, 'info');
         return;
@@ -2110,18 +2167,31 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
   // Dice Tray Roll Execution
   const handleRollDice = (count: number = diceCount, sides: number = diceSides, threshold: number = diceThreshold) => {
+    setDiceDrawerOpen(true);
     setIsRolling(true);
+    setDiceExplanation(null);
+    setDiceDieExplanations([]);
     setTimeout(() => {
       const rolls = Array.from({ length: count }, () => Math.floor(Math.random() * sides) + 1);
       const sum = rolls.reduce((a, b) => a + b, 0);
       const successes = threshold > 0 ? rolls.filter(r => r >= threshold).length : undefined;
       const notation = `${count}d${sides}`;
+      const exp = threshold > 0 ? `Target DC: ${threshold}+ on ${count}d${sides}` : `Manual Roll: ${count}d${sides}`;
+      const dieExps = threshold > 0 
+        ? rolls.map(r => r >= threshold ? `Die ${r} >= ${threshold}: Success 🎯` : `Die ${r} < ${threshold}: Failed ❌`)
+        : rolls.map(r => `Die ${r}`);
+
+      setDiceExplanation(exp);
+      setDiceDieExplanations(dieExps);
+
       const record = {
         id: `roll_${Date.now()}`,
         notation,
         rolls,
         sum,
         successes,
+        explanation: exp,
+        dieExplanations: dieExps,
         timestamp: new Date().toLocaleTimeString()
       };
       setDiceResults(rolls);
@@ -2426,55 +2496,50 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
   };
 
   // Combat Execution
-  const handleExecuteShooting = (specificShooter?: Unit) => {
+  // Combat Execution: Combined Shooting (Squad + Attached Leaders)
+  const handleExecuteShooting = (_specificShooter?: Unit) => {
     if (!selectedUnit || !targetUnit || !targetUnit.position) return;
 
-    // Determine shooter: specific unit passed, or attached leader if selected squad is melee-only
-    let shooter: Unit = specificShooter || selectedUnit;
-    if (!specificShooter && selectedUnit.stats.range === 0 && selectedUnit.attachedUnits) {
-      const attachedLeaders = selectedUnit.attachedUnits
-        .map(id => gameState.units.find(u => u.id === id))
-        .filter((l): l is Unit => !!l && l.stats.range > 0 && (l.stats?.lives ?? 0) > 0);
-      if (attachedLeaders.length > 0) {
-        shooter = attachedLeaders[0];
-      }
-    }
+    // Identify host squad and all attached leaders
+    const isAttachedLeader = !!selectedUnit.attachedTo;
+    const hostSquad = isAttachedLeader
+      ? (gameState.units.find(u => u.id === selectedUnit.attachedTo) || selectedUnit)
+      : selectedUnit;
 
-    const isLeaderShooting = !!shooter.attachedTo || (selectedUnit.attachedUnits?.includes(shooter.id) && shooter.id !== selectedUnit.id);
-    const hostSquad = isLeaderShooting
-      ? gameState.units.find(u => u.id === (shooter.attachedTo || selectedUnit.id))
-      : null;
+    const attachedLeaderUnits = (hostSquad.attachedUnits || [])
+      .map(id => gameState.units.find(u => u.id === id))
+      .filter((l): l is Unit => !!l && l.stats.lives > 0);
 
     const currentActions = selectedUnit.actionsRemaining ?? 2;
     if (gameState.phase === 'Action' && currentActions <= 0) {
       addLog(`⛔ Cannot Shoot: ${selectedUnit.name} has no actions remaining!`, 'info');
       return;
     }
-
-    if (shooter.stats.range === 0) {
-      addLog(`⛔ Cannot Shoot: ${shooter.name} is melee-only (range 0)!`, 'info');
-      return;
-    }
-    if (gameState.phase !== 'Action' && shooter.hasShot) {
-      addLog(`⛔ Cannot Shoot: ${shooter.name} has already fired this round!`, 'info');
+    if (gameState.phase !== 'Action' && (selectedUnit.hasShot || hostSquad.hasShot)) {
+      addLog(`⛔ Cannot Shoot: ${selectedUnit.name} has already fired this round!`, 'info');
       return;
     }
 
-    const originPos = shooter.position || hostSquad?.position;
+    const originPos = hostSquad.position || selectedUnit.position;
     if (!originPos) return;
 
-    const measuringUnit: Unit = {
-      ...(hostSquad || shooter),
-      stats: {
-        ...(hostSquad || shooter).stats,
-        range: shooter.stats.range
-      }
-    };
+    // Check which components of the combined unit can shoot
+    const squadCanShoot = hostSquad.stats.range > 0 && isUnitInShootingRange(hostSquad, targetUnit, DEFAULT_GRID_SIZE);
+    const shootingLeaders = attachedLeaderUnits.filter(l => {
+      if (l.stats.range <= 0) return false;
+      const measuringLeader: Unit = { ...l, position: originPos };
+      return isUnitInShootingRange(measuringLeader, targetUnit, DEFAULT_GRID_SIZE);
+    });
 
-    if (!isUnitInShootingRange(measuringUnit, targetUnit, DEFAULT_GRID_SIZE)) {
-      const { minModelDistPx } = getUnitsModelDistance(measuringUnit, targetUnit);
-      const distSq = (minModelDistPx / DEFAULT_GRID_SIZE).toFixed(1);
-      addLog(`Target is out of range (${distSq} sq > ${shooter.stats.range} sq).`, 'info');
+    if (!squadCanShoot && shootingLeaders.length === 0) {
+      const maxRng = Math.max(hostSquad.stats.range, ...attachedLeaderUnits.map(l => l.stats.range), 0);
+      if (maxRng === 0) {
+        addLog(`⛔ Cannot Shoot: ${hostSquad.name} and attached leaders are melee-only (range 0)!`, 'info');
+      } else {
+        const { minModelDistPx } = getUnitsModelDistance(hostSquad, targetUnit);
+        const distSq = (minModelDistPx / DEFAULT_GRID_SIZE).toFixed(1);
+        addLog(`Target is out of range (${distSq} sq > max range ${maxRng} sq).`, 'info');
+      }
       return;
     }
 
@@ -2484,34 +2549,73 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       return Math.hypot(originPos.x - tx, originPos.y - ty) < 45 && t.type === 'HighGround';
     });
 
-    const attackerUnit: Unit = {
-      ...shooter,
-      position: originPos
-    };
+    const targetInCover = gameState.specialTiles.some(t => {
+      if (!targetUnit.position) return false;
+      const tx = t.x > 30 ? t.x : t.x * DEFAULT_GRID_SIZE + DEFAULT_GRID_SIZE / 2;
+      const ty = t.y > 30 ? t.y : t.y * DEFAULT_GRID_SIZE + DEFAULT_GRID_SIZE / 2;
+      return Math.hypot(targetUnit.position.x - tx, targetUnit.position.y - ty) < 45 && t.type === 'AncientRuin';
+    });
 
-    const result = resolveCombat(attackerUnit, targetUnit, false, onHighGround ? 1 : 0);
+    // Primary shooter is squad (or first shooting leader if squad is melee-only)
+    const primaryShooter = squadCanShoot ? hostSquad : shootingLeaders[0];
+    const otherShooters = squadCanShoot 
+      ? shootingLeaders 
+      : shootingLeaders.filter(l => l.id !== primaryShooter.id);
+
+    const result = resolveCombat(
+      primaryShooter,
+      targetUnit,
+      false,
+      onHighGround ? 1 : 0,
+      { attachedLeaders: otherShooters, defenderInCover: targetInCover }
+    );
+
     setRecentCombatResult(result);
+
+    // 1. Display Attacker Hit Rolls in Virtual Dice Tray
+    const hitExp = `🎯 ${result.hitsCount} of ${result.totalAttacks} attack(s) hit target Def ${result.targetCurrentDef}.`;
+    displayCombatDiceInTray(
+      result.hitRolls,
+      20,
+      result.targetCurrentDef + 1,
+      `🎯 ${result.attackerName} vs ${targetUnit.name} (Hit d20 > Def ${result.targetCurrentDef})`,
+      hitExp,
+      result.hitExplanations
+    );
+
+    // 2. Display Defender Armor Save Rolls in Virtual Dice Tray if hits were scored
+    if (result.hitsCount > 0 && result.saveRolls.length > 0) {
+      setTimeout(() => {
+        const saveExp = `🛡️ ${result.savesCount} of ${result.hitsCount} hit(s) saved by ${result.saveTarget}+ Armor. ${result.penetratingHits} penetrated.`;
+        displayCombatDiceInTray(
+          result.saveRolls,
+          6,
+          result.saveTarget,
+          `🛡️ ${targetUnit.name} Armor Save (${result.saveTarget}+ on 1d6)`,
+          saveExp,
+          result.saveExplanations
+        );
+      }, 1200);
+    }
     
-    const combatMessage = isLeaderShooting && hostSquad
-      ? `🎯 [Leader Fire] ${shooter.name} (attached to ${hostSquad.name}) fired at ${targetUnit.name}! ${result.logText}`
-      : result.logText;
-    addLog(combatMessage, 'combat', gameState.phase === 'Action' ? 'Action' : 'Shooting');
-    applyDamageToUnit(targetUnit.id, result.livesLost, result.defModifierChange, shooter.owner);
+    addLog(result.logText, 'combat', gameState.phase === 'Action' ? 'Action' : 'Shooting');
+    applyDamageToUnit(targetUnit.id, result.livesLost, result.defModifierChange, primaryShooter.owner);
 
     // Trigger unit-specific and action-specific shooting VFX & SFX
     let shootVariant: 'ballistic' | 'laser' | 'plasma' = 'ballistic';
-    if (shooter.traits?.includes('Psionic') || shooter.abilities?.some(a => a.vfxType === 'laser')) {
+    if (primaryShooter.traits?.includes('Psionic') || primaryShooter.abilities?.some(a => a.vfxType === 'laser')) {
       shootVariant = 'laser';
-    } else if (shooter.type === 'Monster' || shooter.traits?.includes('Berserk') || shooter.abilities?.some(a => a.vfxType === 'plasma')) {
+    } else if (primaryShooter.type === 'Monster' || primaryShooter.traits?.includes('Berserk') || primaryShooter.abilities?.some(a => a.vfxType === 'plasma')) {
       shootVariant = 'plasma';
     }
     vfxDispatcher.triggerShoot(originPos, targetUnit.position, shootVariant);
 
-    // Mark shooter/squad as having shot and deduct 1 action
+    // Mark host squad and attached leaders as having shot and deduct 1 action
+    const actingIds = new Set<string>([hostSquad.id, ...attachedLeaderUnits.map(l => l.id)]);
     setGameState(prev => ({
       ...prev,
       units: prev.units.map(u => {
-        if (u.id === shooter.id || u.id === selectedUnit.id) {
+        if (actingIds.has(u.id)) {
           return {
             ...u,
             hasShot: true,
@@ -2524,7 +2628,16 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
   };
 
   const handleExecuteEngagement = () => {
-    if (!selectedUnit || !targetUnit || !selectedUnit.position || !targetUnit.position) return;
+    if (!selectedUnit || !targetUnit || !targetUnit.position) return;
+
+    // Identify host squad and all attached leaders
+    const isAttachedLeader = !!selectedUnit.attachedTo;
+    const hostSquad = isAttachedLeader
+      ? (gameState.units.find(u => u.id === selectedUnit.attachedTo) || selectedUnit)
+      : selectedUnit;
+
+    const originPos = hostSquad.position || selectedUnit.position;
+    if (!originPos) return;
 
     const currentActions = selectedUnit.actionsRemaining ?? 2;
     if (gameState.phase === 'Action' && currentActions <= 0) {
@@ -2532,84 +2645,81 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       return;
     }
 
-    const { minModelDistPx } = getUnitsModelDistance(selectedUnit, targetUnit);
+    const { minModelDistPx } = getUnitsModelDistance(hostSquad, targetUnit);
     const currentDistSq = minModelDistPx / DEFAULT_GRID_SIZE;
-    const chargeRes = rollCharge(selectedUnit.stats.mv);
+    const chargeRes = rollCharge(hostSquad.stats.mv);
 
+    const chargeExplanation = !chargeRes.success
+      ? `Failed: Rolled ${chargeRes.roll} on 1d6 (1-2 fails engagement). Unit remains in position.`
+      : chargeRes.distance < currentDistSq - 1.2
+      ? `Fell Short: Rolled ${chargeRes.roll} (${chargeRes.distance} sq reach < ${currentDistSq.toFixed(1)} sq needed). Unit remains in position.`
+      : `Success: Rolled ${chargeRes.roll} on 1d6 (${chargeRes.distance} sq). Reached base contact!`;
+
+    const chargeDieExp = !chargeRes.success
+      ? [`Roll ${chargeRes.roll} (1-2): Failed! Unit holds position ❌`]
+      : chargeRes.distance < currentDistSq - 1.2
+      ? [`Roll ${chargeRes.roll} (${chargeRes.distance} sq): Fell Short (${currentDistSq.toFixed(1)} sq needed). Unit holds position ⚠️`]
+      : [`Roll ${chargeRes.roll} (${chargeRes.distance} sq): Target Reached! ⚡`];
+
+    displayCombatDiceInTray(
+      [chargeRes.roll],
+      6,
+      chargeRes.success ? 3 : 0,
+      `⚡ ${hostSquad.name} Engagement Roll (1d6)`,
+      chargeExplanation,
+      chargeDieExp
+    );
+
+    const actingUnits = [hostSquad, ...((hostSquad.attachedUnits || []).map(id => gameState.units.find(u => u.id === id)).filter((l): l is Unit => !!l))];
+    const actingIds = new Set(actingUnits.map(u => u.id));
+
+    // CRITICAL FIX: Ensure no model changes position on a failed charge.
     if (!chargeRes.success) {
-      addLog(`❌ Engagement Failed! ${selectedUnit.name} rolled ${chargeRes.roll} on 1d6.`, 'charge', gameState.phase === 'Action' ? 'Action' : 'Charge');
+      addLog(`❌ Engagement Failed! ${hostSquad.name} rolled ${chargeRes.roll} on 1d6. Holds position.`, 'charge', gameState.phase === 'Action' ? 'Action' : 'Charge');
       setGameState(prev => ({
         ...prev,
-        units: prev.units.map(u => u.id === selectedUnit.id ? { 
+        units: prev.units.map(u => actingIds.has(u.id) ? { 
           ...u, 
           hasCharged: true,
+          isPendingMoveConfirm: false,
+          pendingOriginalPosition: null,
+          pendingOriginalTokens: null,
           actionsRemaining: Math.max(0, (u.actionsRemaining ?? 2) - 1)
         } : u)
       }));
+      return;
     } else if (chargeRes.distance < currentDistSq - 1.2) {
-      addLog(`⚠️ Engagement Fell Short! Rolled ${chargeRes.roll} (${chargeRes.distance} sq < ${currentDistSq.toFixed(1)} sq).`, 'charge', gameState.phase === 'Action' ? 'Action' : 'Charge');
+      addLog(`⚠️ Engagement Fell Short! Rolled ${chargeRes.roll} (${chargeRes.distance} sq < ${currentDistSq.toFixed(1)} sq). Holds position.`, 'charge', gameState.phase === 'Action' ? 'Action' : 'Charge');
       setGameState(prev => ({
         ...prev,
-        units: prev.units.map(u => u.id === selectedUnit.id ? { 
+        units: prev.units.map(u => actingIds.has(u.id) ? { 
           ...u, 
           hasCharged: true,
+          isPendingMoveConfirm: false,
+          pendingOriginalPosition: null,
+          pendingOriginalTokens: null,
           actionsRemaining: Math.max(0, (u.actionsRemaining ?? 2) - 1)
         } : u)
       }));
+      return;
     } else {
-      const angle = Math.atan2(targetUnit.position.y - selectedUnit.position.y, targetUnit.position.x - selectedUnit.position.x);
-      const targetRadius = getUnitCollisionRadius(targetUnit);
-      const chargerRadius = getUnitCollisionRadius(selectedUnit);
-      // Tangent base-to-base contact with 2px separation (BUG-011)
-      const contactDist = targetRadius + chargerRadius + 2;
-
-      // Filter out charger and its attached leaders from collision checks so they don't collide with themselves
-      const unitsToCheckCollision = gameState.units.filter(
-        u => u.id !== selectedUnit.id && !selectedUnit.attachedUnits?.includes(u.id)
+      const engagement = findValidEngagementPosition(
+        hostSquad,
+        targetUnit,
+        gameState.units,
+        chargeRes.distance * DEFAULT_GRID_SIZE
       );
 
-      // Search angles around target in 15-degree steps up to full circle to find closest non-overlapping base contact point
-      const angleDeltas: number[] = [0];
-      for (let step = 1; step <= 12; step++) {
-        angleDeltas.push(step * 0.26, -step * 0.26);
-      }
-
-      let foundValidCharge = false;
-      let bestPos = {
-        x: Math.max(chargerRadius, Math.min(1200 - chargerRadius, Math.round(targetUnit.position.x - Math.cos(angle) * contactDist))),
-        y: Math.max(chargerRadius, Math.min(800 - chargerRadius, Math.round(targetUnit.position.y - Math.sin(angle) * contactDist)))
-      };
-
-      for (const delta of angleDeltas) {
-        const testAngle = angle + delta;
-        const testX = Math.max(chargerRadius, Math.min(1200 - chargerRadius, Math.round(targetUnit.position.x - Math.cos(testAngle) * contactDist)));
-        const testY = Math.max(chargerRadius, Math.min(800 - chargerRadius, Math.round(targetUnit.position.y - Math.sin(testAngle) * contactDist)));
-        const testUnit = moveUnit(selectedUnit, { x: testX, y: testY }, gameState.units);
-        const colCheck = checkUniversalTokenCollisions(testUnit.tokens || [], unitsToCheckCollision, selectedUnit.id);
-        if (!colCheck.hasCollision) {
-          // BUG-023: Verify charge path doesn't cut through intervening units (screening squads / intervening models)
-          const pathCheck = checkPathCrossesUnits(
-            selectedUnit,
-            selectedUnit.position,
-            { x: testX, y: testY },
-            gameState.units,
-            { isCharge: true, chargeTargetUnitId: targetUnit.id }
-          );
-          if (!pathCheck.hasCollision) {
-            bestPos = { x: testX, y: testY };
-            foundValidCharge = true;
-            break;
-          }
-        }
-      }
-
-      if (!foundValidCharge) {
-        addLog(`⛔ Engagement Blocked: Intervening units obstruct all engagement paths between ${selectedUnit.name} and ${targetUnit.name}! (Units cannot move through models without FLY).`, 'charge', gameState.phase === 'Action' ? 'Action' : 'Charge');
+      if (!engagement.valid) {
+        addLog(`⛔ Engagement Blocked: Intervening units or terrain obstruct all engagement paths between ${hostSquad.name} and ${targetUnit.name}! (Units cannot move through models without FLY).`, 'charge', gameState.phase === 'Action' ? 'Action' : 'Charge');
         setGameState(prev => ({
           ...prev,
-          units: prev.units.map(u => u.id === selectedUnit.id ? { 
+          units: prev.units.map(u => actingIds.has(u.id) ? { 
             ...u, 
             hasCharged: true,
+            isPendingMoveConfirm: false,
+            pendingOriginalPosition: null,
+            pendingOriginalTokens: null,
             actionsRemaining: Math.max(0, (u.actionsRemaining ?? 2) - 1)
           } : u)
         }));
@@ -2617,94 +2727,140 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       }
 
       const chargedUnit = moveUnit({
-        ...selectedUnit,
+        ...hostSquad,
         hasCharged: true,
-        actionsRemaining: Math.max(0, (selectedUnit.actionsRemaining ?? 2) - 1),
-        advantageStacks: Math.min(2, selectedUnit.advantageStacks + 1)
-      }, bestPos, gameState.units);
+        isPendingMoveConfirm: false,
+        pendingOriginalPosition: null,
+        pendingOriginalTokens: null,
+        actionsRemaining: Math.max(0, (hostSquad.actionsRemaining ?? 2) - 1),
+        advantageStacks: Math.min(2, hostSquad.advantageStacks + 1)
+      }, engagement.position, gameState.units);
 
-      let nextUnits = gameState.units.map(u => u.id === selectedUnit.id ? chargedUnit : u);
+      let nextUnits = gameState.units.map(u => u.id === hostSquad.id ? chargedUnit : u);
 
       // BUG-021: Sync attached leader position & ensure attached leader is preserved
-      if (selectedUnit.attachedUnits && selectedUnit.attachedUnits.length > 0) {
+      if (hostSquad.attachedUnits && hostSquad.attachedUnits.length > 0) {
         const leaderTok = chargedUnit.tokens?.find(t => t.isLeaderToken);
-        const leaderPos = leaderTok ? { x: leaderTok.x, y: leaderTok.y } : bestPos;
+        const leaderPos = leaderTok ? { x: leaderTok.x, y: leaderTok.y } : engagement.position;
         nextUnits = nextUnits.map(u => {
-          if (selectedUnit.attachedUnits!.includes(u.id)) {
+          if (hostSquad.attachedUnits!.includes(u.id)) {
             return {
               ...u,
               position: leaderPos,
               hasCharged: true,
+              isPendingMoveConfirm: false,
+              pendingOriginalPosition: null,
+              pendingOriginalTokens: null,
               actionsRemaining: Math.max(0, (u.actionsRemaining ?? 2) - 1)
             };
           }
           return u;
         });
         // Re-sync chargedUnit tokens with updated nextUnits to ensure leader token is perpetually retained
-        nextUnits = nextUnits.map(u => u.id === selectedUnit.id ? syncUnitTokens(u, nextUnits) : u);
+        nextUnits = nextUnits.map(u => u.id === hostSquad.id ? syncUnitTokens(u, nextUnits) : u);
       }
 
       setGameState(prev => ({
         ...prev,
         units: nextUnits
       }));
-      addLog(`⚡ SUCCESSFUL ENGAGEMENT! ${selectedUnit.name} rolled ${chargeRes.roll}. Closed into melee (tangent contact)!`, 'charge', gameState.phase === 'Action' ? 'Action' : 'Charge');
+      addLog(`⚡ SUCCESSFUL ENGAGEMENT! ${hostSquad.name} rolled ${chargeRes.roll}. Closed into melee (tangent contact)!`, 'charge', gameState.phase === 'Action' ? 'Action' : 'Charge');
     }
   };
 
   const handleExecuteCharge = handleExecuteEngagement;
 
+  // Combat Execution: Combined Melee Fight (Squad + Attached Leaders)
   const handleExecuteFight = () => {
     if (!selectedUnit || !targetUnit || !selectedUnit.position || !targetUnit.position) return;
+
+    // Identify host squad and all attached leaders
+    const isAttachedLeader = !!selectedUnit.attachedTo;
+    const hostSquad = isAttachedLeader
+      ? (gameState.units.find(u => u.id === selectedUnit.attachedTo) || selectedUnit)
+      : selectedUnit;
+
+    const attachedLeaderUnits = (hostSquad.attachedUnits || [])
+      .map(id => gameState.units.find(u => u.id === id))
+      .filter((l): l is Unit => !!l && l.stats.lives > 0);
 
     const currentActions = selectedUnit.actionsRemaining ?? 2;
     if (gameState.phase === 'Action' && currentActions <= 0) {
       addLog(`⛔ Cannot Fight: ${selectedUnit.name} has no actions remaining!`, 'info');
       return;
     }
+    if (gameState.phase !== 'Action' && (selectedUnit.hasFought || hostSquad.hasFought)) {
+      addLog(`⛔ Cannot Fight: ${selectedUnit.name} has already fought this round!`, 'info');
+      return;
+    }
 
-    if (!isUnitInMeleeRange(selectedUnit, targetUnit, DEFAULT_GRID_SIZE)) {
-      const { minEdgeDistPx } = getUnitsModelDistance(selectedUnit, targetUnit);
+    if (!isUnitInMeleeRange(hostSquad, targetUnit, DEFAULT_GRID_SIZE)) {
+      const { minEdgeDistPx } = getUnitsModelDistance(hostSquad, targetUnit);
       const edgeSq = (minEdgeDistPx / DEFAULT_GRID_SIZE).toFixed(1);
       addLog(`Target is too far for melee (edge distance ${edgeSq} sq > 1.0 sq engagement range).`, 'info');
       return;
     }
 
-    // 1. Host unit resolves combat
-    const result = resolveCombat(selectedUnit, targetUnit, true, 0);
+    const targetInCover = gameState.specialTiles.some(t => {
+      if (!targetUnit.position) return false;
+      const tx = t.x > 30 ? t.x : t.x * DEFAULT_GRID_SIZE + DEFAULT_GRID_SIZE / 2;
+      const ty = t.y > 30 ? t.y : t.y * DEFAULT_GRID_SIZE + DEFAULT_GRID_SIZE / 2;
+      return Math.hypot(targetUnit.position.x - tx, targetUnit.position.y - ty) < 45 && t.type === 'AncientRuin';
+    });
+
+    // Resolve combined melee attack (Bodyguard Squad + Attached Leaders)
+    const result = resolveCombat(
+      hostSquad,
+      targetUnit,
+      true,
+      0,
+      { attachedLeaders: attachedLeaderUnits, defenderInCover: targetInCover }
+    );
+
     setRecentCombatResult(result);
+
+    // 1. Display Attacker Melee Hit Rolls in Virtual Dice Tray
+    const meleeExp = `⚔️ ${result.hitsCount} of ${result.totalAttacks} melee attack(s) hit target Def ${result.targetCurrentDef}.`;
+    displayCombatDiceInTray(
+      result.hitRolls,
+      20,
+      result.targetCurrentDef + 1,
+      `⚔️ ${result.attackerName} vs ${targetUnit.name} (Melee d20 > Def ${result.targetCurrentDef})`,
+      meleeExp,
+      result.hitExplanations
+    );
+
+    // 2. Display Defender Armor Save Rolls in Virtual Dice Tray if hits were scored
+    if (result.hitsCount > 0 && result.saveRolls.length > 0) {
+      setTimeout(() => {
+        const saveExp = `🛡️ ${result.savesCount} of ${result.hitsCount} hit(s) saved by ${result.saveTarget}+ Armor. ${result.penetratingHits} penetrated.`;
+        displayCombatDiceInTray(
+          result.saveRolls,
+          6,
+          result.saveTarget,
+          `🛡️ ${targetUnit.name} Armor Save (${result.saveTarget}+ on 1d6)`,
+          saveExp,
+          result.saveExplanations
+        );
+      }, 1200);
+    }
+
     addLog(result.logText, 'combat', gameState.phase === 'Action' ? 'Action' : 'Fight');
-    applyDamageToUnit(targetUnit.id, result.livesLost, result.defModifierChange, selectedUnit.owner);
+    applyDamageToUnit(targetUnit.id, result.livesLost, result.defModifierChange, hostSquad.owner);
 
     // Trigger Melee Fight VFX & SFX
     if (targetUnit.position) {
       let fightVariant: 'slash' | 'crush' | 'claws' = 'slash';
-      if (selectedUnit.type === 'Vehicle' || selectedUnit.traits?.includes('Unyielding') || selectedUnit.abilities?.some(a => a.vfxType === 'crush')) {
+      if (hostSquad.type === 'Vehicle' || hostSquad.traits?.includes('Unyielding') || hostSquad.abilities?.some(a => a.vfxType === 'crush')) {
         fightVariant = 'crush';
-      } else if (selectedUnit.type === 'Monster' || selectedUnit.traits?.includes('Berserk')) {
+      } else if (hostSquad.type === 'Monster' || hostSquad.traits?.includes('Berserk')) {
         fightVariant = 'claws';
       }
       vfxDispatcher.triggerFight(targetUnit.position, fightVariant);
     }
 
-    // 2. Attached Leader fights alongside their bodyguard unit (BUG-022)
-    if (selectedUnit.attachedUnits && selectedUnit.attachedUnits.length > 0) {
-      const attachedLeaders = selectedUnit.attachedUnits
-        .map(id => gameState.units.find(u => u.id === id))
-        .filter((l): l is Unit => !!l && l.stats.lives > 0);
-
-      for (const leader of attachedLeaders) {
-        const currentTarget = gameState.units.find(u => u.id === targetUnit.id);
-        if (currentTarget && currentTarget.stats.lives > 0) {
-          const leaderResult = resolveCombat(leader, currentTarget, true, 0);
-          addLog(`⚔️ [COMMANDER STRIKE] ${leader.name} fights alongside ${selectedUnit.name}! ${leaderResult.logText}`, 'combat', 'Commander Strike');
-          applyDamageToUnit(targetUnit.id, leaderResult.livesLost, leaderResult.defModifierChange, selectedUnit.owner);
-        }
-      }
-    }
-
     // Mark host squad and attached leaders as having fought and decrement 1 action
-    const foughtIds = new Set<string>([selectedUnit.id, ...(selectedUnit.attachedUnits || [])]);
+    const foughtIds = new Set<string>([hostSquad.id, ...attachedLeaderUnits.map(l => l.id)]);
     setGameState(prev => ({
       ...prev,
       units: prev.units.map(u => foughtIds.has(u.id) ? { 
@@ -2983,6 +3139,15 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
           }));
 
           if (abandonRes.reports.length > 0) {
+            const allD20s = abandonRes.reports.flatMap(r => r.models?.map(m => m.d20Roll) || []);
+            if (allD20s.length > 0) {
+              displayCombatDiceInTray(
+                allD20s,
+                20,
+                10,
+                `🚨 ${destroyedVehicle.name} Evac d20`
+              );
+            }
             const summaryText = abandonRes.reports.map(r => 
               `${r.unitName}: ${r.survivingModels}/${r.totalModels} survived (${r.killedModels} killed, -${r.totalDamage} HP)`
             ).join(' | ');
@@ -3576,16 +3741,42 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
         for (const fighter of activeUnitsWithActions) {
           const inMeleeTarget = p1Units.find(t => t.position && isUnitInMeleeRange(fighter, t, DEFAULT_GRID_SIZE));
           if (inMeleeTarget && inMeleeTarget.position) {
-            const res = resolveCombat(fighter, inMeleeTarget, true);
+            const attachedLeaders = (fighter.attachedUnits || [])
+              .map(id => gameState.units.find(u => u.id === id))
+              .filter((l): l is Unit => !!l && l.stats.lives > 0);
+
+            const res = resolveCombat(fighter, inMeleeTarget, true, 0, { attachedLeaders });
+            displayCombatDiceInTray(
+              res.hitRolls, 
+              20, 
+              res.targetCurrentDef + 1, 
+              `🤖 Bot Melee: ${res.attackerName} vs ${inMeleeTarget.name}`,
+              `Melee To-Hit: Need > Def ${res.targetCurrentDef} (${res.targetCurrentDef + 1}+ on 1d20)`,
+              res.hitExplanations
+            );
+            if (res.hitsCount > 0 && res.saveRolls.length > 0) {
+              setTimeout(() => {
+                displayCombatDiceInTray(
+                  res.saveRolls, 
+                  6, 
+                  res.saveTarget, 
+                  `🛡️ Armor Save: ${inMeleeTarget.name} (${res.saveTarget}+ on 1d6)`,
+                  `🛡️ ${res.savesCount} of ${res.hitsCount} hit(s) saved by ${res.saveTarget}+ Armor. ${res.penetratingHits} penetrated.`,
+                  res.saveExplanations
+                );
+              }, 1200);
+            }
+
             addLog(`Bot: ${res.logText}`, 'combat', 'Action');
             applyDamageToUnit(inMeleeTarget.id, res.livesLost, res.defModifierChange, 'player2');
             vfxDispatcher.triggerFight(
               inMeleeTarget.position, 
               fighter.type === 'Monster' ? 'claws' : fighter.type === 'Vehicle' ? 'crush' : 'slash'
             );
+            const actedIds = new Set([fighter.id, ...attachedLeaders.map(l => l.id)]);
             setGameState(prev => ({
               ...prev,
-              units: prev.units.map(u => u.id === fighter.id ? { 
+              units: prev.units.map(u => actedIds.has(u.id) ? { 
                 ...u, 
                 hasFought: true,
                 actionsRemaining: Math.max(0, (u.actionsRemaining ?? 2) - 1)
@@ -3600,7 +3791,32 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
           if (shooter.stats.range > 0) {
             const inRangeTarget = p1Units.find(t => t.position && isUnitInShootingRange(shooter, t, DEFAULT_GRID_SIZE));
             if (inRangeTarget && inRangeTarget.position) {
-              const res = resolveCombat(shooter, inRangeTarget, false);
+              const attachedLeaders = (shooter.attachedUnits || [])
+                .map(id => gameState.units.find(u => u.id === id))
+                .filter((l): l is Unit => !!l && l.stats.lives > 0);
+
+              const res = resolveCombat(shooter, inRangeTarget, false, 0, { attachedLeaders });
+              displayCombatDiceInTray(
+                res.hitRolls, 
+                20, 
+                res.targetCurrentDef + 1, 
+                `🤖 Bot Fire: ${res.attackerName} vs ${inRangeTarget.name}`,
+                `Ranged To-Hit: Need > Def ${res.targetCurrentDef} (${res.targetCurrentDef + 1}+ on 1d20)`,
+                res.hitExplanations
+              );
+              if (res.hitsCount > 0 && res.saveRolls.length > 0) {
+                setTimeout(() => {
+                  displayCombatDiceInTray(
+                    res.saveRolls, 
+                    6, 
+                    res.saveTarget, 
+                    `🛡️ Armor Save: ${inRangeTarget.name} (${res.saveTarget}+ on 1d6)`,
+                    `🛡️ ${res.savesCount} of ${res.hitsCount} hit(s) saved by ${res.saveTarget}+ Armor. ${res.penetratingHits} penetrated.`,
+                    res.saveExplanations
+                  );
+                }, 1200);
+              }
+
               addLog(`Bot: ${res.logText}`, 'combat', 'Action');
               applyDamageToUnit(inRangeTarget.id, res.livesLost, res.defModifierChange, 'player2');
               vfxDispatcher.triggerShoot(
@@ -3608,9 +3824,10 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                 inRangeTarget.position, 
                 shooter.traits?.includes('Psionic') ? 'laser' : shooter.type === 'Monster' ? 'plasma' : 'ballistic'
               );
+              const actedIds = new Set([shooter.id, ...attachedLeaders.map(l => l.id)]);
               setGameState(prev => ({
                 ...prev,
-                units: prev.units.map(u => u.id === shooter.id ? { 
+                units: prev.units.map(u => actedIds.has(u.id) ? { 
                   ...u, 
                   hasShot: true,
                   actionsRemaining: Math.max(0, (u.actionsRemaining ?? 2) - 1)
@@ -3631,41 +3848,76 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
           });
           if (nearEnemy && nearEnemy.position) {
             const res = rollCharge(charger.stats.mv);
+            const dist = getUnitsModelDistance(charger, nearEnemy).minModelDistPx / DEFAULT_GRID_SIZE;
+            const neededRoll = Math.max(1, Math.ceil(dist - charger.stats.mv));
+            const rollExp = res.roll <= 2
+              ? `Natural ${res.roll}: Stumble / Failed Roll ❌`
+              : res.distance < dist - 1.2
+              ? `Distance ${res.distance.toFixed(1)}" fell short of needed ${dist.toFixed(1)}" ❌`
+              : `Charge Reach ${res.distance.toFixed(1)}" reached target (dist ${dist.toFixed(1)}") 🎯`;
+            displayCombatDiceInTray(
+              [res.roll], 
+              6, 
+              neededRoll, 
+              `🤖 Bot Charge: ${charger.name} (1d6)`,
+              `Engagement Roll: Rolled ${res.roll} (Move ${charger.stats.mv}" + ${res.roll}" = ${res.distance.toFixed(1)}") vs ${dist.toFixed(1)}" Target`,
+              [rollExp]
+            );
             if (res.success) {
-              const angle = Math.atan2(nearEnemy.position.y - charger.position!.y, nearEnemy.position.x - charger.position!.x);
-              const targetRadius = getUnitCollisionRadius(nearEnemy);
-              const chargerRadius = getUnitCollisionRadius(charger);
-              const contactDist = targetRadius + chargerRadius + 2;
+              const engagement = findValidEngagementPosition(
+                charger,
+                nearEnemy,
+                gameState.units,
+                res.distance * DEFAULT_GRID_SIZE
+              );
 
-              const candidateAngles = [angle, angle + 0.25, angle - 0.25, angle + 0.5, angle - 0.5, angle + 0.75, angle - 0.75];
-              let bestPos = {
-                x: Math.max(chargerRadius, Math.min(1200 - chargerRadius, Math.round(nearEnemy.position.x - Math.cos(angle) * contactDist))),
-                y: Math.max(chargerRadius, Math.min(800 - chargerRadius, Math.round(nearEnemy.position.y - Math.sin(angle) * contactDist)))
-              };
+              if (engagement.valid) {
+                const charged = moveUnit({ 
+                  ...charger, 
+                  hasCharged: true, 
+                  actionsRemaining: Math.max(0, (charger.actionsRemaining ?? 2) - 1),
+                  advantageStacks: 1 
+                }, engagement.position, gameState.units);
 
-              for (const a of candidateAngles) {
-                const testX = Math.max(chargerRadius, Math.min(1200 - chargerRadius, Math.round(nearEnemy.position.x - Math.cos(a) * contactDist)));
-                const testY = Math.max(chargerRadius, Math.min(800 - chargerRadius, Math.round(nearEnemy.position.y - Math.sin(a) * contactDist)));
-                const testUnit = moveUnit(charger, { x: testX, y: testY }, gameState.units);
-                const colCheck = checkUniversalTokenCollisions(testUnit.tokens || [], gameState.units, charger.id);
-                if (!colCheck.hasCollision) {
-                  bestPos = { x: testX, y: testY };
-                  break;
+                let nextUnits = gameState.units.map(u => u.id === charger.id ? charged : u);
+
+                // Sync attached leaders if any
+                if (charger.attachedUnits && charger.attachedUnits.length > 0) {
+                  const leaderTok = charged.tokens?.find(t => t.isLeaderToken);
+                  const leaderPos = leaderTok ? { x: leaderTok.x, y: leaderTok.y } : engagement.position;
+                  nextUnits = nextUnits.map(u => {
+                    if (charger.attachedUnits!.includes(u.id)) {
+                      return {
+                        ...u,
+                        position: leaderPos,
+                        hasCharged: true,
+                        actionsRemaining: Math.max(0, (u.actionsRemaining ?? 2) - 1)
+                      };
+                    }
+                    return u;
+                  });
+                  nextUnits = nextUnits.map(u => u.id === charger.id ? syncUnitTokens(u, nextUnits) : u);
                 }
-              }
 
-              const charged = moveUnit({ 
-                ...charger, 
-                hasCharged: true, 
-                actionsRemaining: Math.max(0, (charger.actionsRemaining ?? 2) - 1),
-                advantageStacks: 1 
-              }, bestPos, gameState.units);
-              setGameState(prev => ({
-                ...prev,
-                units: prev.units.map(u => u.id === charger.id ? charged : u)
-              }));
-              addLog(`Bot: ${charger.name} successfully engaged ${nearEnemy.name}!`, 'charge', 'Action');
-              return;
+                setGameState(prev => ({
+                  ...prev,
+                  units: nextUnits
+                }));
+                addLog(`Bot: ${charger.name} successfully engaged ${nearEnemy.name}!`, 'charge', 'Action');
+                return;
+              } else {
+                // Charge failed due to obstruction or legal spacing
+                setGameState(prev => ({
+                  ...prev,
+                  units: prev.units.map(u => u.id === charger.id ? {
+                    ...u,
+                    hasCharged: true,
+                    actionsRemaining: Math.max(0, (u.actionsRemaining ?? 2) - 1)
+                  } : u)
+                }));
+                addLog(`Bot: ${charger.name} engagement blocked by obstruction or models!`, 'charge', 'Action');
+                return;
+              }
             } else {
               // Roll failed, spend 1 action
               setGameState(prev => ({
@@ -3691,7 +3943,32 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       if (shooter && shooter.position) {
         const inRangeTarget = p1Units.find(t => t.position && isUnitInShootingRange(shooter, t, DEFAULT_GRID_SIZE));
         if (inRangeTarget && inRangeTarget.position) {
-          const res = resolveCombat(shooter, inRangeTarget, false);
+          const attachedLeaders = (shooter.attachedUnits || [])
+            .map(id => gameState.units.find(u => u.id === id))
+            .filter((l): l is Unit => !!l && l.stats.lives > 0);
+
+          const res = resolveCombat(shooter, inRangeTarget, false, 0, { attachedLeaders });
+          displayCombatDiceInTray(
+            res.hitRolls, 
+            20, 
+            res.targetCurrentDef + 1, 
+            `🤖 Bot Fire: ${res.attackerName} vs ${inRangeTarget.name}`,
+            `Ranged To-Hit: Need > Def ${res.targetCurrentDef} (${res.targetCurrentDef + 1}+ on 1d20)`,
+            res.hitExplanations
+          );
+          if (res.hitsCount > 0 && res.saveRolls.length > 0) {
+            setTimeout(() => {
+              displayCombatDiceInTray(
+                res.saveRolls, 
+                6, 
+                res.saveTarget, 
+                `🛡️ Armor Save: ${inRangeTarget.name} (${res.saveTarget}+ on 1d6)`,
+                `🛡️ ${res.savesCount} of ${res.hitsCount} hit(s) saved by ${res.saveTarget}+ Armor. ${res.penetratingHits} penetrated.`,
+                res.saveExplanations
+              );
+            }, 1200);
+          }
+
           addLog(`Bot: ${res.logText}`, 'combat', 'Shooting');
           applyDamageToUnit(inRangeTarget.id, res.livesLost, res.defModifierChange, 'player2');
           vfxDispatcher.triggerShoot(
@@ -3699,9 +3976,10 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
             inRangeTarget.position, 
             shooter.traits?.includes('Psionic') ? 'laser' : shooter.type === 'Monster' ? 'plasma' : 'ballistic'
           );
+          const actedIds = new Set([shooter.id, ...attachedLeaders.map(l => l.id)]);
           setGameState(prev => ({
             ...prev,
-            units: prev.units.map(u => u.id === shooter.id ? { ...u, hasShot: true } : u)
+            units: prev.units.map(u => actedIds.has(u.id) ? { ...u, hasShot: true } : u)
           }));
           return;
         }
@@ -3720,36 +3998,65 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
         });
         if (nearEnemy && nearEnemy.position) {
           const res = rollCharge(charger.stats.mv);
+          const dist = getUnitsModelDistance(charger, nearEnemy).minModelDistPx / DEFAULT_GRID_SIZE;
+          const neededRoll = Math.max(1, Math.ceil(dist - charger.stats.mv));
+          const rollExp = res.roll <= 2
+            ? `Natural ${res.roll}: Stumble / Failed Roll ❌`
+            : res.distance < dist - 1.2
+            ? `Distance ${res.distance.toFixed(1)}" fell short of needed ${dist.toFixed(1)}" ❌`
+            : `Charge Reach ${res.distance.toFixed(1)}" reached target (dist ${dist.toFixed(1)}") 🎯`;
+          displayCombatDiceInTray(
+            [res.roll], 
+            6, 
+            neededRoll, 
+            `🤖 Bot Charge: ${charger.name} (1d6)`,
+            `Engagement Roll: Rolled ${res.roll} (Move ${charger.stats.mv}" + ${res.roll}" = ${res.distance.toFixed(1)}") vs ${dist.toFixed(1)}" Target`,
+            [rollExp]
+          );
           if (res.success) {
-            const angle = Math.atan2(nearEnemy.position.y - charger.position.y, nearEnemy.position.x - charger.position.x);
-            const targetRadius = getUnitCollisionRadius(nearEnemy);
-            const chargerRadius = getUnitCollisionRadius(charger);
-            const contactDist = targetRadius + chargerRadius + 2;
+            const engagement = findValidEngagementPosition(
+              charger,
+              nearEnemy,
+              gameState.units,
+              res.distance * DEFAULT_GRID_SIZE
+            );
 
-            const candidateAngles = [angle, angle + 0.25, angle - 0.25, angle + 0.5, angle - 0.5, angle + 0.75, angle - 0.75];
-            let bestPos = {
-              x: Math.max(chargerRadius, Math.min(1200 - chargerRadius, Math.round(nearEnemy.position.x - Math.cos(angle) * contactDist))),
-              y: Math.max(chargerRadius, Math.min(800 - chargerRadius, Math.round(nearEnemy.position.y - Math.sin(angle) * contactDist)))
-            };
+            if (engagement.valid) {
+              const charged = moveUnit({ ...charger, hasCharged: true, advantageStacks: 1 }, engagement.position, gameState.units);
 
-            for (const a of candidateAngles) {
-              const testX = Math.max(chargerRadius, Math.min(1200 - chargerRadius, Math.round(nearEnemy.position.x - Math.cos(a) * contactDist)));
-              const testY = Math.max(chargerRadius, Math.min(800 - chargerRadius, Math.round(nearEnemy.position.y - Math.sin(a) * contactDist)));
-              const testUnit = moveUnit(charger, { x: testX, y: testY }, gameState.units);
-              const colCheck = checkUniversalTokenCollisions(testUnit.tokens || [], gameState.units, charger.id);
-              if (!colCheck.hasCollision) {
-                bestPos = { x: testX, y: testY };
-                break;
+              let nextUnits = gameState.units.map(u => u.id === charger.id ? charged : u);
+
+              // Sync attached leaders if any
+              if (charger.attachedUnits && charger.attachedUnits.length > 0) {
+                const leaderTok = charged.tokens?.find(t => t.isLeaderToken);
+                const leaderPos = leaderTok ? { x: leaderTok.x, y: leaderTok.y } : engagement.position;
+                nextUnits = nextUnits.map(u => {
+                  if (charger.attachedUnits!.includes(u.id)) {
+                    return {
+                      ...u,
+                      position: leaderPos,
+                      hasCharged: true
+                    };
+                  }
+                  return u;
+                });
+                nextUnits = nextUnits.map(u => u.id === charger.id ? syncUnitTokens(u, nextUnits) : u);
               }
-            }
 
-            const charged = moveUnit({ ...charger, hasCharged: true, advantageStacks: 1 }, bestPos, gameState.units);
-            setGameState(prev => ({
-              ...prev,
-              units: prev.units.map(u => u.id === charger.id ? charged : u)
-            }));
-            addLog(`Bot: ${charger.name} successfully charged ${nearEnemy.name}!`, 'charge');
-            return;
+              setGameState(prev => ({
+                ...prev,
+                units: nextUnits
+              }));
+              addLog(`Bot: ${charger.name} successfully charged ${nearEnemy.name}!`, 'charge');
+              return;
+            } else {
+              setGameState(prev => ({
+                ...prev,
+                units: prev.units.map(u => u.id === charger.id ? { ...u, hasCharged: true } : u)
+              }));
+              addLog(`Bot: ${charger.name} charge blocked by obstruction/models!`, 'charge');
+              return;
+            }
           }
         }
       }
@@ -3762,16 +4069,42 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       if (fighter && fighter.position) {
         const inMeleeTarget = p1Units.find(t => t.position && isUnitInMeleeRange(fighter, t, DEFAULT_GRID_SIZE));
         if (inMeleeTarget && inMeleeTarget.position) {
-          const res = resolveCombat(fighter, inMeleeTarget, true);
+          const attachedLeaders = (fighter.attachedUnits || [])
+            .map(id => gameState.units.find(u => u.id === id))
+            .filter((l): l is Unit => !!l && l.stats.lives > 0);
+
+          const res = resolveCombat(fighter, inMeleeTarget, true, 0, { attachedLeaders });
+          displayCombatDiceInTray(
+            res.hitRolls, 
+            20, 
+            res.targetCurrentDef + 1, 
+            `🤖 Bot Melee: ${res.attackerName} vs ${inMeleeTarget.name}`,
+            `Melee To-Hit: Need > Def ${res.targetCurrentDef} (${res.targetCurrentDef + 1}+ on 1d20)`,
+            res.hitExplanations
+          );
+          if (res.hitsCount > 0 && res.saveRolls.length > 0) {
+            setTimeout(() => {
+              displayCombatDiceInTray(
+                res.saveRolls, 
+                6, 
+                res.saveTarget, 
+                `🛡️ Armor Save: ${inMeleeTarget.name} (${res.saveTarget}+ on 1d6)`,
+                `🛡️ ${res.savesCount} of ${res.hitsCount} hit(s) saved by ${res.saveTarget}+ Armor. ${res.penetratingHits} penetrated.`,
+                res.saveExplanations
+              );
+            }, 1200);
+          }
+
           addLog(`Bot: ${res.logText}`, 'combat', 'Fight');
           applyDamageToUnit(inMeleeTarget.id, res.livesLost, res.defModifierChange, 'player2');
           vfxDispatcher.triggerFight(
             inMeleeTarget.position, 
             fighter.type === 'Monster' ? 'claws' : fighter.type === 'Vehicle' ? 'crush' : 'slash'
           );
+          const actedIds = new Set([fighter.id, ...attachedLeaders.map(l => l.id)]);
           setGameState(prev => ({
             ...prev,
-            units: prev.units.map(u => u.id === fighter.id ? { ...u, hasFought: true } : u)
+            units: prev.units.map(u => actedIds.has(u.id) ? { ...u, hasFought: true } : u)
           }));
           return;
         }
@@ -3886,495 +4219,98 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
   const readyAbilitiesCount = availableAbilities.filter(a => a.isActivatable).length;
 
+  // CRPG Hotbar Keyboard Shortcuts (1..0, Space, E, I, K, G, M)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+
+      if (e.key === '1') {
+        if (selectedUnit?.isPendingDeploymentConfirm) {
+          handleConfirmDeployment(selectedUnit.id);
+        } else if (selectedUnit?.isPendingMoveConfirm) {
+          handleConfirmMove(selectedUnit.id);
+        } else if (selectedUnit?.isPendingDisembarkConfirm) {
+          handleConfirmDisembark(selectedUnit.id);
+        } else if (selectedUnit && selectedUnit.owner === gameState.activePlayer) {
+          setActiveTool('move');
+        }
+      } else if (e.key === '2') {
+        if (selectedUnit && selectedUnit.owner === gameState.activePlayer) {
+          handleExecuteShooting(selectedUnit);
+        }
+      } else if (e.key === '3') {
+        if (selectedUnit && selectedUnit.owner === gameState.activePlayer) {
+          if (gameState.phase === 'Action') {
+            handleExecuteEngagement();
+          } else {
+            handleExecuteCharge();
+          }
+        }
+      } else if (e.key === '4') {
+        if (selectedUnit && selectedUnit.owner === gameState.activePlayer) {
+          handleExecuteFight();
+        }
+      } else if (e.key === '5') {
+        if (selectedUnit && selectedUnit.owner === gameState.activePlayer) {
+          handleExecuteMissionAction();
+        }
+      } else if (e.key === '6') {
+        if (selectedUnit && selectedUnit.owner === gameState.activePlayer) {
+          const formations: FormationType[] = ['circle', 'line', 'grid', 'stack', 'auto'];
+          const currentIdx = formations.indexOf(selectedUnit.formation || 'circle');
+          const nextFormation = formations[(currentIdx + 1) % formations.length];
+          handleChangeFormation(selectedUnit.id, nextFormation);
+        }
+      } else if (e.key === '7') {
+        if (selectedUnit && selectedUnit.owner === gameState.activePlayer) {
+          if (selectedUnit.attachedUnits && selectedUnit.attachedUnits.length > 0) {
+            handleDetachLeader(selectedUnit.id, selectedUnit.attachedUnits[0]);
+          } else if (gameState.phase === 'Deployment') {
+            setAttachModalUnitId(selectedUnit.id);
+          }
+        }
+      } else if (e.key === '8') {
+        if (selectedUnit && selectedUnit.owner === gameState.activePlayer) {
+          setEmbarkModalUnitId(selectedUnit.id);
+        }
+      } else if (e.key === '9') {
+        setAbilitiesDockOpen(prev => !prev);
+      } else if (e.key === '0') {
+        setDiceDrawerOpen(prev => !prev);
+      } else if (e.key.toLowerCase() === 'e') {
+        setReservesDrawerOpen(prev => !prev);
+      } else if (e.key.toLowerCase() === 'i') {
+        setArmyTrayDrawerOpen(prev => !prev);
+      } else if (e.key.toLowerCase() === 'k') {
+        setCommandDrawerOpen(prev => !prev);
+      } else if (e.key.toLowerCase() === 'g') {
+        setCardDrawerTab('field_hazards');
+        setShowCardDrawer(prev => !prev);
+      } else if (e.key.toLowerCase() === 'm') {
+        setActiveTool(prev => prev === 'measure' ? 'select' : 'measure');
+      } else if (e.key === ' ') {
+        e.preventDefault();
+        if (gameState.activePlayer === 'player2') {
+          handleExecuteBotAction();
+        } else {
+          handleAdvancePhase();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedUnit, gameState.activePlayer, gameState.phase]);
+
   return (
     <div className="w-full h-[calc(100vh-50px)] flex flex-col bg-[#0b0d13] select-none overflow-hidden">
-      {/* ═══ AAA Tactical HUD — Top Control Strip ═══ */}
-      <div className="h-10 bg-gradient-to-r from-[#0b0d14] via-[#131725] to-[#0b0d14] border-b border-amber-900/40 shadow-[0_2px_18px_rgba(0,0,0,0.8),inset_0_-1px_0_rgba(251,191,36,0.10)] flex items-center justify-between px-3 shrink-0 text-xs">
-        <div className="flex items-center space-x-3 font-mono">
-          {/* Round beacon */}
-          <div className="flex items-center space-x-2">
-            <span className="relative flex h-2.5 w-2.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-500 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-600"></span>
-            </span>
-            <span className="font-black text-white uppercase tracking-wider text-[11px] drop-shadow-[0_0_6px_rgba(239,68,68,0.6)]">Round {gameState.round}</span>
-            <span className={`px-2 py-0.5 rounded-md font-black text-[10px] border shadow-lg tracking-wide uppercase ${
-              gameState.phase === 'Deployment' ? 'bg-amber-950/80 text-amber-300 border-amber-700/70 shadow-[0_0_10px_rgba(245,158,11,0.2)]'
-              : gameState.phase === 'Command' ? 'bg-purple-950/80 text-purple-300 border-purple-700/70 shadow-[0_0_10px_rgba(168,85,247,0.2)]'
-              : gameState.phase === 'Movement' ? 'bg-sky-950/80 text-sky-300 border-sky-700/70 shadow-[0_0_10px_rgba(56,189,248,0.2)]'
-              : gameState.phase === 'Shooting' ? 'bg-cyan-950/80 text-cyan-300 border-cyan-700/70 shadow-[0_0_10px_rgba(34,211,238,0.2)]'
-              : gameState.phase === 'Action' ? 'bg-rose-950/80 text-rose-300 border-rose-700/70 shadow-[0_0_10px_rgba(244,63,94,0.2)]'
-              : gameState.phase === 'Fight' ? 'bg-red-950/80 text-red-300 border-red-700/70 shadow-[0_0_10px_rgba(239,68,68,0.3)]'
-              : gameState.phase === 'Scoring' ? 'bg-emerald-950/80 text-emerald-300 border-emerald-700/70 shadow-[0_0_10px_rgba(52,211,153,0.2)]'
-              : 'bg-zinc-900/80 text-zinc-300 border-zinc-700'
-            }`}>
-              {gameState.phase}
-            </span>
-          </div>
-
-          <span className="text-amber-900/50 font-bold">│</span>
-
-          {/* Active player indicator */}
-          <div className={`flex items-center space-x-1.5 px-2.5 py-0.5 rounded-md border text-[10px] font-bold tracking-wide ${
-            gameState.activePlayer === 'player1'
-              ? 'bg-rose-950/60 text-rose-300 border-rose-800/50 shadow-[0_0_8px_rgba(244,63,94,0.12)]'
-              : 'bg-sky-950/60 text-sky-300 border-sky-800/50 shadow-[0_0_8px_rgba(56,189,248,0.12)]'
-          }`}>
-            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${gameState.activePlayer === 'player1' ? 'bg-rose-400' : 'bg-sky-400'} animate-pulse`}></span>
-            <span>{gameState.activePlayer === 'player1' ? 'Player 1 (West)' : 'Player 2 (East / Bot)'}</span>
-          </div>
-
-          {/* Score readout */}
-          <div className="flex items-center space-x-1.5 text-[11px]">
-            <span className="text-rose-400 font-bold tabular-nums">⚔️ {gameState.player1Score}<span className="text-rose-600/60 text-[10px]"> pts</span></span>
-            <span className="text-rose-700/60 font-mono text-[9px]">•</span>
-            <span className="text-rose-500/70 font-mono text-[10px] tabular-nums">{gameState.player1CP ?? 3}<span className="text-rose-700/50"> CP</span></span>
-            <span className="text-amber-600/80 font-black text-[10px] px-0.5">VS</span>
-            <span className="text-sky-500/70 font-mono text-[10px] tabular-nums">{gameState.player2CP ?? 3}<span className="text-sky-700/50"> CP</span></span>
-            <span className="text-sky-700/60 font-mono text-[9px]">•</span>
-            <span className="text-sky-400 font-bold tabular-nums">🛡️ {gameState.player2Score}<span className="text-sky-600/60 text-[10px]"> pts</span></span>
-
-            {/* Scoring Rules Popover */}
-            <div className="relative group cursor-help">
-              <span className="px-1.5 py-0.5 rounded-md bg-amber-950/50 border border-amber-800/40 text-amber-500/70 font-mono text-[10px] hover:bg-amber-900/60 hover:text-amber-300 transition flex items-center space-x-1">
-                <HelpCircle className="w-3 h-3" />
-                <span>Rules</span>
-              </span>
-              <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 hidden group-hover:block w-72 p-3 bg-zinc-950/95 border border-amber-500/60 rounded-xl shadow-2xl z-50 text-[11px] text-zinc-300 font-sans backdrop-blur pointer-events-none">
-                <div className="font-bold text-amber-300 font-mono text-xs uppercase mb-1.5 flex items-center space-x-1">
-                  <Trophy className="w-3.5 h-3.5" />
-                  <span>How You Score Points</span>
-                </div>
-                <ul className="space-y-1.5 list-disc list-inside">
-                  <li><strong className="text-white">POIs (Round End):</strong> Any unit with models inside the capture ring contests the objective. Higher CP wins: <span className="text-amber-400 font-mono">(Winner CP - Loser CP) × Multiplier (1x Basic / 2x Special)</span>.</li>
-                  <li><strong className="text-white">Unit Kills:</strong> Destroying an enemy squad grants <span className="text-rose-400 font-mono">+1 VP</span> (+2 VP for Characters/Leaders).</li>
-                  <li><strong className="text-white">Tactical Cards:</strong> Achieving active card objectives earns bonus VP.</li>
-                </ul>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Phase & Drawer Quick Controllers */}
-        <div className="flex items-center space-x-1.5">
-          {gameState.phase === 'Deployment' && (() => {
-            const currentDeployer = gameState.deployingPlayer || gameState.activePlayer;
-            const deployableCount = gameState.units.filter(
-              u => !u.position && !u.inStrategicReserve && !u.embarkedIn && !u.attachedTo && u.stats.lives > 0 && u.owner === currentDeployer
-            ).length;
-
-            return (
-              <button
-                onClick={() => {
-                  setArmyTrayDrawerOpen(prev => !prev);
-                  setDiceDrawerOpen(false);
-                  setCommandDrawerOpen(false);
-                  setReservesDrawerOpen(false);
-                  setEmbarkedDrawerOpen(false);
-                }}
-                className={`px-2 py-1 rounded-md shadow text-[11px] font-bold font-mono flex items-center space-x-1.5 transition border cursor-pointer ${
-                  armyTrayDrawerOpen 
-                    ? 'bg-amber-500/90 text-black border-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.4)] ring-1 ring-amber-300/50' 
-                    : 'bg-[#1a1d2a] hover:bg-[#21253a] text-amber-300/90 border-amber-800/50 hover:border-amber-600/60'
-                }`}
-                title="Toggle Army Tray (Deploy Units) Drawer"
-              >
-                <Users className="w-3.5 h-3.5" />
-                <span>Army Tray ({deployableCount})</span>
-              </button>
-            );
-          })()}
-
-          <button
-            onClick={() => {
-              setDiceDrawerOpen(prev => !prev);
-              setArmyTrayDrawerOpen(false);
-              setCommandDrawerOpen(false);
-              setReservesDrawerOpen(false);
-              setEmbarkedDrawerOpen(false);
-            }}
-            className={`px-2 py-1 rounded-md shadow text-[11px] font-bold font-mono flex items-center space-x-1.5 transition border cursor-pointer ${
-              diceDrawerOpen ? 'bg-amber-500/90 text-black border-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.35)]' : 'bg-[#1a1d2a] hover:bg-[#21253a] text-amber-300/90 border-amber-800/40 hover:border-amber-600/50'
-            }`}
-            title="Toggle Dice Tray Drawer"
-          >
-            <span>🎲</span>
-            <span>Dice Tray</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setCommandDrawerOpen(prev => !prev);
-              setArmyTrayDrawerOpen(false);
-              setDiceDrawerOpen(false);
-              setReservesDrawerOpen(false);
-              setEmbarkedDrawerOpen(false);
-            }}
-            className={`px-2 py-1 rounded-md shadow text-[11px] font-bold font-mono flex items-center space-x-1.5 transition border cursor-pointer ${
-              commandDrawerOpen ? 'bg-purple-500/80 text-white border-purple-400 shadow-[0_0_12px_rgba(168,85,247,0.35)]' : 'bg-[#1a1d2a] hover:bg-[#21253a] text-purple-300/90 border-purple-800/40 hover:border-purple-600/50'
-            }`}
-            title="Toggle Command Phase Drawer"
-          >
-            <Zap className="w-3.5 h-3.5" />
-            <span>Command (CP: {gameState.activePlayer === 'player1' ? gameState.player1CP ?? 3 : gameState.player2CP ?? 3})</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setReservesDrawerOpen(prev => !prev);
-              setArmyTrayDrawerOpen(false);
-              setDiceDrawerOpen(false);
-              setCommandDrawerOpen(false);
-              setEmbarkedDrawerOpen(false);
-            }}
-            className={`px-2 py-1 rounded-md shadow text-[11px] font-bold font-mono flex items-center space-x-1.5 transition border cursor-pointer ${
-              reservesDrawerOpen ? 'bg-amber-500/90 text-black border-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.35)]' : 'bg-[#1a1d2a] hover:bg-[#21253a] text-amber-300/80 border-amber-800/40 hover:border-amber-600/50'
-            }`}
-            title="Toggle Strategic Reserves Drawer"
-          >
-            <Box className="w-3.5 h-3.5" />
-            <span>Reserves ({gameState.units.filter(u => u.inStrategicReserve).length})</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setEmbarkedDrawerOpen(prev => !prev);
-              setArmyTrayDrawerOpen(false);
-              setDiceDrawerOpen(false);
-              setCommandDrawerOpen(false);
-              setReservesDrawerOpen(false);
-            }}
-            className={`px-2 py-1 rounded-md shadow text-[11px] font-bold font-mono flex items-center space-x-1.5 transition border cursor-pointer ${
-              embarkedDrawerOpen ? 'bg-sky-500/80 text-black border-sky-400 shadow-[0_0_12px_rgba(56,189,248,0.35)]' : 'bg-[#1a1d2a] hover:bg-[#21253a] text-sky-400/80 border-sky-800/40 hover:border-sky-600/50'
-            }`}
-            title="Toggle Embarked Units Drawer"
-          >
-            <Truck className="w-3.5 h-3.5" />
-            <span>Embarked ({gameState.units.filter(u => !!u.embarkedIn).length})</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setCardDrawerTab('missions');
-              setShowCardDrawer(true);
-            }}
-            className={`px-2 py-1 rounded-md shadow text-[11px] font-bold font-mono flex items-center space-x-1.5 transition border cursor-pointer ${
-              showCardDrawer && cardDrawerTab === 'missions'
-                ? 'bg-amber-500/80 text-black border-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.35)]'
-                : 'bg-[#1a1d2a] hover:bg-[#21253a] text-amber-300/80 border-amber-800/40 hover:border-amber-600/50'
-            }`}
-            title="Open Secondary Tactical Objectives Deck"
-          >
-            <Target className="w-3.5 h-3.5" />
-            <span>Secondary Deck ({gameState.activePlayer === 'player1' ? gameState.player1ActiveCards.filter(c => c.type === 'SecondaryMission').length : gameState.player2ActiveCards.filter(c => c.type === 'SecondaryMission').length})</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setCardDrawerTab('field_hazards');
-              setShowCardDrawer(true);
-            }}
-            className={`px-2 py-1 rounded-md shadow text-[11px] font-bold font-mono flex items-center space-x-1.5 transition border cursor-pointer ${
-              showCardDrawer && cardDrawerTab === 'field_hazards'
-                ? 'bg-rose-600/90 text-white border-rose-500 shadow-[0_0_12px_rgba(244,63,94,0.35)]'
-                : 'bg-[#1a1d2a] hover:bg-[#21253a] text-rose-400/80 border-rose-800/40 hover:border-rose-600/50'
-            }`}
-            title="Open Mid-Game Events & Hazard Disasters Deck (Shifting Terrain)"
-          >
-            <Flame className="w-3.5 h-3.5" />
-            <span>Event Deck ({gameState.activeEvents.filter(e => e.activeRemaining > 0).length > 0 ? gameState.activeEvents.filter(e => e.activeRemaining > 0)[0].name : '6 Hazards'})</span>
-          </button>
-
-          <div className="w-px h-5 bg-gradient-to-b from-transparent via-amber-800/50 to-transparent mx-1" />
-
-          {gameState.activePlayer === 'player2' ? (
-            <button
-              onClick={handleExecuteBotAction}
-              className="bg-gradient-to-r from-sky-700 to-sky-600 hover:from-sky-600 hover:to-sky-500 text-white font-black px-3 py-1 rounded-md shadow-lg text-[11px] flex items-center space-x-1.5 border border-sky-500/60 shadow-[0_0_10px_rgba(56,189,248,0.25)] cursor-pointer"
-            >
-              <span>Bot Action</span>
-              <ArrowRight className="w-3 h-3" />
-            </button>
-          ) : (
-            <button
-              onClick={handleAdvancePhase}
-              className="bg-gradient-to-r from-rose-700 via-rose-600 to-rose-700 hover:from-rose-600 hover:via-rose-500 hover:to-rose-600 text-white font-black px-3.5 py-1 rounded-md shadow-lg text-[11px] flex items-center space-x-1.5 border border-rose-500/60 shadow-[0_0_12px_rgba(244,63,94,0.3)] cursor-pointer tracking-wide"
-            >
-              <span>Next Turn / Phase</span>
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
-          )}
-
-          <div className="w-px h-5 bg-gradient-to-b from-transparent via-amber-800/50 to-transparent mx-1" />
-
-          {/* UI-004: Right Sidebar Collapse Toggle */}
-          <button
-            onClick={() => setShowRightSidebar(prev => !prev)}
-            className={`px-2 py-1 rounded-md shadow text-[11px] font-bold font-mono flex items-center space-x-1.5 transition border cursor-pointer ${
-              showRightSidebar 
-                ? 'bg-[#1a1d2a] hover:bg-[#21253a] text-zinc-400 border-zinc-700/60 hover:border-zinc-600' 
-                : 'bg-amber-900/20 hover:bg-amber-900/30 text-amber-400 border-amber-700/50 shadow-[0_0_8px_rgba(245,158,11,0.15)]'
-            }`}
-            title={showRightSidebar ? "Collapse Sidebar (Full Canvas Mode)" : "Expand Sidebar (Combat Log, Chat, Cards)"}
-          >
-            <ChevronRight className={`w-3.5 h-3.5 transition-transform duration-200 ${showRightSidebar ? '' : 'rotate-180'}`} />
-            <span className="hidden sm:inline">{showRightSidebar ? 'Hide Panel' : 'Show Panel'}</span>
-          </button>
-        </div>
-      </div>
-
-
       {/* Main Workspace (VTT Canvas + Roll20 Sidebars) */}
       <div className="flex-1 flex overflow-hidden relative">
-        {/* ─── Left Toolbar (Gem-Coloured Tool Pillar) ─── */}
-        <div className="w-11 bg-gradient-to-b from-[#0f1120] via-[#0d0f1c] to-[#0a0c18] border-r border-amber-900/25 shadow-[inset_-1px_0_0_rgba(251,191,36,0.05)] flex flex-col items-center py-2 space-y-1.5 shrink-0 z-20">
-          <button
-            onClick={() => setActiveTool('select')}
-            title="Select / Move Units (V)"
-            className={`p-2 rounded-lg transition-all cursor-pointer ${
-              activeTool === 'select' ? 'bg-rose-600/90 text-white shadow-lg shadow-rose-900/40 ring-1 ring-rose-500/50' : 'text-zinc-500 hover:text-rose-300 hover:bg-rose-950/40'
-            }`}
-          >
-            <Play className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setActiveTool('move')}
-            title="Free Hand Pan / Move"
-            className={`p-2 rounded-lg transition-all cursor-pointer ${
-              activeTool === 'move' ? 'bg-sky-600/90 text-white shadow-lg shadow-sky-900/40 ring-1 ring-sky-500/50' : 'text-zinc-500 hover:text-sky-300 hover:bg-sky-950/40'
-            }`}
-          >
-            <Move className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setActiveTool('measure')}
-            title="Ruler / Range Measure (M)"
-            className={`p-2 rounded-lg transition-all cursor-pointer ${
-              activeTool === 'measure' ? 'bg-amber-600/90 text-white shadow-lg shadow-amber-900/40 ring-1 ring-amber-500/50' : 'text-zinc-500 hover:text-amber-300 hover:bg-amber-950/40'
-            }`}
-          >
-            <Compass className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setActiveTool('target')}
-            title="Target Reticle"
-            className={`p-2 rounded-lg transition-all cursor-pointer ${
-              activeTool === 'target' ? 'bg-red-700/90 text-white shadow-lg shadow-red-900/40 ring-1 ring-red-500/50' : 'text-zinc-500 hover:text-red-300 hover:bg-red-950/40'
-            }`}
-          >
-            <Target className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setActiveTool('inspect')}
-            title="Inspection Tool (I) - Hover over units, terrain, hazards & objectives to inspect details"
-            className={`p-2 rounded-lg transition-all cursor-pointer ${
-              activeTool === 'inspect' ? 'bg-amber-500/90 text-black shadow-lg shadow-amber-900/40 ring-1 ring-amber-400/60 animate-pulse' : 'text-zinc-500 hover:text-amber-300 hover:bg-amber-950/40'
-            }`}
-          >
-            <HelpCircle className="w-4 h-4" />
-          </button>
-
-          <div className="w-7 h-px bg-gradient-to-r from-transparent via-amber-900/40 to-transparent my-0.5"></div>
-
-          <button
-            onClick={() => setShowCardDrawer(true)}
-            title="Command Cards Deck"
-            className="p-2 text-zinc-500 hover:text-amber-400 hover:bg-amber-950/30 rounded-lg transition-all cursor-pointer"
-          >
-            <Layers className="w-4 h-4" />
-          </button>
-
-          <div className="w-7 h-px bg-gradient-to-r from-transparent via-zinc-800/60 to-transparent my-0.5"></div>
-
-          <button
-            onClick={() => setZoomLevel(prev => Math.min(2.5, Math.round((prev + 0.15) * 100) / 100))}
-            title="Zoom In"
-            className="p-2 text-zinc-500 hover:text-white hover:bg-zinc-800/60 rounded-lg transition-all cursor-pointer"
-          >
-            <ZoomIn className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setZoomLevel(prev => Math.max(0.4, Math.round((prev - 0.15) * 100) / 100))}
-            title="Zoom Out"
-            className="p-2 text-zinc-500 hover:text-white hover:bg-zinc-800/60 rounded-lg transition-all cursor-pointer"
-          >
-            <ZoomOut className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setZoomLevel(1.0)}
-            title="Reset Zoom (100%)"
-            className="px-1 py-1 text-[10px] font-mono font-black text-zinc-500 hover:text-amber-300 hover:bg-amber-950/30 rounded-lg transition-all border border-transparent hover:border-amber-900/40 cursor-pointer tabular-nums"
-          >
-            {Math.round(zoomLevel * 100)}%
-          </button>
-        </div>
-
-
         {/* Center: Tactical Virtual Tabletop (VTT) Canvas */}
         <div className="flex-1 flex flex-col bg-[#07090e] overflow-hidden relative">
-          {/* Deployment Staging Bar (Top overlay when in Deployment) */}
-          {gameState.phase === 'Deployment' && (() => {
-            const currentDeployer = gameState.deployingPlayer || gameState.activePlayer;
-            const totalDeployerUnits = gameState.units.filter(u => u.owner === currentDeployer).length;
-            const p1Remaining = gameState.units.filter(u => u.owner === 'player1' && !u.position && !u.inStrategicReserve && !u.embarkedIn && !u.attachedTo && u.stats.lives > 0).length;
-            const p2Remaining = gameState.units.filter(u => u.owner === 'player2' && !u.position && !u.inStrategicReserve && !u.embarkedIn && !u.attachedTo && u.stats.lives > 0).length;
-            const trayUnits = gameState.units.filter(u => !u.position && !u.inStrategicReserve && !u.embarkedIn && !u.attachedTo && u.stats.lives > 0 && u.owner === currentDeployer);
-
-            return isDeployStagingMinimized ? (
-              <div className="w-full bg-gradient-to-r from-[#0e1018]/97 via-[#121525]/97 to-[#0e1018]/97 border-b border-amber-800/50 shadow-[0_4px_16px_rgba(0,0,0,0.6),inset_0_-1px_0_rgba(245,158,11,0.08)] px-4 py-1.5 flex items-center justify-between gap-2 z-10 shrink-0 text-xs">
-                <div className="flex items-center space-x-3">
-                  <span className="text-[11px] font-mono text-amber-300 font-bold">
-                    🪙 Deploying: <strong className={currentDeployer === 'player1' ? 'text-rose-400' : 'text-sky-400'}>{currentDeployer === 'player1' ? 'Player 1 (West)' : 'Player 2 (East / Bot)'}</strong>
-                  </span>
-                  <span className="text-[10px] font-mono text-zinc-500">P1: {p1Remaining} left | P2: {p2Remaining} left</span>
-                  {isBotDeploying && (
-                    <span className="text-[11px] font-mono text-sky-400 font-bold flex items-center space-x-1 animate-pulse">
-                      <span className="w-2 h-2 rounded-full bg-sky-400 animate-ping"></span>
-                      <span>🤖 Bot is positioning squad...</span>
-                    </span>
-                  )}
-                </div>
-                <button
-                  onClick={() => setIsDeployStagingMinimized(false)}
-                  className="px-2 py-0.5 rounded-md bg-amber-950/60 hover:bg-amber-900/70 text-amber-400 border border-amber-700/50 font-mono text-[10px] flex items-center space-x-1 cursor-pointer transition"
-                >
-                  <span>Show Unit Cards ▾</span>
-                </button>
-              </div>
-            ) : (
-              <div className="w-full bg-gradient-to-r from-[#0e1018]/97 via-[#121525]/97 to-[#0e1018]/97 border-b border-amber-800/50 shadow-[0_4px_20px_rgba(0,0,0,0.7),inset_0_-1px_0_rgba(245,158,11,0.08)] px-4 py-2 flex flex-wrap items-center justify-between gap-2 z-10 shrink-0">
-                <div className="flex items-center space-x-3">
-                  <div className="flex items-center space-x-1.5 px-2.5 py-1 rounded bg-amber-950/80 border border-amber-700/80 text-amber-300 font-mono text-[11px] font-bold">
-                    <span>🪙 First:</span>
-                    <span className="text-white uppercase">{gameState.deploymentCoinFlipWinner === 'player1' ? 'P1 (West)' : 'P2 (East)'}</span>
-                  </div>
-                  <div className="text-xs font-bold text-white flex items-center space-x-1.5">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                    <span>Turn:</span>
-                    <span className={currentDeployer === 'player1' ? 'text-rose-400' : 'text-sky-400'}>
-                      {currentDeployer === 'player1' ? 'Player 1 (West: x ≤ 200px)' : 'Player 2 (East / Bot)'}
-                    </span>
-                  </div>
-                  <div className="text-[11px] font-mono text-zinc-400 flex items-center space-x-2">
-                    <span>Tray:</span>
-                    <span className="text-rose-400 font-bold">P1: {p1Remaining}</span>
-                    <span>|</span>
-                    <span className="text-sky-400 font-bold">P2: {p2Remaining}</span>
-                  </div>
-
-                  {isBotDeploying && (
-                    <span className="text-xs font-mono text-sky-300 font-bold flex items-center space-x-1 animate-pulse">
-                      <span>🤖 Bot placing unit...</span>
-                    </span>
-                  )}
-
-                  <button
-                    onClick={() => setShowArmySelectionModal(true)}
-                    className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-750 text-amber-300 border border-amber-600/40 font-mono text-[10px] flex items-center space-x-1 shadow transition cursor-pointer"
-                    title="Change battle army from your saved library"
-                  >
-                    <FolderOpen className="w-3 h-3 text-amber-400" />
-                    <span>Army</span>
-                  </button>
-
-                  <button
-                    onClick={() => setIsDeployStagingMinimized(true)}
-                    className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-750 text-zinc-400 hover:text-zinc-200 border border-zinc-700 font-mono text-[10px] flex items-center space-x-0.5 cursor-pointer transition"
-                    title="Minimize deployment staging bar"
-                  >
-                    <span>Hide ▴</span>
-                  </button>
-                </div>
-
-                <div className="flex items-center space-x-2 overflow-x-auto max-w-[60%] py-0.5">
-                  {totalDeployerUnits === 0 ? (
-                    <span className="text-xs text-amber-400 font-mono flex items-center space-x-1.5">
-                      <span>⚠️ No army loaded — click "Army" to select your force.</span>
-                    </span>
-                  ) : trayUnits.length === 0 ? (
-                    <span className="text-xs text-zinc-500 font-mono italic">
-                      No units remaining in {currentDeployer === 'player1' ? 'P1' : 'P2'} tray. Click "Next Turn / Phase" to proceed.
-                    </span>
-                  ) : (
-                    trayUnits.map(u => {
-                      const isLeader = u.role === 'Leader' || u.role === 'Legendary Leader' || u.type === 'Character';
-                      const isInfantry = u.type === 'Infantry';
-                      return (
-                        <div
-                          key={u.id}
-                          draggable={true}
-                          onDragStart={(e) => {
-                            e.dataTransfer.setData('text/plain', u.id);
-                            e.dataTransfer.setData('application/json', JSON.stringify({ unitId: u.id, name: u.name }));
-                            e.dataTransfer.effectAllowed = 'copyMove';
-                            vttDragBridge.startDrag(u.id, u.name);
-                          }}
-                          onDragEnd={() => {
-                            vttDragBridge.endDrag();
-                          }}
-                          className={`flex items-center space-x-1.5 px-2 py-1 bg-gradient-to-b from-[#141628] to-[#0e1020] border ${
-                            isLeader
-                              ? 'border-purple-700/60 hover:border-purple-500/80 shadow-[0_0_6px_rgba(168,85,247,0.1)]'
-                              : 'border-amber-800/50 hover:border-amber-500/70 shadow-[0_0_6px_rgba(245,158,11,0.08)]'
-                          } rounded-lg text-xs text-white shadow-lg shrink-0 cursor-grab active:cursor-grabbing select-none transition-all`}
-                        >
-                          {u.tokenImageUrl ? (
-                            <img src={u.tokenImageUrl} alt={u.name} draggable={false} className="w-6 h-6 rounded-md object-cover border border-amber-500/50 shrink-0 pointer-events-none select-none" />
-                          ) : (
-                            <span className="text-base select-none pointer-events-none">{u.avatar}</span>
-                          )}
-                          <div className="flex flex-col text-[10px] leading-tight mr-1 pointer-events-none select-none">
-                            <span className="font-bold text-zinc-200">{u.name.split(' ')[0]}</span>
-                            <span className="text-amber-300/80 font-mono">{u.type} • {u.stats.lives}L</span>
-                          </div>
-
-                          <button
-                            onClick={() => handleDeployReserveUnit(u.id)}
-                            className="px-2 py-0.5 bg-amber-600 hover:bg-amber-500 text-black font-bold font-mono rounded text-[10px] transition cursor-pointer"
-                            title="Deploy unit to active player's flank"
-                          >
-                            Deploy Flank
-                          </button>
-
-                          <button
-                            onClick={() => handleHoldInStrategicReserve(u.id)}
-                            className="px-1.5 py-0.5 bg-zinc-800 hover:bg-zinc-750 text-amber-300 border border-amber-600/40 rounded text-[10px] font-mono transition flex items-center space-x-0.5 cursor-pointer"
-                            title="Hold back in Strategic Reserves (Deployable Round 2+ Movement Phase)"
-                          >
-                            <Box className="w-3 h-3" />
-                            <span>Reserve</span>
-                          </button>
-
-                          {isLeader && (
-                            <button
-                              onClick={() => setAttachModalUnitId(u.id)}
-                              className="px-1.5 py-0.5 bg-purple-900/80 hover:bg-purple-800 text-purple-200 border border-purple-600/50 rounded text-[10px] font-mono transition flex items-center space-x-0.5 cursor-pointer"
-                              title="Attach Leader to an Infantry squad"
-                            >
-                              <UserPlus className="w-3 h-3" />
-                              <span>Attach</span>
-                            </button>
-                          )}
-
-                          {isInfantry && (
-                            <button
-                              onClick={() => setEmbarkModalUnitId(u.id)}
-                              className="px-1.5 py-0.5 bg-sky-900/80 hover:bg-sky-800 text-sky-200 border border-sky-600/50 rounded text-[10px] font-mono transition flex items-center space-x-0.5 cursor-pointer"
-                              title="Embark inside a friendly transport vehicle"
-                            >
-                              <Truck className="w-3 h-3" />
-                              <span>Embark</span>
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-            );
-          })()}
-
           {/* Continuous Virtual Tabletop Canvas Scene */}
           <div className="flex-1 relative overflow-hidden">
             <TabletopCanvas
@@ -4408,685 +4344,112 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
             />
           </div>
 
-          {/* Bottom-left Faction Crest Badge */}
-          <div className="absolute bottom-3 left-3 flex items-center space-x-2 bg-gradient-to-r from-[#0c0e17]/95 to-[#101320]/95 border border-amber-800/50 px-3 py-1.5 rounded-full shadow-[0_4px_20px_rgba(0,0,0,0.7),0_0_12px_rgba(245,158,11,0.08)] z-20 pointer-events-none backdrop-blur-sm">
-            <div className="w-7 h-7 rounded-full border-2 border-amber-500/70 bg-gradient-to-br from-amber-900/60 to-black flex items-center justify-center text-base shadow-inner">
-              ⚔️
-            </div>
-            <div>
-              <span className="text-[9px] uppercase font-black tracking-widest text-amber-600/80 block leading-none">Tactical VTT</span>
-              <span className="text-[11px] font-bold text-amber-200/90 tracking-wide">Convergence Front</span>
-            </div>
-          </div>
+          {/* ═══ CRPG HUD Overlays (Divinity: Original Sin 2 Style) ═══ */}
+          
+          {/* 1. Top Center: Initiative / Turn Order Queue */}
+          <CrpgInitiativeQueue
+            units={gameState.units}
+            selectedUnitId={selectedUnitId}
+            activePlayer={gameState.activePlayer}
+            round={gameState.round}
+            phase={gameState.phase}
+            player1Score={gameState.player1Score}
+            player2Score={gameState.player2Score}
+            player1CP={gameState.player1CP ?? 3}
+            player2CP={gameState.player2CP ?? 3}
+            isOpen={showInitiativeQueue}
+            onToggle={() => setShowInitiativeQueue(prev => !prev)}
+            onSelectUnit={id => {
+              setSelectedUnitId(id);
+              if (id) setTargetUnitId(null);
+            }}
+          />
 
-          {/* Bottom Context Action Bar */}
-          {selectedUnit && (
-            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-gradient-to-r from-[#0d0f1c]/97 via-[#111425]/97 to-[#0d0f1c]/97 border border-amber-800/40 shadow-[0_8px_32px_rgba(0,0,0,0.85),0_0_20px_rgba(0,0,0,0.5)] rounded-xl px-4 py-2.5 flex items-center space-x-4 z-30 backdrop-blur-md">
-              <div className="flex items-center space-x-2">
-                {selectedUnit.tokenImageUrl ? (
-                  <img src={selectedUnit.tokenImageUrl} alt={selectedUnit.name} className="w-7 h-7 rounded-lg object-cover border border-amber-400 shrink-0" />
-                ) : (
-                  <span className="text-xl">{selectedUnit.avatar}</span>
-                )}
-                <div>
-                  <div className="flex items-center space-x-1.5 mb-0.5 flex-wrap gap-y-1">
-                    <span className="text-xs font-bold text-white leading-none">{selectedUnit.name}</span>
-                    {/* Permanent traits */}
-                    {(selectedUnit.traits || []).map((trait, i) => {
-                      const badge = getTraitBadgeInfo(trait);
-                      return (
-                        <span key={i} className={`border text-[8px] px-1 py-0.2 rounded uppercase font-black flex items-center space-x-0.5 ${badge.badgeClass}`}>
-                          <span>{badge.icon}</span>
-                          <span>{badge.label}</span>
-                        </span>
-                      );
-                    })}
-                    {/* Temp traits / Status effects */}
-                    {(selectedUnit.tempTraits || []).map((tt, i) => {
-                      const badge = getTraitBadgeInfo(tt, true);
-                      return (
-                        <span key={`tt_${i}`} className={`border text-[8px] px-1 py-0.2 rounded uppercase font-black flex items-center space-x-0.5 ${badge.badgeClass}`}>
-                          <span>{badge.icon}</span>
-                          <span>{badge.label}</span>
-                        </span>
-                      );
-                    })}
-                  </div>
-                  <span className="text-[10px] text-zinc-400 font-mono">
-                    {(() => {
-                      const bl = getUnitBodiesAndLives(selectedUnit);
-                      return `Bodies: ${bl.livingBodies}/${bl.totalBodies} (U) | Lives: ${bl.remainingLives}/${bl.maxLives} (L) | Mv:${selectedUnit.stats.mv} | Def:${selectedUnit.stats.def + selectedUnit.stats.defModifier} | AM:${selectedUnit.stats.am} | Form:${selectedUnit.formation || 'circle'}`;
-                    })()}
-                  </span>
-                </div>
-              </div>
+          {/* 2. Top Left: Party / Forces Portrait Column */}
+          <CrpgPartyColumn
+            playerUnits={gameState.units.filter(u => u.owner === 'player1')}
+            selectedUnitId={selectedUnitId}
+            isOpen={showPartyColumn}
+            onToggle={() => setShowPartyColumn(prev => !prev)}
+            onSelectUnit={id => {
+              setSelectedUnitId(id);
+              if (id) setTargetUnitId(null);
+            }}
+          />
 
-              {gameState.phase === 'Deployment' && selectedUnit.owner === (gameState.deployingPlayer || gameState.activePlayer) && (
-                selectedUnit.isPendingDeploymentConfirm ? (
-                  <div className="flex items-center space-x-2">
-                    <button
-                      onClick={() => handleConfirmDeployment(selectedUnit.id)}
-                      className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-lg flex items-center space-x-1.5 shadow-lg animate-pulse cursor-pointer"
-                      title="Lock in unit placement and pass deployment turn to opponent"
-                    >
-                      <Check className="w-3.5 h-3.5" />
-                      <span>Confirm Placement</span>
-                    </button>
-                    <button
-                      onClick={() => handleCancelDeployment(selectedUnit.id)}
-                      className="px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold text-xs rounded-lg flex items-center space-x-1 shadow border border-zinc-600 cursor-pointer"
-                      title="Return this unit to the Army Tray"
-                    >
-                      <RotateCcw className="w-3 h-3 text-amber-400" />
-                      <span>Return to Tray</span>
-                    </button>
-                    <span className="text-[10px] text-amber-300 font-mono bg-amber-950/60 border border-amber-800/80 px-2 py-1 rounded hidden sm:inline-block">
-                      Adjust position or formation, then confirm
-                    </span>
-                  </div>
-                ) : selectedUnit.position ? (
-                  <div className="flex items-center space-x-2">
-                    <div className="px-2.5 py-1 bg-zinc-800/90 border border-zinc-700 rounded-lg text-xs text-zinc-400 font-mono flex items-center space-x-1">
-                      <span>✓</span>
-                      <span>Placed & Confirmed</span>
-                    </div>
-                  </div>
-                ) : null
-              )}
-
-              {gameState.phase === 'Command' && selectedUnit.owner === gameState.activePlayer && (
-                <button
-                  onClick={() => setCommandDrawerOpen(true)}
-                  className="bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs px-3.5 py-1.5 rounded-lg flex items-center space-x-1.5 shadow"
-                >
-                  <Zap className="w-3.5 h-3.5" />
-                  <span>Issue Stratagem</span>
-                </button>
-              )}
-
-              {gameState.phase === 'Movement' && (
-                selectedUnit.owner === gameState.activePlayer ? (
-                  selectedUnit.isPendingDisembarkConfirm ? (
-                    <div className="flex items-center space-x-2">
-                      <button
-                        onClick={() => handleConfirmDisembark(selectedUnit.id)}
-                        className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-lg flex items-center space-x-1.5 shadow-lg animate-pulse cursor-pointer"
-                        title="Validate 3-inch vehicle reach and 2-inch unit coherency, then lock in disembark placement"
-                      >
-                        <Check className="w-3.5 h-3.5" />
-                        <span>Confirm Disembark</span>
-                      </button>
-                      <button
-                        onClick={() => handleCancelDisembark(selectedUnit.id)}
-                        className="px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold text-xs rounded-lg flex items-center space-x-1 shadow border border-zinc-600 cursor-pointer"
-                        title="Cancel disembark and return inside the transport vehicle"
-                      >
-                        <RotateCcw className="w-3 h-3 text-amber-400" />
-                        <span>Cancel</span>
-                      </button>
-                      <span className="text-[10px] text-amber-300 font-mono bg-amber-950/60 border border-amber-800/80 px-2 py-1 rounded hidden sm:inline-block">
-                        Drag models within 3" of transport, maintain 2" coherency
-                      </span>
-                      {selectedUnit.tokens?.some(t => t.offendingCoherency) && (
-                        <div className="px-2 py-1 bg-rose-950/90 border border-rose-600 rounded text-[10px] text-rose-300 font-mono flex items-center space-x-1 shadow animate-bounce">
-                          <AlertTriangle className="w-3 h-3 text-rose-400" />
-                          <span>Broken Coherency / Out of Range!</span>
-                        </div>
-                      )}
-                    </div>
-                  ) : selectedUnit.isPendingMoveConfirm ? (
-                    <div className="flex items-center space-x-2">
-                      <button
-                        onClick={() => handleConfirmMove(selectedUnit.id)}
-                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-lg flex items-center space-x-1.5 shadow-lg animate-pulse cursor-pointer"
-                        title="Validate squad coherency and lock in movement"
-                      >
-                        <Check className="w-3.5 h-3.5" />
-                        <span>Confirm Move</span>
-                      </button>
-                      <button
-                        onClick={() => handleResetMove(selectedUnit.id)}
-                        className="px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold text-xs rounded-lg flex items-center space-x-1 shadow border border-zinc-600 cursor-pointer"
-                        title="Cancel move and snap back to origin"
-                      >
-                        <RotateCcw className="w-3 h-3 text-amber-400" />
-                        <span>Reset</span>
-                      </button>
-                      {selectedUnit.tokens?.some(t => t.offendingCoherency) && (
-                        <div className="px-2 py-1 bg-rose-950/90 border border-rose-600 rounded text-[10px] text-rose-300 font-mono flex items-center space-x-1 shadow animate-bounce">
-                          <AlertTriangle className="w-3 h-3 text-rose-400" />
-                          <span>Broken Coherency! (≤ {gameState.currentMap?.coherencyDistanceInches || 2}")</span>
-                        </div>
-                      )}
-                    </div>
-                  ) : selectedUnit.hasMoved ? (
-                    <div className="flex items-center space-x-2">
-                      <div className="px-3 py-1.5 bg-zinc-800/90 border border-zinc-700 rounded-lg text-xs text-zinc-400 font-mono flex items-center space-x-1">
-                        <span>✓</span>
-                        <span>Already Moved this Round</span>
-                      </div>
-                      {/* Structure floor selector if occupying a multi-level structure */}
-                      {(() => {
-                        const occupying = gameState.currentMap?.structures?.find(s => {
-                          if (!selectedUnit.position) return false;
-                          return (
-                            selectedUnit.position.x >= s.x &&
-                            selectedUnit.position.x <= s.x + s.width &&
-                            selectedUnit.position.y >= s.y &&
-                            selectedUnit.position.y <= s.y + s.height
-                          );
-                        });
-                        if (occupying && occupying.levels && occupying.levels.length > 1) {
-                          return (
-                            <div className="flex items-center space-x-1 bg-indigo-950/80 border border-indigo-700/60 px-2 py-1 rounded-lg">
-                              <span className="text-[10px] text-indigo-300 font-mono">Floor:</span>
-                              {occupying.levels.map(lvl => (
-                                <button
-                                  key={lvl.levelNumber}
-                                  onClick={() => handleChangeFloorLevel(selectedUnit.id, lvl.levelNumber)}
-                                  className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold transition cursor-pointer ${
-                                    (selectedUnit.currentLevel || 1) === lvl.levelNumber
-                                      ? 'bg-indigo-600 text-white shadow'
-                                      : 'bg-zinc-800 text-zinc-400 hover:text-white'
-                                  }`}
-                                >
-                                  L{lvl.levelNumber}
-                                </button>
-                              ))}
-                            </div>
-                          );
-                        }
-                        return null;
-                      })()}
-                    </div>
-                  ) : (
-                    <div className="flex items-center space-x-2">
-                      <div className="px-3 py-1.5 bg-sky-950/70 border border-sky-700/60 rounded-lg text-xs text-sky-300 font-mono flex items-center space-x-1">
-                        <span>♟️</span>
-                        <span>Drag centroid or individual models (Max {selectedUnit.stats.mv} sq)</span>
-                      </div>
-                      {/* Structure floor selector if occupying a multi-level structure */}
-                      {(() => {
-                        const occupying = gameState.currentMap?.structures?.find(s => {
-                          if (!selectedUnit.position) return false;
-                          return (
-                            selectedUnit.position.x >= s.x &&
-                            selectedUnit.position.x <= s.x + s.width &&
-                            selectedUnit.position.y >= s.y &&
-                            selectedUnit.position.y <= s.y + s.height
-                          );
-                        });
-                        if (occupying && occupying.levels && occupying.levels.length > 1) {
-                          return (
-                            <div className="flex items-center space-x-1 bg-indigo-950/80 border border-indigo-700/60 px-2 py-1 rounded-lg">
-                              <span className="text-[10px] text-indigo-300 font-mono">Floor:</span>
-                              {occupying.levels.map(lvl => (
-                                <button
-                                  key={lvl.levelNumber}
-                                  onClick={() => handleChangeFloorLevel(selectedUnit.id, lvl.levelNumber)}
-                                  className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold transition cursor-pointer ${
-                                    (selectedUnit.currentLevel || 1) === lvl.levelNumber
-                                      ? 'bg-indigo-600 text-white shadow'
-                                      : 'bg-zinc-800 text-zinc-400 hover:text-white'
-                                  }`}
-                                >
-                                  L{lvl.levelNumber}
-                                </button>
-                              ))}
-                            </div>
-                          );
-                        }
-                        return null;
-                      })()}
-                    </div>
-                  )
-                ) : (
-                  <div className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-xs text-zinc-500 font-mono">
-                    Enemy / Inactive Unit
-                  </div>
-                )
-              )}
-
-              {/* ACTION PHASE: Unified Actions (Engage, Fight, Shoot, Mission) */}
-              {gameState.phase === 'Action' && (
-                selectedUnit.owner === gameState.activePlayer ? (() => {
-                  const remActions = selectedUnit.actionsRemaining ?? 2;
-                  const maxActions = selectedUnit.maxActions ?? 2;
-                  
-                  const attachedLeaders = (selectedUnit.attachedUnits || [])
-                    .map(id => gameState.units.find(u => u.id === id))
-                    .filter((l): l is Unit => !!l && (l.stats?.lives ?? 0) > 0);
-                  const rangedAttachedLeaders = attachedLeaders.filter(l => l.stats.range > 0);
-
-                  const squadCanShoot = selectedUnit.stats.range > 0;
-                  const canAnyShoot = squadCanShoot || rangedAttachedLeaders.length > 0;
-
-                  // Melee reach check
-                  const inMeleeWithTarget = !!(targetUnit && isUnitInMeleeRange(selectedUnit, targetUnit, DEFAULT_GRID_SIZE));
-
-                  // Engagement reach check (distance > 0.3 and <= mv + 0.3)
-                  let canEngageTarget = false;
-                  if (targetUnit && selectedUnit.position && targetUnit.position) {
-                    const { minModelDistPx } = getUnitsModelDistance(selectedUnit, targetUnit);
-                    const dist = minModelDistPx / DEFAULT_GRID_SIZE;
-                    canEngageTarget = dist > 0.3 && dist <= (selectedUnit.stats.mv + 0.3);
-                  }
-
-                  // Shooting reach check
-                  let canShootTarget = false;
-                  if (targetUnit && canAnyShoot) {
-                    const maxR = Math.max(selectedUnit.stats.range, ...rangedAttachedLeaders.map(l => l.stats.range));
-                    const measuringUnit: Unit = {
-                      ...selectedUnit,
-                      stats: { ...selectedUnit.stats, range: maxR }
-                    };
-                    canShootTarget = isUnitInShootingRange(measuringUnit, targetUnit, DEFAULT_GRID_SIZE);
-                  }
-
+          {/* 4. Bottom Center: Action Dock (Vitals, AP Orbs, [YOUR TURN], END TURN button) */}
+          <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-30 pointer-events-auto flex flex-col items-center">
+            {/* Selected Unit Traits & Info Banner */}
+            {selectedUnit && (
+              <div className="mb-1 bg-[#0c0e17]/95 border border-amber-800/60 rounded-lg px-3 py-1 shadow-lg flex items-center space-x-2 backdrop-blur-md hover:opacity-25 transition-opacity duration-200">
+                <span className="text-xs font-bold text-white font-serif">{selectedUnit.name}</span>
+                {/* Permanent traits */}
+                {(selectedUnit.traits || []).slice(0, 3).map((trait, i) => {
+                  const badge = getTraitBadgeInfo(trait);
                   return (
-                    <div className="flex items-center space-x-2">
-                      {/* Action Economy Counter Pill */}
-                      <div className={`px-2.5 py-1 rounded-lg border font-mono text-xs flex items-center space-x-1.5 ${
-                        remActions > 0 
-                          ? 'bg-amber-950/50 border-amber-500/70 text-amber-300' 
-                          : 'bg-zinc-850 border-zinc-700 text-zinc-500'
-                      }`}>
-                        <Zap className="w-3.5 h-3.5 text-amber-400" />
-                        <span className="font-bold">{remActions}/{maxActions} Actions</span>
-                      </div>
-
-                      {remActions === 0 ? (
-                        <div className="px-3 py-1.5 bg-zinc-850 border border-zinc-750 rounded-lg text-xs text-zinc-500 font-mono">
-                          ✓ All Actions Exhausted
-                        </div>
-                      ) : (
-                        <>
-                          {/* 1. ENGAGE */}
-                          {canEngageTarget ? (
-                            <button
-                              onClick={handleExecuteEngagement}
-                              className="bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs px-3 py-1.5 rounded-lg flex items-center space-x-1.5 shadow active:scale-95 transition cursor-pointer"
-                              title="Engage enemy into base contact (Costs 1 Action)"
-                            >
-                              <Flame className="w-3.5 h-3.5" />
-                              <span>Engage (1d6)</span>
-                            </button>
-                          ) : (
-                            <button
-                              disabled
-                              className="bg-zinc-800/60 border border-zinc-750 text-zinc-500 text-xs px-2.5 py-1.5 rounded-lg flex items-center space-x-1 cursor-not-allowed opacity-50"
-                              title={`Target enemy within ${selectedUnit.stats.mv} sq to engage`}
-                            >
-                              <Flame className="w-3 h-3" />
-                              <span>Engage</span>
-                            </button>
-                          )}
-
-                          {/* 2. FIGHT */}
-                          {inMeleeWithTarget ? (
-                            <button
-                              onClick={handleExecuteFight}
-                              className="bg-rose-700 hover:bg-rose-600 text-white font-bold text-xs px-3 py-1.5 rounded-lg flex items-center space-x-1.5 shadow active:scale-95 transition cursor-pointer"
-                              title="Fight enemy in melee (Costs 1 Action)"
-                            >
-                              <Swords className="w-3.5 h-3.5" />
-                              <span>Fight</span>
-                            </button>
-                          ) : (
-                            <button
-                              disabled
-                              className="bg-zinc-800/60 border border-zinc-750 text-zinc-500 text-xs px-2.5 py-1.5 rounded-lg flex items-center space-x-1 cursor-not-allowed opacity-50"
-                              title="Must be within 1.0 sq melee contact with target"
-                            >
-                              <Swords className="w-3 h-3" />
-                              <span>Fight</span>
-                            </button>
-                          )}
-
-                          {/* 3. SHOOT */}
-                          {canAnyShoot ? (
-                            canShootTarget ? (
-                              squadCanShoot ? (
-                                <button
-                                  onClick={() => handleExecuteShooting(selectedUnit)}
-                                  className="bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs px-3 py-1.5 rounded-lg flex items-center space-x-1.5 shadow active:scale-95 transition cursor-pointer"
-                                  title={`Fire ranged weapons (${selectedUnit.stats.range} sq) (Costs 1 Action)`}
-                                >
-                                  <Target className="w-3.5 h-3.5" />
-                                  <span>Shoot ({selectedUnit.stats.range} sq)</span>
-                                </button>
-                              ) : (
-                                rangedAttachedLeaders.map(l => (
-                                  <button
-                                    key={l.id}
-                                    onClick={() => handleExecuteShooting(l)}
-                                    className="bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs px-3 py-1.5 rounded-lg flex items-center space-x-1.5 shadow active:scale-95 transition cursor-pointer"
-                                    title={`Fire leader ranged weapons (${l.stats.range} sq) (Costs 1 Action)`}
-                                  >
-                                    <Target className="w-3.5 h-3.5" />
-                                    <span>Shoot: {l.name}</span>
-                                  </button>
-                                ))
-                              )
-                            ) : (
-                              <button
-                                disabled
-                                className="bg-zinc-800/60 border border-zinc-750 text-zinc-500 text-xs px-2.5 py-1.5 rounded-lg flex items-center space-x-1 cursor-not-allowed opacity-50"
-                                title={`Target enemy within ${selectedUnit.stats.range} sq to shoot`}
-                              >
-                                <Target className="w-3 h-3" />
-                                <span>Shoot ({selectedUnit.stats.range} sq)</span>
-                              </button>
-                            )
-                          ) : (
-                            <span className="text-[11px] text-zinc-500 font-mono px-2 py-1 bg-zinc-850 rounded border border-zinc-800">Melee Only</span>
-                          )}
-
-                          {/* 4. MISSION ACTION */}
-                          <button
-                            onClick={handleExecuteMissionAction}
-                            className="bg-emerald-700/80 hover:bg-emerald-600 text-white font-bold text-xs px-3 py-1.5 rounded-lg flex items-center space-x-1.5 shadow active:scale-95 transition cursor-pointer"
-                            title="Perform secondary mission action (Costs 1 Action)"
-                          >
-                            <Sparkles className="w-3.5 h-3.5 text-emerald-300" />
-                            <span>Mission Action</span>
-                          </button>
-                        </>
-                      )}
-                    </div>
+                    <span key={i} className={`border text-[8px] px-1 py-0.2 rounded uppercase font-black flex items-center space-x-0.5 ${badge.badgeClass}`}>
+                      <span>{badge.icon}</span>
+                      <span>{badge.label}</span>
+                    </span>
                   );
-                })() : (
-                  <div className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-xs text-zinc-500 font-mono">
-                    Enemy / Inactive Unit
-                  </div>
-                )
-              )}
-
-              {gameState.phase === 'Shooting' && (
-                selectedUnit.owner === gameState.activePlayer ? (() => {
-                  const isAttachedLeader = !!selectedUnit.attachedTo;
-                  
-                  const attachedLeaders = (selectedUnit.attachedUnits || [])
-                    .map(id => gameState.units.find(u => u.id === id))
-                    .filter((l): l is Unit => !!l && (l.stats?.lives ?? 0) > 0);
-                  const rangedAttachedLeaders = attachedLeaders.filter(l => l.stats.range > 0);
-
-                  const squadCanShoot = selectedUnit.stats.range > 0;
-                  const squadHasFired = selectedUnit.hasShot;
-
-                  // Case 1: Selected unit is an attached leader directly
-                  if (isAttachedLeader) {
-                    if (selectedUnit.stats.range === 0) {
-                      return (
-                        <div className="px-3 py-1.5 bg-zinc-850 border border-zinc-750 rounded-lg text-xs text-zinc-500 font-mono">
-                          Leader Melee Only (Range 0)
-                        </div>
-                      );
-                    }
-                    if (selectedUnit.hasShot) {
-                      return (
-                        <button disabled className="bg-zinc-800/90 border border-zinc-700 text-zinc-500 font-bold text-xs px-3.5 py-1.5 rounded-lg flex items-center space-x-1 cursor-not-allowed">
-                          <span>✓ Leader Already Fired</span>
-                        </button>
-                      );
-                    }
-                    if (targetUnit) {
-                      return (
-                        <button
-                          onClick={() => handleExecuteShooting(selectedUnit)}
-                          className="bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs px-3.5 py-1.5 rounded-lg flex items-center space-x-1.5 shadow cursor-pointer transition active:scale-95"
-                        >
-                          <Target className="w-3.5 h-3.5" />
-                          <span>Fire Leader ({selectedUnit.stats.range} sq)</span>
-                        </button>
-                      );
-                    }
+                })}
+                {/* Temp traits / Status effects */}
+                {(selectedUnit.tempTraits || []).map((tt, i) => {
+                  const badge = getTraitBadgeInfo(tt, true);
+                  return (
+                    <span key={`tt_${i}`} className={`border text-[8px] px-1 py-0.2 rounded uppercase font-black flex items-center space-x-0.5 ${badge.badgeClass}`}>
+                      <span>{badge.icon}</span>
+                      <span>{badge.label}</span>
+                    </span>
+                  );
+                })}
+                {/* Structure floor selector if occupying a multi-level structure */}
+                {(() => {
+                  const occupying = gameState.currentMap?.structures?.find(s => {
+                    if (!selectedUnit.position) return false;
                     return (
-                      <div className="px-3 py-1.5 bg-rose-950/40 border border-rose-800/50 rounded-lg text-xs text-rose-300 font-mono">
-                        Click enemy target in range ({selectedUnit.stats.range} sq)
-                      </div>
+                      selectedUnit.position.x >= s.x &&
+                      selectedUnit.position.x <= s.x + s.width &&
+                      selectedUnit.position.y >= s.y &&
+                      selectedUnit.position.y <= s.y + s.height
                     );
-                  }
-
-                  // Case 2: Selected unit is a melee squad, but has an attached leader who CAN shoot
-                  if (!squadCanShoot && rangedAttachedLeaders.length > 0) {
-                    const readyLeader = rangedAttachedLeaders.find(l => !l.hasShot);
-                    if (!readyLeader) {
-                      return (
-                        <button disabled className="bg-zinc-800/90 border border-zinc-750 text-zinc-500 font-bold text-xs px-3.5 py-1.5 rounded-lg flex items-center space-x-1 cursor-not-allowed font-mono">
-                          <span>✓ Attached Leader Already Fired</span>
-                        </button>
-                      );
-                    }
-                    if (targetUnit) {
-                      return (
-                        <button
-                          onClick={() => handleExecuteShooting(readyLeader)}
-                          className="bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs px-3.5 py-1.5 rounded-lg flex items-center space-x-1.5 shadow cursor-pointer transition active:scale-95"
-                        >
-                          <Target className="w-3.5 h-3.5" />
-                          <span>Fire Leader: {readyLeader.name} ({readyLeader.stats.range} sq)</span>
-                        </button>
-                      );
-                    }
+                  });
+                  if (occupying && occupying.levels && occupying.levels.length > 1) {
                     return (
-                      <div className="px-3 py-1.5 bg-rose-950/40 border border-rose-800/50 rounded-lg text-xs text-rose-300 font-mono">
-                        Squad Melee • Click enemy for Leader {readyLeader.name} ({readyLeader.stats.range} sq)
-                      </div>
-                    );
-                  }
-
-                  // Case 3: Both squad and attached leader(s) can shoot
-                  if (squadCanShoot && rangedAttachedLeaders.length > 0) {
-                    const readyLeaders = rangedAttachedLeaders.filter(l => !l.hasShot);
-                    return (
-                      <div className="flex items-center space-x-2">
-                        {!squadHasFired ? (
-                          targetUnit ? (
-                            <button
-                              onClick={() => handleExecuteShooting(selectedUnit)}
-                              className="bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs px-3 py-1.5 rounded-lg flex items-center space-x-1 shadow cursor-pointer transition active:scale-95"
-                            >
-                              <Target className="w-3.5 h-3.5" />
-                              <span>Fire Squad ({selectedUnit.stats.range} sq)</span>
-                            </button>
-                          ) : (
-                            <div className="px-2.5 py-1 bg-rose-950/40 border border-rose-800/50 rounded-lg text-xs text-rose-300 font-mono">
-                              Squad Range: {selectedUnit.stats.range} sq
-                            </div>
-                          )
-                        ) : (
-                          <span className="text-zinc-500 text-xs font-mono">✓ Squad Fired</span>
-                        )}
-
-                        {readyLeaders.map(leader => (
-                          targetUnit ? (
-                            <button
-                              key={leader.id}
-                              onClick={() => handleExecuteShooting(leader)}
-                              className="bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs px-3 py-1.5 rounded-lg flex items-center space-x-1 shadow cursor-pointer transition active:scale-95"
-                            >
-                              <Target className="w-3.5 h-3.5" />
-                              <span>Fire {leader.name} ({leader.stats.range} sq)</span>
-                            </button>
-                          ) : (
-                            <span key={leader.id} className="text-amber-400/80 text-[11px] font-mono">
-                              {leader.name} ({leader.stats.range} sq)
-                            </span>
-                          )
+                      <div className="flex items-center space-x-1 bg-indigo-950/80 border border-indigo-700/60 px-1.5 py-0.5 rounded">
+                        <span className="text-[9px] text-indigo-300 font-mono">Floor:</span>
+                        {occupying.levels.map(lvl => (
+                          <button
+                            key={lvl.levelNumber}
+                            onClick={() => handleChangeFloorLevel(selectedUnit.id, lvl.levelNumber)}
+                            className={`px-1 py-0.2 rounded text-[9px] font-mono font-bold transition cursor-pointer ${
+                              (selectedUnit.currentLevel || 1) === lvl.levelNumber
+                                ? 'bg-indigo-600 text-white shadow'
+                                : 'bg-zinc-800 text-zinc-400 hover:text-white'
+                            }`}
+                          >
+                            L{lvl.levelNumber}
+                          </button>
                         ))}
                       </div>
                     );
                   }
+                  return null;
+                })()}
+              </div>
+            )}
 
-                  // Case 4: Standard squad without ranged leaders
-                  if (!squadCanShoot) {
-                    return (
-                      <div className="px-3 py-1.5 bg-zinc-850 border border-zinc-750 rounded-lg text-xs text-zinc-500 font-mono">
-                        Melee Only (Range 0)
-                      </div>
-                    );
-                  }
-
-                  if (squadHasFired) {
-                    return (
-                      <button disabled className="bg-zinc-800/90 border border-zinc-700 text-zinc-500 font-bold text-xs px-3.5 py-1.5 rounded-lg flex items-center space-x-1 cursor-not-allowed">
-                        <span>✓ Already Fired</span>
-                      </button>
-                    );
-                  }
-
-                  if (targetUnit) {
-                    return (
-                      <button
-                        onClick={() => handleExecuteShooting(selectedUnit)}
-                        className="bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs px-3.5 py-1.5 rounded-lg flex items-center space-x-1.5 shadow cursor-pointer transition active:scale-95"
-                      >
-                        <Target className="w-3.5 h-3.5" />
-                        <span>Fire Ranged ({selectedUnit.stats.range} sq)</span>
-                      </button>
-                    );
-                  }
-
-                  return (
-                    <div className="px-3 py-1.5 bg-rose-950/40 border border-rose-800/50 rounded-lg text-xs text-rose-300 font-mono">
-                      Click enemy target in range ({selectedUnit.stats.range} sq)
-                    </div>
-                  );
-                })() : (
-                  <div className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-xs text-zinc-500 font-mono">
-                    Enemy / Inactive Unit
-                  </div>
-                )
-              )}
-
-              {gameState.phase === 'Charge' && (
-                selectedUnit.owner === gameState.activePlayer ? (
-                  selectedUnit.hasCharged ? (
-                    <button disabled className="bg-zinc-800/90 border border-zinc-700 text-zinc-500 font-bold text-xs px-3.5 py-1.5 rounded-lg flex items-center space-x-1 cursor-not-allowed">
-                      <span>✓ Already Charged</span>
-                    </button>
-                  ) : targetUnit ? (
-                    <button
-                      onClick={handleExecuteCharge}
-                      className="bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs px-3.5 py-1.5 rounded-lg flex items-center space-x-1.5 shadow"
-                    >
-                      <Flame className="w-3.5 h-3.5" />
-                      <span>Roll Charge (1d6)</span>
-                    </button>
-                  ) : (
-                    <div className="px-3 py-1.5 bg-amber-950/40 border border-amber-800/50 rounded-lg text-xs text-amber-300 font-mono">
-                      Click target within {selectedUnit.stats.mv} sq
-                    </div>
-                  )
-                ) : (
-                  <div className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-xs text-zinc-500 font-mono">
-                    Enemy / Inactive Unit
-                  </div>
-                )
-              )}
-
-              {gameState.phase === 'Fight' && (
-                selectedUnit.owner === gameState.activePlayer ? (
-                  selectedUnit.hasFought ? (
-                    <button disabled className="bg-zinc-800/90 border border-zinc-700 text-zinc-500 font-bold text-xs px-3.5 py-1.5 rounded-lg flex items-center space-x-1 cursor-not-allowed">
-                      <span>✓ Already Fought</span>
-                    </button>
-                  ) : targetUnit ? (
-                    <button
-                      onClick={handleExecuteFight}
-                      className="bg-rose-700 hover:bg-rose-600 text-white font-bold text-xs px-3.5 py-1.5 rounded-lg flex items-center space-x-1.5 shadow"
-                    >
-                      <Swords className="w-3.5 h-3.5" />
-                      <span>Fight (AM + 1d3)</span>
-                    </button>
-                  ) : (
-                    <div className="px-3 py-1.5 bg-rose-950/40 border border-rose-800/50 rounded-lg text-xs text-rose-300 font-mono">
-                      Click enemy in melee (≤ 1.0 sq or charged)
-                    </div>
-                  )
-                ) : (
-                  <div className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-xs text-zinc-500 font-mono">
-                    Enemy / Inactive Unit
-                  </div>
-                )
-              )}
-
-              {/* Leader & Transport Squad Actions */}
-              {selectedUnit.owner === gameState.activePlayer && (
-                <div className="flex items-center space-x-1.5 pl-2 border-l border-zinc-700">
-                  {/* Detach Leader from Squad (Strictly Deployment Phase only - BUG-020) */}
-                  {gameState.phase === 'Deployment' && selectedUnit.attachedUnits && selectedUnit.attachedUnits.length > 0 && (
-                    selectedUnit.attachedUnits.map(leaderId => {
-                      const leaderUnit = gameState.units.find(u => u.id === leaderId);
-                      return (
-                        <button
-                          key={leaderId}
-                          onClick={() => handleDetachLeader(selectedUnit.id, leaderId)}
-                          className="bg-purple-900/70 hover:bg-purple-800 border border-purple-600 text-purple-200 font-bold text-xs px-2.5 py-1.5 rounded-lg flex items-center space-x-1 shadow"
-                          title="Detach leader from squad (Deployment Phase only)"
-                        >
-                          <UserMinus className="w-3.5 h-3.5" />
-                          <span>Detach {leaderUnit?.name ? leaderUnit.name.split(' ')[0] : 'Leader'}</span>
-                        </button>
-                      );
-                    })
-                  )}
-
-                  {/* Attach Leader (if this unit is a leader and not attached) */}
-                  {(selectedUnit.role === 'Leader' || selectedUnit.role === 'Legendary Leader' || selectedUnit.type === 'Character') && !selectedUnit.attachedTo && (() => {
-                    const canAttach = gameState.phase === 'Deployment';
-                    return (
-                      <button
-                        onClick={() => {
-                          if (canAttach) setAttachModalUnitId(selectedUnit.id);
-                        }}
-                        disabled={!canAttach}
-                        className={`font-bold text-xs px-2.5 py-1.5 rounded-lg flex items-center space-x-1 shadow border transition ${
-                          canAttach
-                            ? 'bg-purple-900/60 hover:bg-purple-800 border-purple-500 text-purple-200 cursor-pointer'
-                            : 'bg-zinc-800/80 border-zinc-700 text-zinc-500 cursor-not-allowed opacity-60'
-                        }`}
-                        title={canAttach ? 'Attach this leader to an infantry squad' : 'Attach Leader only permitted during Deployment Phase'}
-                      >
-                        <UserPlus className="w-3.5 h-3.5" />
-                        <span>Attach to Squad</span>
-                      </button>
-                    );
-                  })()}
-
-                  {/* Embark Infantry in Transport */}
-                  {selectedUnit.type === 'Infantry' && !selectedUnit.embarkedIn && (() => {
-                    const isFightReembark = (gameState.phase === 'Fight' || gameState.phase === 'Action') && selectedUnit.lastDisembarkRound === gameState.round && selectedUnit.lastDisembarkPhase !== gameState.phase;
-                    const hasEmbarkedThisPhase = selectedUnit.lastEmbarkPhase === gameState.phase && selectedUnit.lastEmbarkRound === gameState.round;
-                    const hasDisembarkedThisPhase = selectedUnit.lastDisembarkPhase === gameState.phase && selectedUnit.lastDisembarkRound === gameState.round;
-                    const canEmbark = (gameState.phase === 'Deployment' || gameState.phase === 'Movement' || isFightReembark) && !hasEmbarkedThisPhase && !hasDisembarkedThisPhase;
-                    return (
-                      <button
-                        onClick={() => {
-                          if (canEmbark) setEmbarkModalUnitId(selectedUnit.id);
-                        }}
-                        disabled={!canEmbark}
-                        className={`font-bold text-xs px-2.5 py-1.5 rounded-lg flex items-center space-x-1 shadow border transition ${
-                          canEmbark
-                            ? 'bg-sky-900/60 hover:bg-sky-800 border-sky-500 text-sky-200 cursor-pointer'
-                            : 'bg-zinc-800/80 border-zinc-700 text-zinc-500 cursor-not-allowed opacity-60'
-                        }`}
-                        title={
-                          hasEmbarkedThisPhase ? 'Cannot embark multiple times in the same phase' :
-                          hasDisembarkedThisPhase ? 'Cannot embark and disembark in the same phase' :
-                          canEmbark ? 'Embark inside a friendly transport vehicle' : 'Embark only permitted during Deployment, Movement, or Fight re-embark'
-                        }
-                      >
-                        <Truck className="w-3.5 h-3.5" />
-                        <span>Embark</span>
-                      </button>
-                    );
-                  })()}
-                </div>
-              )}
-            </div>
-          )}
+            <CrpgActionDock
+              selectedUnit={selectedUnit}
+              activePlayer={gameState.activePlayer}
+              phase={gameState.phase}
+              round={gameState.round}
+              isOpen={showActionDock}
+              onToggle={() => setShowActionDock(prev => !prev)}
+              onAdvancePhase={handleAdvancePhase}
+              onExecuteBotAction={handleExecuteBotAction}
+            />
+          </div>
 
           {/* UI-003: Ability Cards Dock at bottom of Battlefield */}
           <div className="absolute bottom-3 right-3 z-30 flex flex-col items-end pointer-events-auto">
@@ -5318,36 +4681,47 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
           <div className="w-72 bg-gradient-to-b from-[#0f1120] via-[#0c0e1a] to-[#0a0c17] border-l border-amber-900/30 shadow-[-4px_0_20px_rgba(0,0,0,0.5)] flex flex-col shrink-0 text-xs animate-in slide-in-from-right duration-200">
           {/* Tabs header */}
           <div className="flex items-center justify-between border-b border-amber-900/25 bg-gradient-to-r from-[#0f1120] to-[#111428] px-2 py-1.5 shadow-[0_1px_8px_rgba(0,0,0,0.4)]">
+            <div className="flex items-center space-x-1">
+              <button
+                onClick={() => setRightTab('chat')}
+                className={`p-1.5 rounded-md transition-all cursor-pointer relative ${rightTab === 'chat' ? 'text-white bg-rose-900/40 ring-1 ring-rose-700/40' : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800/50'}`}
+                title="Chat & Dice Rolls"
+              >
+                <MessageSquare className="w-4 h-4" />
+                {rightTab === 'chat' && <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-3 h-0.5 bg-rose-500 rounded-full"></span>}
+              </button>
+              <button
+                onClick={() => setRightTab('journal')}
+                className={`p-1.5 rounded-md transition-all cursor-pointer relative ${rightTab === 'journal' ? 'text-white bg-amber-900/40 ring-1 ring-amber-700/40' : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800/50'}`}
+                title="Unit Journal & Dossiers"
+              >
+                <BookOpen className="w-4 h-4" />
+                {rightTab === 'journal' && <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-3 h-0.5 bg-amber-500 rounded-full"></span>}
+              </button>
+              <button
+                onClick={() => setRightTab('cards')}
+                className={`p-1.5 rounded-md transition-all cursor-pointer relative ${rightTab === 'cards' ? 'text-white bg-purple-900/40 ring-1 ring-purple-700/40' : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800/50'}`}
+                title="Command Cards"
+              >
+                <Layers className="w-4 h-4" />
+                {rightTab === 'cards' && <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-3 h-0.5 bg-purple-500 rounded-full"></span>}
+              </button>
+              <button
+                onClick={() => setRightTab('settings')}
+                className={`p-1.5 rounded-md transition-all cursor-pointer relative ${rightTab === 'settings' ? 'text-white bg-zinc-700/50 ring-1 ring-zinc-600/40' : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800/50'}`}
+                title="Map Settings"
+              >
+                <Settings className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Collapse Sidebar Button */}
             <button
-              onClick={() => setRightTab('chat')}
-              className={`p-1.5 rounded-md transition-all cursor-pointer relative ${rightTab === 'chat' ? 'text-white bg-rose-900/40 ring-1 ring-rose-700/40' : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800/50'}`}
-              title="Chat & Dice Rolls"
+              onClick={() => setShowRightSidebar(false)}
+              className="p-1.5 rounded-md text-zinc-500 hover:text-white hover:bg-zinc-800 transition cursor-pointer"
+              title="Hide Sidebar"
             >
-              <MessageSquare className="w-4 h-4" />
-              {rightTab === 'chat' && <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-3 h-0.5 bg-rose-500 rounded-full"></span>}
-            </button>
-            <button
-              onClick={() => setRightTab('journal')}
-              className={`p-1.5 rounded-md transition-all cursor-pointer relative ${rightTab === 'journal' ? 'text-white bg-amber-900/40 ring-1 ring-amber-700/40' : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800/50'}`}
-              title="Unit Journal & Dossiers"
-            >
-              <BookOpen className="w-4 h-4" />
-              {rightTab === 'journal' && <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-3 h-0.5 bg-amber-500 rounded-full"></span>}
-            </button>
-            <button
-              onClick={() => setRightTab('cards')}
-              className={`p-1.5 rounded-md transition-all cursor-pointer relative ${rightTab === 'cards' ? 'text-white bg-purple-900/40 ring-1 ring-purple-700/40' : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800/50'}`}
-              title="Command Cards"
-            >
-              <Layers className="w-4 h-4" />
-              {rightTab === 'cards' && <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-3 h-0.5 bg-purple-500 rounded-full"></span>}
-            </button>
-            <button
-              onClick={() => setRightTab('settings')}
-              className={`p-1.5 rounded-md transition-all cursor-pointer relative ${rightTab === 'settings' ? 'text-white bg-zinc-700/50 ring-1 ring-zinc-600/40' : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800/50'}`}
-              title="Map Settings"
-            >
-              <Settings className="w-4 h-4" />
+              <ChevronRight className="w-4 h-4" />
             </button>
           </div>
 
@@ -5578,37 +4952,252 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
           )}
         </div>
         )}
+
+        {/* Floating Expand Tab when Right Sidebar is Hidden */}
+        {!showRightSidebar && (
+          <div className="absolute top-14 right-1 z-30 pointer-events-auto select-none">
+            <button
+              onClick={() => setShowRightSidebar(true)}
+              title="Show Combat Panel & Chat"
+              className="flex items-center space-x-1.5 bg-[#0d0f17]/95 hover:bg-[#161a28] border border-amber-800/60 hover:border-amber-500/80 px-2 py-2 rounded-l-xl shadow-2xl backdrop-blur-md text-amber-300 hover:text-white transition cursor-pointer"
+            >
+              <ChevronLeft className="w-3.5 h-3.5 text-amber-400" />
+              <MessageSquare className="w-3.5 h-3.5 text-amber-400" />
+              <span className="text-[10px] font-mono font-bold leading-none">Panel</span>
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Drawer 0: Army Tray (Deployment Picker) Slide-out */}
-      {armyTrayDrawerOpen && gameState.phase === 'Deployment' && (() => {
+      {/* ═══ CRPG Bottom Full-Width Hotbar (Divinity: Original Sin 2 Style) ═══ */}
+      {showHotbar ? (
+        <CrpgSkillHotbar
+          selectedUnit={selectedUnit}
+          targetUnit={targetUnit}
+          phase={gameState.phase}
+          activePlayer={gameState.activePlayer}
+          onConfirmDeployment={() => selectedUnit && handleConfirmDeployment(selectedUnit.id)}
+          onCancelDeployment={() => selectedUnit && handleCancelDeployment(selectedUnit.id)}
+          onConfirmMove={() => selectedUnit && handleConfirmMove(selectedUnit.id)}
+          onResetMove={() => selectedUnit && handleResetMove(selectedUnit.id)}
+          onExecuteShooting={() => selectedUnit && handleExecuteShooting(selectedUnit)}
+          onExecuteCharge={handleExecuteCharge}
+          onExecuteFight={handleExecuteFight}
+          onExecuteEngagement={handleExecuteEngagement}
+          onExecuteMissionAction={handleExecuteMissionAction}
+          onChangeFormation={(form) => selectedUnit && handleChangeFormation(selectedUnit.id, form)}
+          onOpenAttachModal={() => selectedUnit && setAttachModalUnitId(selectedUnit.id)}
+          onDetachLeader={() => {
+            if (selectedUnit && selectedUnit.attachedUnits && selectedUnit.attachedUnits.length > 0) {
+              handleDetachLeader(selectedUnit.id, selectedUnit.attachedUnits[0]);
+            }
+          }}
+          onOpenEmbarkModal={() => selectedUnit && setEmbarkModalUnitId(selectedUnit.id)}
+          onConfirmDisembark={() => selectedUnit && handleConfirmDisembark(selectedUnit.id)}
+          onCancelDisembark={() => selectedUnit && handleCancelDisembark(selectedUnit.id)}
+          onToggleArmyTray={() => {
+            setArmyTrayDrawerOpen(prev => !prev);
+            setDiceDrawerOpen(false);
+            setCommandDrawerOpen(false);
+            setReservesDrawerOpen(false);
+            setEmbarkedDrawerOpen(false);
+          }}
+          onToggleReserves={() => {
+            setReservesDrawerOpen(prev => !prev);
+            setArmyTrayDrawerOpen(false);
+            setDiceDrawerOpen(false);
+            setCommandDrawerOpen(false);
+            setEmbarkedDrawerOpen(false);
+          }}
+          onToggleCommand={() => {
+            setCommandDrawerOpen(prev => !prev);
+            setArmyTrayDrawerOpen(false);
+            setDiceDrawerOpen(false);
+            setReservesDrawerOpen(false);
+            setEmbarkedDrawerOpen(false);
+          }}
+          onToggleDiceDrawer={() => {
+            setDiceDrawerOpen(prev => !prev);
+            setArmyTrayDrawerOpen(false);
+            setCommandDrawerOpen(false);
+            setReservesDrawerOpen(false);
+            setEmbarkedDrawerOpen(false);
+          }}
+          onToggleEventsDrawer={() => {
+            setCardDrawerTab('field_hazards');
+            setShowCardDrawer(true);
+          }}
+          onToggleSecondaryDeck={() => {
+            setCardDrawerTab('missions');
+            setShowCardDrawer(prev => !prev);
+          }}
+          onToggleAbilitiesDock={() => setAbilitiesDockOpen(prev => !prev)}
+          zoomLevel={zoomLevel}
+          onZoomIn={() => setZoomLevel(prev => Math.min(2.5, Math.round((prev + 0.15) * 100) / 100))}
+          onZoomOut={() => setZoomLevel(prev => Math.max(0.4, Math.round((prev - 0.15) * 100) / 100))}
+          onResetZoom={() => setZoomLevel(1.0)}
+          activeRightTab={rightTab}
+          showRightSidebar={showRightSidebar}
+          onSelectRightTab={(tab) => setRightTab(tab)}
+          onToggleRightSidebar={() => setShowRightSidebar(prev => !prev)}
+          activeTool={activeTool}
+          onSelectTool={(tool) => setActiveTool(tool)}
+          readyAbilitiesCount={readyAbilitiesCount}
+          onToggleHotbar={() => setShowHotbar(false)}
+        />
+      ) : (
+        <div className="w-full bg-[#0a0c13]/90 border-t border-amber-900/40 flex items-center justify-center py-1 z-40 select-none backdrop-blur-md">
+          <button
+            onClick={() => setShowHotbar(true)}
+            title="Show Action Hotbar"
+            className="flex items-center space-x-1.5 px-4 py-1 rounded-full bg-[#131622] hover:bg-[#1e2338] border border-amber-600/50 text-amber-300 hover:text-white text-xs font-mono font-bold shadow-lg transition cursor-pointer"
+          >
+            <ChevronUp className="w-3.5 h-3.5 text-amber-400" />
+            <span>Show Action Hotbar</span>
+          </button>
+        </div>
+      )}
+
+      {/* Drawer 0: Army Tray (Deployment Picker & Forces List) Slide-out */}
+      {armyTrayDrawerOpen && (() => {
+        const isDeployment = gameState.phase === 'Deployment';
         const currentDeployer = gameState.deployingPlayer || gameState.activePlayer;
         const isP1 = currentDeployer === 'player1';
         const totalDeployerUnits = gameState.units.filter(u => u.owner === currentDeployer).length;
         const p1Remaining = gameState.units.filter(u => u.owner === 'player1' && !u.position && !u.inStrategicReserve && !u.embarkedIn && !u.attachedTo && u.stats.lives > 0).length;
         const p2Remaining = gameState.units.filter(u => u.owner === 'player2' && !u.position && !u.inStrategicReserve && !u.embarkedIn && !u.attachedTo && u.stats.lives > 0).length;
         const trayUnits = gameState.units.filter(u => !u.position && !u.inStrategicReserve && !u.embarkedIn && !u.attachedTo && u.stats.lives > 0 && u.owner === currentDeployer);
+        const playerUnits = gameState.units.filter(u => u.owner === 'player1');
+        const livingPlayerUnits = playerUnits.filter(u => u.stats.lives > 0);
 
         return (
-          <div className="fixed top-10 right-0 bottom-0 w-84 md:w-96 bg-[#11131c]/95 backdrop-blur-md border-l border-zinc-700 shadow-2xl z-50 flex flex-col overflow-hidden animate-in slide-in-from-right duration-200">
+          <div className="fixed top-[50px] right-0 bottom-0 w-84 md:w-96 bg-[#11131c]/95 backdrop-blur-md border-l border-zinc-700 shadow-2xl z-50 flex flex-col overflow-hidden animate-in slide-in-from-right duration-200">
             {/* Header */}
             <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 bg-[#161924]">
               <div className="flex items-center space-x-2">
                 <Users className="w-4 h-4 text-amber-400" />
-                <h3 className="font-bold text-white text-sm">Army Tray (Deploy Units)</h3>
+                <h3 className="font-bold text-white text-sm">
+                  {isDeployment ? 'Army Tray (Deploy Units)' : 'Army List (Forces)'}
+                </h3>
                 <span className="px-2 py-0.5 rounded-full bg-amber-950 text-amber-300 font-mono text-[10px] border border-amber-700">
-                  {trayUnits.length} undeployed
+                  {isDeployment ? `${trayUnits.length} undeployed` : `${livingPlayerUnits.length}/${playerUnits.length} active`}
                 </span>
               </div>
               <button
                 onClick={() => setArmyTrayDrawerOpen(false)}
-                className="p-1 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800 transition"
+                className="p-1 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800 transition cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {!isDeployment && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between text-xs font-mono text-zinc-400 border-b border-zinc-800 pb-2">
+                    <span>Player 1 Force • {playerUnits.length} Squads</span>
+                    <button
+                      onClick={() => setShowArmySelectionModal(true)}
+                      className="text-[10px] text-amber-400 hover:text-amber-300 underline cursor-pointer"
+                    >
+                      Army Library
+                    </button>
+                  </div>
+                  {playerUnits.map(u => {
+                    const isAlive = u.stats.lives > 0;
+                    const isLeader = u.role === 'Leader' || u.role === 'Legendary Leader' || u.type === 'Character';
+                    const embarkedTransport = u.embarkedIn ? gameState.units.find(x => x.id === u.embarkedIn) : null;
+                    const attachedSquad = u.attachedTo ? gameState.units.find(x => x.id === u.attachedTo) : null;
+                    const attachedLeader = u.attachedUnits && u.attachedUnits.length > 0 ? gameState.units.find(x => u.attachedUnits!.includes(x.id)) : null;
+
+                    return (
+                      <div
+                        key={u.id}
+                        onClick={() => setSelectedUnitId(u.id)}
+                        className={`p-3 rounded-xl border transition cursor-pointer space-y-2 select-none ${
+                          selectedUnitId === u.id
+                            ? 'bg-amber-950/40 border-amber-500 shadow-[0_0_12px_rgba(245,158,11,0.2)]'
+                            : isAlive
+                            ? 'bg-zinc-950 border-zinc-800 hover:border-zinc-700'
+                            : 'bg-zinc-950/40 border-zinc-900 opacity-60'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex items-center space-x-2">
+                            {u.tokenImageUrl ? (
+                              <img src={u.tokenImageUrl} alt={u.name} className="w-8 h-8 rounded-lg object-cover border border-amber-500/50" />
+                            ) : (
+                              <span className="text-xl">{u.avatar}</span>
+                            )}
+                            <div>
+                              <div className="flex items-center space-x-1.5">
+                                <span className="font-bold text-white text-xs">{u.name}</span>
+                                {isLeader && <span className="text-[9px] text-purple-400">👑</span>}
+                              </div>
+                              <span className="text-[10px] text-zinc-400 font-mono">{u.type} • {u.role}</span>
+                            </div>
+                          </div>
+
+                          {!isAlive ? (
+                            <span className="px-1.5 py-0.5 rounded text-[8px] font-mono uppercase bg-rose-950/80 text-rose-300 border border-rose-800">
+                              💀 Slain
+                            </span>
+                          ) : u.inStrategicReserve ? (
+                            <span className="px-1.5 py-0.5 rounded text-[8px] font-mono uppercase bg-amber-950/80 text-amber-300 border border-amber-800">
+                              📦 In Reserve
+                            </span>
+                          ) : u.embarkedIn ? (
+                            <span className="px-1.5 py-0.5 rounded text-[8px] font-mono uppercase bg-sky-950/80 text-sky-300 border border-sky-800">
+                              🚛 In {embarkedTransport?.name || 'Transport'}
+                            </span>
+                          ) : u.position ? (
+                            <span className="px-1.5 py-0.5 rounded text-[8px] font-mono uppercase bg-emerald-950/80 text-emerald-300 border border-emerald-800">
+                              📍 Deployed
+                            </span>
+                          ) : (
+                            <span className="px-1.5 py-0.5 rounded text-[8px] font-mono uppercase bg-zinc-800 text-zinc-400">
+                              Undeployed
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="grid grid-cols-4 gap-1 text-[9px] font-mono text-center bg-zinc-900/60 p-1.5 rounded-lg border border-zinc-850">
+                          <div>
+                            <span className="text-zinc-500 block text-[8px]">LIVES</span>
+                            <span className={`font-bold ${isAlive ? 'text-white' : 'text-zinc-600'}`}>{u.stats.lives}/{u.stats.maxLives || u.stats.lives}</span>
+                          </div>
+                          <div>
+                            <span className="text-zinc-500 block text-[8px]">DEF</span>
+                            <span className="font-bold text-emerald-400">{u.stats.def + (u.stats.defModifier || 0)}</span>
+                          </div>
+                          <div>
+                            <span className="text-zinc-500 block text-[8px]">MV</span>
+                            <span className="font-bold text-white">{u.stats.mv} sq</span>
+                          </div>
+                          <div>
+                            <span className="text-zinc-500 block text-[8px]">RANGE</span>
+                            <span className="font-bold text-sky-400">{u.stats.range > 0 ? `${u.stats.range} sq` : 'Melee'}</span>
+                          </div>
+                        </div>
+
+                        {attachedLeader && (
+                          <div className="text-[9px] font-mono text-purple-300 bg-purple-950/40 border border-purple-800/40 px-2 py-0.5 rounded flex items-center space-x-1">
+                            <span>👑 Led by {attachedLeader.name}</span>
+                          </div>
+                        )}
+                        {attachedSquad && (
+                          <div className="text-[9px] font-mono text-purple-300 bg-purple-950/40 border border-purple-800/40 px-2 py-0.5 rounded flex items-center space-x-1">
+                            <span>🛡️ Attached to {attachedSquad.name}</span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {isDeployment && (
+                <>
               {/* Deployer & Rules Callout Banner */}
               <div className={`p-3 rounded-xl border space-y-1.5 ${
                 isP1 ? 'bg-rose-950/20 border-rose-800/40 text-rose-300' : 'bg-sky-950/20 border-sky-800/40 text-sky-300'
@@ -5911,6 +5500,8 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                   })}
                 </div>
               )}
+              </>
+              )}
             </div>
           </div>
         );
@@ -5918,16 +5509,27 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
       {/* Drawer 1: Dice Tray Slide-out */}
       {diceDrawerOpen && (
-        <div className="fixed top-10 right-0 bottom-0 w-80 md:w-96 bg-[#11131c]/95 backdrop-blur-md border-l border-zinc-700 shadow-2xl z-50 flex flex-col overflow-hidden animate-in slide-in-from-right duration-200">
+        <div className="fixed top-[50px] right-0 bottom-0 w-80 md:w-96 bg-[#11131c]/95 backdrop-blur-md border-l border-zinc-700 shadow-2xl z-50 flex flex-col overflow-hidden animate-in slide-in-from-right duration-200">
           {/* Header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 bg-[#161924]">
-            <div className="flex items-center space-x-2">
-              <span className="text-lg">🎲</span>
-              <h3 className="font-bold text-white text-sm">Virtual Dice Tray</h3>
+          <div className="flex items-center justify-between px-4 py-3 border-b border-amber-500/20 bg-gradient-to-r from-[#161924] via-[#1a1e2d] to-[#161924]">
+            <div className="flex items-center space-x-2.5">
+              <span className={`text-xl ${isRolling ? 'animate-spin' : 'animate-bounce'}`}>🎲</span>
+              <div>
+                <div className="flex items-center space-x-2">
+                  <h3 className="font-bold text-white text-sm tracking-wide">Virtual Dice Tray</h3>
+                  {isRolling && (
+                    <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-amber-500 text-black animate-pulse shadow-[0_0_8px_rgba(245,158,11,0.6)]">
+                      ROLLING
+                    </span>
+                  )}
+                </div>
+                <span className="text-[10px] text-zinc-400 font-mono">Live Tabletop Roller</span>
+              </div>
             </div>
             <button
               onClick={() => setDiceDrawerOpen(false)}
               className="p-1 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800 transition"
+              title="Close Dice Drawer"
             >
               <X className="w-4 h-4" />
             </button>
@@ -6026,21 +5628,30 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
             </div>
 
             {/* Rolling Arena / Felt Table */}
-            <div className="bg-[#0c0e15] border border-zinc-800 rounded-xl p-4 min-h-[120px] flex flex-wrap gap-3 items-center justify-center relative overflow-hidden">
+            <div className="bg-[#0c0e15] border-2 border-amber-900/40 rounded-xl p-4 min-h-[130px] flex flex-wrap gap-3 items-center justify-center relative overflow-hidden shadow-[inset_0_2px_15px_rgba(0,0,0,0.8)]">
+              <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-amber-950/20 via-transparent to-black/60 pointer-events-none" />
+              {isRolling && (
+                <div className="absolute top-2 right-2 flex items-center space-x-1.5 text-[10px] font-mono text-amber-400 font-bold animate-pulse">
+                  <Sparkles className="w-3 h-3 animate-spin" />
+                  <span>Casting Bones...</span>
+                </div>
+              )}
               {diceResults.map((r, i) => {
                 const isPass = diceThreshold > 0 ? r >= diceThreshold : true;
                 const isCrit = (diceSides === 6 && r === 6) || (diceSides === 20 && r === 20);
                 return (
                   <div
                     key={i}
-                    className={`w-12 h-12 rounded-xl flex items-center justify-center font-black text-lg transition-transform ${
-                      isRolling ? 'scale-90 rotate-12 blur-[1px]' : 'scale-100 rotate-0'
+                    className={`w-12 h-12 rounded-xl flex items-center justify-center font-black text-lg transition-all duration-300 shadow-xl select-none ${
+                      isRolling 
+                        ? 'scale-90 rotate-45 blur-[0.5px] animate-bounce bg-zinc-800 text-amber-300 border-2 border-amber-500/50' 
+                        : 'scale-100 rotate-0'
                     } ${
                       isCrit
-                        ? 'bg-amber-500 text-black border-2 border-amber-300 shadow-[0_0_15px_rgba(251,191,36,0.6)]'
+                        ? 'bg-gradient-to-br from-amber-400 to-amber-600 text-black border-2 border-amber-200 shadow-[0_0_20px_rgba(251,191,36,0.8)]'
                         : isPass
-                        ? 'bg-emerald-950/80 border-2 border-emerald-500 text-emerald-300 shadow-[0_0_8px_rgba(16,185,129,0.3)]'
-                        : 'bg-rose-950/60 border-2 border-rose-800 text-rose-300'
+                        ? 'bg-gradient-to-br from-emerald-900 to-emerald-950 border-2 border-emerald-500 text-emerald-300 shadow-[0_0_12px_rgba(16,185,129,0.4)]'
+                        : 'bg-gradient-to-br from-rose-950 to-zinc-950 border-2 border-rose-800/80 text-rose-300'
                     }`}
                   >
                     {r}
@@ -6077,6 +5688,45 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
               </div>
             )}
 
+            {/* Evaluation Breakdown & Reasons (Why Pass / Why Fail) */}
+            {(diceExplanation || (diceDieExplanations && diceDieExplanations.length > 0)) && (
+              <div className="bg-zinc-950 p-3 rounded-xl border border-amber-900/40 space-y-2 font-mono text-xs">
+                {diceExplanation && (
+                  <div className="flex items-start space-x-2">
+                    <span className="text-amber-400 font-bold text-[11px] uppercase tracking-wide shrink-0">Evaluation:</span>
+                    <span className="text-zinc-200 text-[11px] leading-relaxed">{diceExplanation}</span>
+                  </div>
+                )}
+                {diceDieExplanations && diceDieExplanations.length > 0 && (
+                  <div className="space-y-1 pt-1.5 border-t border-zinc-850">
+                    <span className="text-[10px] text-zinc-400 uppercase tracking-wider block font-semibold">
+                      Per-Die Breakdown:
+                    </span>
+                    <div className="space-y-1 max-h-36 overflow-y-auto pr-1">
+                      {diceDieExplanations.map((exp, idx) => {
+                        const isSuccess = exp.includes('Hit!') || exp.includes('Deflected!') || exp.includes('Success') || exp.includes('🎯') || exp.includes('✓');
+                        const isFail = exp.includes('Miss') || exp.includes('Breached') || exp.includes('Failed') || exp.includes('fell short') || exp.includes('Stumble') || exp.includes('❌') || exp.includes('💥');
+                        return (
+                          <div
+                            key={idx}
+                            className={`text-[10px] px-2 py-1 rounded border flex items-center justify-between ${
+                              isSuccess
+                                ? 'bg-emerald-950/40 border-emerald-800/60 text-emerald-300'
+                                : isFail
+                                ? 'bg-rose-950/40 border-rose-800/60 text-rose-300'
+                                : 'bg-zinc-900 border-zinc-800 text-zinc-300'
+                            }`}
+                          >
+                            <span>{exp}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Roll History */}
             <div className="space-y-2">
               <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-400 font-bold block">
@@ -6086,18 +5736,25 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                 {diceHistory.map(rec => (
                   <div
                     key={rec.id}
-                    className="p-2 bg-zinc-950 rounded-lg border border-zinc-850 flex items-center justify-between font-mono text-[11px]"
+                    className="p-2 bg-zinc-950 rounded-lg border border-zinc-850 flex flex-col space-y-1 font-mono text-[11px]"
                   >
-                    <div className="flex items-center space-x-2">
-                      <span className="font-bold text-amber-400">{rec.notation}</span>
-                      <span className="text-zinc-400">[{rec.rolls.join(', ')}]</span>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <span className="font-bold text-amber-400">{rec.notation}</span>
+                        <span className="text-zinc-400">[{rec.rolls.join(', ')}]</span>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <span className="font-bold text-white">= {rec.sum}</span>
+                        {rec.successes !== undefined && (
+                          <span className="text-emerald-400 text-[10px]">({rec.successes}✓)</span>
+                        )}
+                      </div>
                     </div>
-                    <div className="flex items-center space-x-2">
-                      <span className="font-bold text-white">= {rec.sum}</span>
-                      {rec.successes !== undefined && (
-                        <span className="text-emerald-400 text-[10px]">({rec.successes}✓)</span>
-                      )}
-                    </div>
+                    {rec.explanation && (
+                      <div className="text-[10px] text-zinc-400 italic truncate" title={rec.explanation}>
+                        {rec.explanation}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -6108,7 +5765,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
       {/* Drawer 2: Command Phase & Stratagems Slide-out */}
       {commandDrawerOpen && (
-        <div className="fixed top-10 right-0 bottom-0 w-84 md:w-96 bg-[#11131c]/95 backdrop-blur-md border-l border-zinc-700 shadow-2xl z-50 flex flex-col overflow-hidden animate-in slide-in-from-right duration-200">
+        <div className="fixed top-[50px] right-0 bottom-0 w-84 md:w-96 bg-[#11131c]/95 backdrop-blur-md border-l border-zinc-700 shadow-2xl z-50 flex flex-col overflow-hidden animate-in slide-in-from-right duration-200">
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 bg-[#161924]">
             <div className="flex items-center space-x-2">
@@ -6288,7 +5945,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
       {/* Drawer 3: Strategic Reserves Slide-out */}
       {reservesDrawerOpen && (
-        <div className="fixed top-10 right-0 bottom-0 w-84 md:w-96 bg-[#11131c]/95 backdrop-blur-md border-l border-zinc-700 shadow-2xl z-50 flex flex-col overflow-hidden animate-in slide-in-from-right duration-200">
+        <div className="fixed top-[50px] right-0 bottom-0 w-84 md:w-96 bg-[#11131c]/95 backdrop-blur-md border-l border-zinc-700 shadow-2xl z-50 flex flex-col overflow-hidden animate-in slide-in-from-right duration-200">
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 bg-[#161924]">
             <div className="flex items-center space-x-2">
@@ -6390,7 +6047,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
       {/* Drawer 4: Embarked Units Slide-out */}
       {embarkedDrawerOpen && (
-        <div className="fixed top-10 right-0 bottom-0 w-84 md:w-96 bg-[#11131c]/95 backdrop-blur-md border-l border-zinc-700 shadow-2xl z-50 flex flex-col overflow-hidden animate-in slide-in-from-right duration-200">
+        <div className="fixed top-[50px] right-0 bottom-0 w-84 md:w-96 bg-[#11131c]/95 backdrop-blur-md border-l border-zinc-700 shadow-2xl z-50 flex flex-col overflow-hidden animate-in slide-in-from-right duration-200">
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 bg-[#161924]">
             <div className="flex items-center space-x-2">

@@ -671,7 +671,7 @@ export function syncUnitTokens(unit: Unit, allUnits?: Unit[]): Unit {
 export function applyDamageToTokens(unit: Unit, livesLost: number): Unit {
   if (livesLost <= 0) return unit;
 
-  let currentUnit = syncUnitTokens(unit);
+  let currentUnit = unit.position ? syncUnitTokens(unit) : unit;
   const tokens = [...(currentUnit.tokens || [])];
   if (tokens.length === 0 || currentUnit.stats.lives <= 0) {
     return {
@@ -684,13 +684,32 @@ export function applyDamageToTokens(unit: Unit, livesLost: number): Unit {
 
   let damageToDeal = livesLost;
 
-  // Allocate damage to tokens: prefer already wounded token first, then reverse order
+  // Allocate damage to tokens: bodyguard models absorb damage first to protect attached leaders
   while (damageToDeal > 0 && tokens.length > 0) {
-    // Find an already wounded token (currentLives < maxLives and > 0), or take the last token
-    let targetIndex = tokens.findIndex(t => t.currentLives > 0 && t.currentLives < t.maxLives);
-    if (targetIndex === -1) {
-      targetIndex = tokens.length - 1; // Take last token
+    const hasRegularBodyguards = tokens.some(t => !t.isLeaderToken && t.currentLives > 0);
+
+    let targetIndex = -1;
+    if (hasRegularBodyguards) {
+      // Find an already wounded bodyguard token first
+      targetIndex = tokens.findIndex(t => !t.isLeaderToken && t.currentLives > 0 && t.currentLives < t.maxLives);
+      if (targetIndex === -1) {
+        // Otherwise take the last non-leader bodyguard token
+        for (let i = tokens.length - 1; i >= 0; i--) {
+          if (!tokens[i].isLeaderToken && tokens[i].currentLives > 0) {
+            targetIndex = i;
+            break;
+          }
+        }
+      }
+    } else {
+      // No bodyguard models remain; damage falls upon the leader token
+      targetIndex = tokens.findIndex(t => t.currentLives > 0 && t.currentLives < t.maxLives);
+      if (targetIndex === -1) {
+        targetIndex = tokens.length - 1;
+      }
     }
+
+    if (targetIndex === -1) break;
 
     const targetToken = tokens[targetIndex];
     const damage = Math.min(targetToken.currentLives, damageToDeal);
@@ -722,7 +741,7 @@ export function applyDamageToTokens(unit: Unit, livesLost: number): Unit {
     tokens
   };
 
-  return syncUnitTokens(updatedUnit);
+  return unit.position ? syncUnitTokens(updatedUnit) : updatedUnit;
 }
 
 /**
@@ -1001,12 +1020,29 @@ export function findValidMovePositionForBot(
  */
 export function getUnitCollisionRadius(unit: Unit): number {
   const baseR = getUnitBaseRadius(unit);
+  const modelCount = unit.stats?.modelCount || 1;
   if (!unit.tokens || unit.tokens.length <= 1) {
+    if (modelCount > 1) {
+      const offsets = calculateFormationOffsets(modelCount, unit.formation || 'circle', baseR);
+      let maxReach = baseR;
+      for (const off of offsets) {
+        const dist = Math.hypot(off.offsetX, off.offsetY) + baseR;
+        if (dist > maxReach) maxReach = dist;
+      }
+      return Math.round(maxReach);
+    }
     return baseR;
   }
   let maxReach = baseR;
   for (const t of unit.tokens) {
-    const dist = Math.hypot(t.offsetX || 0, t.offsetY || 0) + (t.radius || baseR);
+    const offX = typeof t.offsetX === 'number' && t.offsetX !== 0
+      ? t.offsetX
+      : (unit.position ? t.x - unit.position.x : 0);
+    const offY = typeof t.offsetY === 'number' && t.offsetY !== 0
+      ? t.offsetY
+      : (unit.position ? t.y - unit.position.y : 0);
+    const tokR = t.radius || (t.baseWidth ? t.baseWidth / 2 : (t.size ? t.size / 2 : baseR));
+    const dist = Math.hypot(offX, offY) + tokR;
     if (dist > maxReach) {
       maxReach = dist;
     }
@@ -1450,6 +1486,104 @@ export function findValidDisembarkPosition(
   }
 
   return null;
+}
+
+export interface ValidEngagementResult {
+  valid: boolean;
+  position: WorldPoint;
+  reason?: string;
+}
+
+/**
+ * Finds a valid, collision-free engagement position for a charger to engage targetUnit:
+ * - Positions the charger in base-to-base tangent melee contact with targetUnit
+ * - Searches around the perimeter in 15-degree steps (360 degrees) and varying tangent distance offsets
+ * - Ensures no token overlaps with ANY non-attached unit or fellow squad members
+ * - Ensures the charger actually ends in melee engagement range (<= 1.0 sq / 50px edge distance)
+ * - Verifies the swept movement path does not cut through intervening models (without FLY)
+ * - Returns { valid: true, position } if a legal position is found; { valid: false, position: originPos } otherwise.
+ */
+export function findValidEngagementPosition(
+  charger: Unit,
+  targetUnit: Unit,
+  allUnits: Unit[],
+  maxMoveDistancePx?: number,
+  worldWidth: number = 1200,
+  worldHeight: number = 800
+): ValidEngagementResult {
+  const originPos = charger.position;
+  if (!originPos || !targetUnit.position) {
+    return { valid: false, position: originPos || { x: 0, y: 0 }, reason: 'Missing unit positions' };
+  }
+
+  const targetRadius = getUnitCollisionRadius(targetUnit);
+  const chargerRadius = getUnitCollisionRadius(charger);
+  // Base tangent contact distance
+  const baseContactDist = targetRadius + chargerRadius + 2;
+
+  // Filter out charger and any attached leaders
+  const attachedIds = new Set([charger.id, ...(charger.attachedUnits || [])]);
+  const unitsToCheck = allUnits.filter(u => !attachedIds.has(u.id));
+
+  const baseAngle = Math.atan2(targetUnit.position.y - originPos.y, targetUnit.position.x - originPos.x);
+
+  // Search angles in 15-degree increments (0, +15, -15, +30, -30, ... up to 180 deg)
+  const angleDeltas: number[] = [0];
+  for (let step = 1; step <= 12; step++) {
+    angleDeltas.push(step * 0.26, -step * 0.26);
+  }
+
+  // Distance buffers: test tangent (+0), then slightly further out (+4, +8, +14, +20px)
+  // while ensuring charger remains in melee range
+  const distBuffers = [0, 4, 8, 14, 20];
+
+  for (const delta of angleDeltas) {
+    const testAngle = baseAngle + delta;
+    for (const buf of distBuffers) {
+      const contactDist = baseContactDist + buf;
+      const testX = Math.max(chargerRadius, Math.min(worldWidth - chargerRadius, Math.round(targetUnit.position.x - Math.cos(testAngle) * contactDist)));
+      const testY = Math.max(chargerRadius, Math.min(worldHeight - chargerRadius, Math.round(targetUnit.position.y - Math.sin(testAngle) * contactDist)));
+
+      const distMoved = Math.hypot(testX - originPos.x, testY - originPos.y);
+      if (typeof maxMoveDistancePx === 'number' && distMoved > maxMoveDistancePx) {
+        continue; // Exceeds roll distance
+      }
+
+      const testUnit = moveUnit(charger, { x: testX, y: testY }, allUnits);
+      const colCheck = checkUniversalTokenCollisions(testUnit.tokens || [], unitsToCheck, charger.id);
+      if (colCheck.hasCollision) {
+        continue;
+      }
+
+      // Verify charger is in melee range of targetUnit
+      if (!isUnitInMeleeRange(testUnit, targetUnit, DEFAULT_GRID_SIZE)) {
+        continue;
+      }
+
+      // Verify path doesn't cut through screening units
+      const pathCheck = checkPathCrossesUnits(
+        charger,
+        originPos,
+        { x: testX, y: testY },
+        allUnits,
+        { isCharge: true, chargeTargetUnitId: targetUnit.id }
+      );
+      if (pathCheck.hasCollision) {
+        continue;
+      }
+
+      return {
+        valid: true,
+        position: { x: testX, y: testY }
+      };
+    }
+  }
+
+  return {
+    valid: false,
+    position: originPos,
+    reason: 'All engagement positions or paths are obstructed by terrain or models.'
+  };
 }
 
 export interface AbandonShipModelResult {
@@ -2198,14 +2332,30 @@ export function checkPathCrossesUnits(
   const obstacleUnits = allUnits.filter(u => {
     if (u.id === unit.id) return false;
     if (options?.ignoreUnitId && u.id === options.ignoreUnitId) return false;
+    // Attached units (leader/bodyguard pairing) are part of the same combined unit
+    if (unit.attachedUnits?.includes(u.id) || u.attachedUnits?.includes(unit.id)) return false;
+    if (unit.attachedTo === u.id || u.attachedTo === unit.id) return false;
     if (options?.isCharge && options?.chargeTargetUnitId && u.id === options.chargeTargetUnitId) {
       return false; // charge target is the intended destination
     }
     if (u.embarkedIn || u.inStrategicReserve || !u.position || u.stats.lives <= 0) return false;
 
-    // Friendly Infantry Pass-Through Rule: Friendly infantry/characters can move through fellow friendly infantry/characters
-    const isMovingInfantry = unit.type === 'Infantry' || unit.type === 'Character';
-    const isObstacleFriendlyInfantry = (u.type === 'Infantry' || u.type === 'Character') && u.owner === unit.owner;
+    // Friendly Infantry Pass-Through Rule: Friendly infantry/characters/battleline can move through fellow friendly models
+    const isMovingInfantry = 
+      unit.type === 'Infantry' || 
+      unit.type === 'Character' || 
+      unit.role === 'Battleline' || 
+      unit.role === 'Infantry / Mounted' ||
+      unit.role === 'Leader' ||
+      unit.role === 'Legendary Leader';
+    const isObstacleFriendlyInfantry = 
+      (u.type === 'Infantry' || 
+       u.type === 'Character' || 
+       u.role === 'Battleline' || 
+       u.role === 'Infantry / Mounted' ||
+       u.role === 'Leader' ||
+       u.role === 'Legendary Leader') && 
+      u.owner === unit.owner;
     if (isMovingInfantry && isObstacleFriendlyInfantry) {
       return false;
     }

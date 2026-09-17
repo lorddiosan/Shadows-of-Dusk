@@ -34,6 +34,7 @@ export interface StatBlock {
   meleeDamageDice?: string; // Melee damage die: 'd3' | 'd6' | 'd8' | 'd10' | 'd12' | 'd20' (default 'd3')
   rangedAttacks?: number; // Number of ranged attacks per model (default 1 if range > 0, else 0)
   rangedDamageDice?: string; // Ranged damage die: 'd3' | 'd6' | 'd8' | 'd10' | 'd12' | 'd20' (default 'd3')
+  armorSave?: number; // Defense armor save threshold on 1d6 (e.g. 2 for 2+, 3 for 3+, 4 for 4+; defaults to 9 - def)
 }
 
 export interface WorldPoint {

@@ -269,8 +269,13 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
   useEffect(() => {
     if (typeof zoomLevel === 'number' && Math.abs(zoomLevel - zoom) > 0.01) {
       setZoom(zoomLevel);
+      if (Math.abs(zoomLevel - 1.0) < 0.01) {
+        centerBoard(1.0);
+      } else {
+        setPan(prev => clampPan(prev.x, prev.y, zoomLevel));
+      }
     }
-  }, [zoomLevel]);
+  }, [zoomLevel, zoom]);
 
   const updateZoom = (newZ: number) => {
     const clamped = Math.min(2.5, Math.max(0.4, Math.round(newZ * 100) / 100));
@@ -329,8 +334,8 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
   const [isDragOverCanvas, setIsDragOverCanvas] = useState<boolean>(false);
   const [dragOverPos, setDragOverPos] = useState<WorldPoint | null>(null);
 
-  // Drag & Drop Live Diagnostic HUD State
-  const [showDebugHud, setShowDebugHud] = useState<boolean>(true);
+  // Drag & Drop Live Diagnostic HUD State (disabled by default for clean presentation)
+  const [showDebugHud, setShowDebugHud] = useState<boolean>(false);
   const [debugHudData, setDebugHudData] = useState<{
     lastEvent: string;
     screenX: number;
@@ -383,14 +388,47 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
     return { x: Math.round(x), y: Math.round(y) };
   }, [pan, zoom]);
 
-  // Center canvas on mount
+  // Boundary Clamping: Guarantees the tabletop canvas can never be lost offscreen
+  const clampPan = useCallback((panX: number, panY: number, currentZoom: number = zoom) => {
+    if (!containerRef.current) return { x: panX, y: panY };
+    const rect = containerRef.current.getBoundingClientRect();
+    if (!rect.width || !rect.height) return { x: panX, y: panY };
+
+    const boardW = WORLD_WIDTH * currentZoom;
+    const boardH = WORLD_HEIGHT * currentZoom;
+
+    // Margin ensures the board edge cannot be pushed more than 100px past the viewport edge
+    const marginX = 100;
+    const marginY = 100;
+
+    const minPanX = Math.min(rect.width - boardW, 0) - marginX;
+    const maxPanX = Math.max(rect.width - boardW, 0) + marginX;
+    const minPanY = Math.min(rect.height - boardH, 0) - marginY;
+    const maxPanY = Math.max(rect.height - boardH, 0) + marginY;
+
+    return {
+      x: Math.round(Math.min(maxPanX, Math.max(minPanX, panX))),
+      y: Math.round(Math.min(maxPanY, Math.max(minPanY, panY)))
+    };
+  }, [zoom]);
+
+  const centerBoard = useCallback((targetZoom: number = zoom) => {
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const initialPanX = (rect.width - WORLD_WIDTH * targetZoom) / 2;
+    const initialPanY = (rect.height - WORLD_HEIGHT * targetZoom) / 2;
+    setPan({ x: Math.round(initialPanX), y: Math.round(initialPanY) });
+  }, [zoom]);
+
+  // Center canvas on mount & clamp on window resize
   useEffect(() => {
-    if (containerRef.current) {
-      const rect = containerRef.current.getBoundingClientRect();
-      const initialPanX = (rect.width - WORLD_WIDTH * zoom) / 2;
-      const initialPanY = (rect.height - WORLD_HEIGHT * zoom) / 2;
-      setPan({ x: Math.max(10, initialPanX), y: Math.max(10, initialPanY) });
-    }
+    centerBoard(zoom);
+    const handleResize = () => {
+      setPan(prev => clampPan(prev.x, prev.y, zoom));
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
   }, []);
 
   // Zoom Handler via Mouse Wheel
@@ -409,7 +447,7 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
     const newPanY = mouseScreenY - (mouseScreenY - pan.y) * (newZoom / zoom);
 
     updateZoom(newZoom);
-    setPan({ x: newPanX, y: newPanY });
+    setPan(clampPan(newPanX, newPanY, newZoom));
   };
 
   // Canvas Mouse Down: Right-click Pan (Button 2), Middle click (Button 1), or Action
@@ -417,6 +455,11 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
     // 1. Right-click (button === 2) OR Middle-click (button === 1) OR modifier key initiates panning
     if (e.button === 2 || e.button === 1 || e.shiftKey || e.altKey) {
       e.preventDefault();
+      // Double click re-centers the board directly
+      if (e.detail === 2) {
+        centerBoard(zoom);
+        return;
+      }
       setIsPanning(true);
       setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
       return;
@@ -447,10 +490,11 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
   // Canvas Mouse Move
   const handleMouseMove = (e: React.MouseEvent) => {
     if (isPanning) {
-      setPan({
-        x: e.clientX - panStart.x,
-        y: e.clientY - panStart.y
-      });
+      setPan(clampPan(
+        e.clientX - panStart.x,
+        e.clientY - panStart.y,
+        zoom
+      ));
       return;
     }
 
@@ -851,8 +895,10 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
             }
           }
 
-          // Universal Collision Check (No base overlap, touching allowed)
-          const colCheck = checkUniversalTokenCollisions(candidate, units, unit.id, draggingTokenId);
+          // Universal Collision Check (No base overlap with fellow squad members or other units, touching allowed)
+          const otherSquadTokens = (unit.tokens || []).filter(t => t.id !== draggingTokenId && t.currentLives > 0);
+          const fullSquadCandidate = [...otherSquadTokens, { ...movingToken, x: targetX, y: targetY }];
+          const colCheck = checkUniversalTokenCollisions(fullSquadCandidate, units, unit.id);
           if (colCheck.hasCollision) {
             setRejectedPlacementNotice(
               `⚠️ Placement Rejected: Model base overlaps with ${colCheck.collidingUnitName}! Models may touch base-to-base, but cannot overlap.`
@@ -863,10 +909,21 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
             return;
           }
 
-          // Swept path collision check (BUG-024): Cannot cross through other units unless FLY
+          // Swept path collision check: Only check the moving model's swept path!
+          // Infantry of the same squad and attached units can freely pass through each other.
           if (activePhase === 'Movement' && !unit.isPendingDisembarkConfirm) {
+            const singleTokenUnit: Unit = {
+              ...unit,
+              tokens: [{
+                ...movingToken,
+                x: dragTokenInitialPos.x,
+                y: dragTokenInitialPos.y,
+                offsetX: 0,
+                offsetY: 0
+              }]
+            };
             const pathCheck = checkPathCrossesUnits(
-              unit,
+              singleTokenUnit,
               dragTokenInitialPos,
               { x: targetX, y: targetY },
               units,
@@ -2589,55 +2646,9 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
       </div>
 
       {/* ============================================================= */}
-      {/* LAYER 6: UILayer (Fixed Viewport Controls & Formation Dock)    */}
       {/* ============================================================= */}
-      
-      {/* Top Floating Viewport Control Bar */}
-      <div className="absolute top-3 left-3 bg-[#161922]/90 border border-zinc-800 backdrop-blur rounded-xl p-1.5 shadow-2xl flex items-center space-x-1.5 z-40 text-xs">
-        <button
-          onClick={() => setZoom(prev => Math.min(2.5, prev + 0.15))}
-          title="Zoom In"
-          className="p-1.5 hover:bg-zinc-800 text-zinc-300 hover:text-white rounded-lg transition"
-        >
-          <ZoomIn className="w-4 h-4" />
-        </button>
-        <button
-          onClick={() => setZoom(prev => Math.max(0.4, prev - 0.15))}
-          title="Zoom Out"
-          className="p-1.5 hover:bg-zinc-800 text-zinc-300 hover:text-white rounded-lg transition"
-        >
-          <ZoomOut className="w-4 h-4" />
-        </button>
-        <button
-          onClick={handleResetView}
-          title="Center Map / Reset Zoom"
-          className="p-1.5 hover:bg-zinc-800 text-zinc-300 hover:text-white rounded-lg transition text-[11px] font-mono font-bold px-2"
-        >
-          {Math.round(zoom * 100)}%
-        </button>
-
-        <div className="w-[1px] h-4 bg-zinc-800 my-auto" />
-
-        <button
-          onClick={() => setShowGrid(prev => !prev)}
-          title="Toggle Grid Overlay"
-          className={`p-1.5 rounded-lg transition ${
-            showGrid ? 'bg-zinc-800 text-amber-400' : 'text-zinc-500 hover:text-zinc-300'
-          }`}
-        >
-          <GridIcon className="w-4 h-4" />
-        </button>
-
-        <button
-          onClick={() => setEnableSnap(prev => !prev)}
-          title="Toggle Snap-to-Grid"
-          className={`p-1.5 rounded-lg transition ${
-            enableSnap ? 'bg-zinc-800 text-emerald-400' : 'text-zinc-500 hover:text-zinc-300'
-          }`}
-        >
-          <Magnet className="w-4 h-4" />
-        </button>
-      </div>
+      {/* LAYER 6: UILayer (Deployment Mode & Formation Dock)           */}
+      {/* ============================================================= */}
 
       {/* Deployment Mode & Formation Dock (Strictly Deployment Phase Only) */}
       {activePhase === 'Deployment' && (

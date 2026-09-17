@@ -1,21 +1,48 @@
 import { Unit, UnitType } from '../types/game';
 
+export interface AttackGroupResult {
+  unitName: string;
+  isLeader: boolean;
+  attacksCount: number;
+  hitRolls: number[];
+  hitsCount: number;
+  damageDie: string;
+  saveRolls: number[];
+  savesCount: number;
+  penetratingHits: number;
+  damageRolls: number[];
+  damageDealt: number;
+}
+
+export interface ResolveCombatOptions {
+  attachedLeaders?: Unit[];
+  defenderInCover?: boolean;
+  skipSaves?: boolean;
+}
+
 // Section 5: Combat Resolution
 export interface CombatResult {
   attackerName: string;
   defenderName: string;
   isMelee: boolean;
   totalAttacks: number;
-  hitRolls: number[];       // The d20 hit rolls
+  hitRolls: number[];       // All d20 hit rolls
   targetCurrentDef: number; // Target's Def threshold
   hitsCount: number;        // How many d20 > targetDef
-  damageDie: string;        // 'd3', 'd6', 'd8', etc.
-  damageRolls: number[];    // Individual damage rolls for each hit
-  totalDamage: number;      // Sum of damage
+  hitExplanations?: string[]; // Detailed evaluation for each d20 hit roll
+  saveTarget: number;       // Defender's 1d6 armor save threshold (e.g. 4 for 4+)
+  saveRolls: number[];      // 1d6 save rolls rolled by defender
+  savesCount: number;       // How many hits were deflected by armor
+  saveExplanations?: string[]; // Detailed evaluation for each 1d6 save roll
+  penetratingHits: number;  // How many hits breached armor to roll damage
+  damageDie: string;        // Primary damage die or summary
+  damageRolls: number[];    // Individual damage rolls for each penetrating hit
+  totalDamage: number;      // Sum of damage dealt
   livesLost: number;        // Lives lost by target
   defModifierChange: number;
   leaderSaved: boolean;
   logText: string;
+  attackGroups?: AttackGroupResult[]; // Breakdown by squad / attached leader
   // Backward compatibility:
   attackReceived: number;
   roll1d3: number;
@@ -27,6 +54,46 @@ export function parseDieSides(dieStr?: string): number {
   if (!dieStr) return 3;
   const match = dieStr.toLowerCase().match(/d(\d+)/);
   return match ? parseInt(match[1], 10) : 3;
+}
+
+/**
+ * Calculate the 1d6 Armor Save Target for a unit.
+ * Supports the full Defense spectrum up to Def 20 without breaking:
+ * - Def 1 - 4: 6+ Save (17% deflection)
+ * - Def 5 - 8: 5+ Save (33% deflection)
+ * - Def 9 - 12: 4+ Save (50% deflection)
+ * - Def 13 - 16: 3+ Save (67% deflection)
+ * - Def 17 - 20+: 2+ Save (83% deflection)
+ * If explicit defender.stats.armorSave is set (2-6), uses that directly.
+ * Terrain cover grants a +1 save improvement (minimum 2+).
+ */
+export function calculateArmorSaveTarget(
+  defender: Unit,
+  defenderInCover?: boolean
+): number {
+  let saveTarget: number;
+  if (typeof defender.stats.armorSave === 'number' && defender.stats.armorSave >= 2 && defender.stats.armorSave <= 6) {
+    saveTarget = defender.stats.armorSave;
+  } else {
+    const currentDef = Math.max(1, defender.stats.def + defender.stats.defModifier);
+    if (currentDef <= 4) {
+      saveTarget = 6;
+    } else if (currentDef <= 8) {
+      saveTarget = 5;
+    } else if (currentDef <= 12) {
+      saveTarget = 4;
+    } else if (currentDef <= 16) {
+      saveTarget = 3;
+    } else {
+      saveTarget = 2;
+    }
+  }
+
+  if (defenderInCover) {
+    saveTarget = Math.max(2, saveTarget - 1);
+  }
+
+  return Math.max(2, Math.min(6, saveTarget));
 }
 
 /**
@@ -68,36 +135,28 @@ export function rollLeaderSurvival(damageReceived: number): { survived: boolean;
 }
 
 /**
- * Two-Roll Combat Resolution Engine:
- * 1. Attacks count = livingModelsCount * attacksPerModel (melee or ranged).
- * 2. Hit Roll: For each attack, roll 1d20. If d20 > target.Def, attack hits!
- * 3. Damage Roll: For each hit that passed, roll the unit's damage die (d3, d6, d8, etc.).
- * 4. Sum damage rolls and apply to target lives.
+ * Comprehensive Combat Resolution Engine:
+ * 1. Attached Leader Coordination: Pools attacks from bodyguard squad + attached leaders into a combined strike.
+ * 2. Hit Roll (d20 vs Def): Each attack rolls 1d20. If d20 > defender.Def, attack scores a Hit!
+ * 3. Armor / Defense Save Roll (1d6 vs saveTarget):
+ *    Defender rolls 1d6 per Hit scored. Scaled across the full 1-20 Defense range.
+ *    A natural 1 always fails. Rolls >= saveTarget deflect the hit for 0 damage!
+ * 4. Damage Roll: Only penetrating hits roll their damage die (d3, d6, d8, etc.).
+ * 5. Sum penetrating damage and apply to target lives.
  */
 export function resolveCombat(
   attacker: Unit,
   defender: Unit,
   isMelee: boolean,
-  extraAdvantageStacks: number = 0
+  extraAdvantageStacks: number = 0,
+  options?: ResolveCombatOptions
 ): CombatResult {
-  // 1. Calculate living models
-  const livingTokens = (attacker.tokens || []).filter(t => t.currentLives > 0);
-  const livingModelCount = livingTokens.length > 0 
-    ? livingTokens.length 
-    : Math.max(1, attacker.stats.modelCount || 1);
+  const currentDef = Math.max(1, defender.stats.def + defender.stats.defModifier);
 
-  // 2. Determine attack count per model & damage die
-  const attacksPerModel = isMelee 
-    ? (attacker.stats.meleeAttacks ?? 1) 
-    : (attacker.stats.rangedAttacks ?? (attacker.stats.range > 0 ? 1 : 0));
-  
-  const damageDie = isMelee
-    ? (attacker.stats.meleeDamageDice ?? (attacker.type === 'Vehicle' || attacker.type === 'Monster' ? 'd6' : 'd3'))
-    : (attacker.stats.rangedDamageDice ?? (attacker.type === 'Vehicle' ? 'd6' : 'd3'));
+  // Calculate defender's 1d6 armor save threshold cleanly across Def 1-20
+  const saveTarget = calculateArmorSaveTarget(defender, options?.defenderInCover);
 
-  const totalAttacks = Math.max(1, livingModelCount * attacksPerModel);
-
-  // Advantage / Disadvantage
+  // Advantage / Disadvantage for primary attacker
   let adv = attacker.advantageStacks + extraAdvantageStacks;
   let disadv = attacker.disadvantageStacks;
   if (isMelee && checkTypeAdvantage(attacker.type, defender.type)) {
@@ -105,41 +164,182 @@ export function resolveCombat(
   }
   const netAdvantage = Math.max(-2, Math.min(2, adv - disadv));
 
-  // 3. Roll 1: To-Hit Roll (d20 vs Def)
-  const currentDef = Math.max(1, defender.stats.def + defender.stats.defModifier);
-  const hitRolls: number[] = [];
-  let hitsCount = 0;
+  // Determine attacking units list (primary attacker + attached leaders)
+  interface AttackingUnitEntry {
+    unit: Unit;
+    isLeader: boolean;
+    livingModelCount: number;
+    attacksPerModel: number;
+    damageDie: string;
+  }
 
-  for (let i = 0; i < totalAttacks; i++) {
-    let roll = Math.floor(Math.random() * 20) + 1; // 1-20
-    if (netAdvantage > 0) {
-      const advRoll = Math.floor(Math.random() * 20) + 1;
-      roll = Math.max(roll, advRoll);
-    } else if (netAdvantage < 0) {
-      const disadvRoll = Math.floor(Math.random() * 20) + 1;
-      roll = Math.min(roll, disadvRoll);
-    }
-    hitRolls.push(roll);
+  const attackingEntries: AttackingUnitEntry[] = [];
 
-    // If roll > target Def: Hit! If <= target Def: Fails
-    if (roll > currentDef) {
-      hitsCount++;
+  // Primary attacker
+  const livingTokens = (attacker.tokens || []).filter(t => t.currentLives > 0);
+  const squadLivingCount = livingTokens.length > 0 
+    ? livingTokens.filter(t => !t.isLeaderToken).length || livingTokens.length
+    : Math.max(1, attacker.stats.modelCount || 1);
+
+  const primaryAttacksPerModel = isMelee 
+    ? (attacker.stats.meleeAttacks ?? 1) 
+    : (attacker.stats.rangedAttacks ?? (attacker.stats.range > 0 ? 1 : 0));
+
+  const primaryDamageDie = isMelee
+    ? (attacker.stats.meleeDamageDice ?? (attacker.type === 'Vehicle' || attacker.type === 'Monster' ? 'd6' : 'd3'))
+    : (attacker.stats.rangedDamageDice ?? (attacker.type === 'Vehicle' ? 'd6' : 'd3'));
+
+  if (isMelee || attacker.stats.range > 0) {
+    attackingEntries.push({
+      unit: attacker,
+      isLeader: attacker.type === 'Character' || !!attacker.attachedTo,
+      livingModelCount: squadLivingCount,
+      attacksPerModel: primaryAttacksPerModel,
+      damageDie: primaryDamageDie
+    });
+  }
+
+  // Attached leaders (if provided)
+  if (options?.attachedLeaders && options.attachedLeaders.length > 0) {
+    for (const leader of options.attachedLeaders) {
+      if (leader.id === attacker.id || leader.stats.lives <= 0) continue;
+      const leaderAttacks = isMelee
+        ? (leader.stats.meleeAttacks ?? 1)
+        : (leader.stats.rangedAttacks ?? (leader.stats.range > 0 ? 1 : 0));
+      
+      if (!isMelee && leader.stats.range === 0) continue; // Melee-only leader cannot fire ranged
+
+      const leaderDamageDie = isMelee
+        ? (leader.stats.meleeDamageDice ?? (leader.type === 'Vehicle' || leader.type === 'Monster' ? 'd6' : 'd3'))
+        : (leader.stats.rangedDamageDice ?? (leader.type === 'Vehicle' ? 'd6' : 'd3'));
+
+      attackingEntries.push({
+        unit: leader,
+        isLeader: true,
+        livingModelCount: 1,
+        attacksPerModel: leaderAttacks,
+        damageDie: leaderDamageDie
+      });
     }
   }
 
-  // 4. Roll 2: Damage Rolls
-  const dieSides = parseDieSides(damageDie);
-  const damageRolls: number[] = [];
-  for (let i = 0; i < hitsCount; i++) {
-    damageRolls.push(Math.floor(Math.random() * dieSides) + 1);
+  // Fallback if no entries (e.g. 0 range unit attempted ranged)
+  if (attackingEntries.length === 0) {
+    attackingEntries.push({
+      unit: attacker,
+      isLeader: attacker.type === 'Character',
+      livingModelCount: 1,
+      attacksPerModel: 0,
+      damageDie: primaryDamageDie
+    });
   }
 
-  let totalDamage = damageRolls.reduce((a, b) => a + b, 0);
-  const defModifierChange = 0;
+  const allHitRolls: number[] = [];
+  const allSaveRolls: number[] = [];
+  const allDamageRolls: number[] = [];
+  const allHitExplanations: string[] = [];
+  const allSaveExplanations: string[] = [];
+  let totalHitsCount = 0;
+  let totalSavesCount = 0;
+  let totalPenetratingHits = 0;
+  let totalDamageDealt = 0;
+  let totalAttacksCount = 0;
 
-  // Check Leader survival roll if lives would be lost
+  const attackGroups: AttackGroupResult[] = [];
+
+  for (const entry of attackingEntries) {
+    const groupAttacks = Math.max(0, entry.livingModelCount * entry.attacksPerModel);
+    totalAttacksCount += groupAttacks;
+
+    const groupHitRolls: number[] = [];
+    let groupHits = 0;
+
+    for (let i = 0; i < groupAttacks; i++) {
+      let roll = Math.floor(Math.random() * 20) + 1; // 1-20
+      if (netAdvantage > 0) {
+        const advRoll = Math.floor(Math.random() * 20) + 1;
+        roll = Math.max(roll, advRoll);
+      } else if (netAdvantage < 0) {
+        const disadvRoll = Math.floor(Math.random() * 20) + 1;
+        roll = Math.min(roll, disadvRoll);
+      }
+      groupHitRolls.push(roll);
+      allHitRolls.push(roll);
+
+      if (roll > currentDef) {
+        groupHits++;
+        totalHitsCount++;
+        allHitExplanations.push(`Roll ${roll} > Def ${currentDef}: Hit! 🎯`);
+      } else {
+        allHitExplanations.push(`Roll ${roll} <= Def ${currentDef}: Miss ❌`);
+      }
+    }
+
+    // Armor Saves against this group's hits
+    const groupSaveRolls: number[] = [];
+    let groupSaves = 0;
+    let groupPenetrating = 0;
+
+    if (options?.skipSaves) {
+      groupPenetrating = groupHits;
+    } else {
+      for (let i = 0; i < groupHits; i++) {
+        const sRoll = Math.floor(Math.random() * 6) + 1; // 1-6
+        groupSaveRolls.push(sRoll);
+        allSaveRolls.push(sRoll);
+
+        // Natural 1 always fails; roll >= saveTarget succeeds
+        if (sRoll > 1 && sRoll >= saveTarget) {
+          groupSaves++;
+          totalSavesCount++;
+          allSaveExplanations.push(`Roll ${sRoll} >= ${saveTarget}+ Save: Deflected! 🛡️`);
+        } else if (sRoll === 1) {
+          groupPenetrating++;
+          totalPenetratingHits++;
+          allSaveExplanations.push(`Roll 1 (Nat 1): Armor Breached! 💥`);
+        } else {
+          groupPenetrating++;
+          totalPenetratingHits++;
+          allSaveExplanations.push(`Roll ${sRoll} < ${saveTarget}+ Save: Penetrated! 💥`);
+        }
+      }
+    }
+
+    if (options?.skipSaves) {
+      totalPenetratingHits += groupPenetrating;
+    }
+
+    // Damage rolls for penetrating hits
+    const dieSides = parseDieSides(entry.damageDie);
+    const groupDamageRolls: number[] = [];
+    for (let i = 0; i < groupPenetrating; i++) {
+      const dmg = Math.floor(Math.random() * dieSides) + 1;
+      groupDamageRolls.push(dmg);
+      allDamageRolls.push(dmg);
+    }
+    const groupDamage = groupDamageRolls.reduce((a, b) => a + b, 0);
+    totalDamageDealt += groupDamage;
+
+    attackGroups.push({
+      unitName: entry.unit.name,
+      isLeader: entry.isLeader,
+      attacksCount: groupAttacks,
+      hitRolls: groupHitRolls,
+      hitsCount: groupHits,
+      damageDie: entry.damageDie,
+      saveRolls: groupSaveRolls,
+      savesCount: groupSaves,
+      penetratingHits: groupPenetrating,
+      damageRolls: groupDamageRolls,
+      damageDealt: groupDamage
+    });
+  }
+
+  // Check Leader Survival roll if mortal damage would be dealt to a solo Character
   let leaderSaved = false;
-  if (totalDamage > 0 && defender.type === 'Character') {
+  let totalDamage = totalDamageDealt;
+  const isSoloLeaderDefender = defender.type === 'Character' && (!defender.attachedUnits || defender.attachedUnits.length === 0);
+  if (totalDamage > 0 && isSoloLeaderDefender) {
     const survival = rollLeaderSurvival(totalDamage);
     if (survival.survived) {
       totalDamage = 0;
@@ -149,43 +349,61 @@ export function resolveCombat(
 
   const livesLost = totalDamage;
   const damageCategory: 'double_def' | 'normal_damage' | 'glance' | 'absorbed' = 
-    hitsCount >= 2 ? 'double_def' : hitsCount === 1 ? 'normal_damage' : 'glance';
+    totalHitsCount >= 2 ? 'double_def' : totalHitsCount === 1 ? 'normal_damage' : 'glance';
 
   // Construct readable battle log
   const weaponType = isMelee ? 'Melee' : 'Ranged';
-  let logText = `⚔️ [${weaponType} Attack] ${attacker.name} (${livingModelCount} models) made ${totalAttacks} attack(s) vs Def ${currentDef}. `;
-  logText += `Hit rolls (d20): [${hitRolls.join(', ')}] → ${hitsCount}/${totalAttacks} Hit! `;
+  const attackerSummary = attackGroups.length > 1
+    ? `${attacker.name} & ${attackGroups.slice(1).map(g => g.unitName).join(', ')}`
+    : attacker.name;
 
-  if (hitsCount > 0) {
-    logText += `Damage (${damageDie} x ${hitsCount}): [${damageRolls.join(', ')}] = ${totalDamage} Damage. `;
-    if (leaderSaved) {
-      logText += `👑 Leader Survival Roll Succeeded! ${defender.name} parried the mortal damage!`;
+  let logText = `⚔️ [${weaponType} Attack] ${attackerSummary} made ${totalAttacksCount} attack(s) vs Def ${currentDef}. `;
+  logText += `Hit rolls (d20): [${allHitRolls.join(', ')}] → ${totalHitsCount}/${totalAttacksCount} Hit! `;
+
+  if (totalHitsCount > 0) {
+    if (!options?.skipSaves) {
+      logText += `🛡️ Armor Saves (${saveTarget}+ on 1d6): [${allSaveRolls.join(', ')}] → ${totalSavesCount} Saved, ${totalPenetratingHits} Penetrated! `;
+    }
+    if (totalPenetratingHits > 0) {
+      logText += `Damage: [${allDamageRolls.join(', ')}] = ${totalDamageDealt} Damage. `;
+      if (leaderSaved) {
+        logText += `👑 Leader Survival Roll Succeeded! ${defender.name} parried the mortal damage!`;
+      } else {
+        logText += `${defender.name} loses ${livesLost} Life (Remaining: ${Math.max(0, defender.stats.lives - livesLost)}).`;
+      }
     } else {
-      logText += `${defender.name} loses ${livesLost} Life (Remaining: ${Math.max(0, defender.stats.lives - livesLost)}).`;
+      logText += `All hits were deflected by ${defender.name}'s armor! 0 Damage taken.`;
     }
   } else {
     logText += `All attacks failed to beat ${defender.name}'s Defense (${currentDef}).`;
   }
 
   return {
-    attackerName: attacker.name,
+    attackerName: attackerSummary,
     defenderName: defender.name,
     isMelee,
-    totalAttacks,
-    hitRolls,
+    totalAttacks: Math.max(1, totalAttacksCount),
+    hitRolls: allHitRolls,
     targetCurrentDef: currentDef,
-    hitsCount,
-    damageDie,
-    damageRolls,
+    hitsCount: totalHitsCount,
+    hitExplanations: allHitExplanations,
+    saveTarget,
+    saveRolls: allSaveRolls,
+    savesCount: totalSavesCount,
+    saveExplanations: allSaveExplanations,
+    penetratingHits: totalPenetratingHits,
+    damageDie: primaryDamageDie,
+    damageRolls: allDamageRolls,
     totalDamage,
     livesLost,
-    defModifierChange,
+    defModifierChange: 0,
     leaderSaved,
     logText,
+    attackGroups,
     attackReceived: totalDamage,
-    roll1d3: hitRolls[0] || 0,
+    roll1d3: allHitRolls[0] || 0,
     damageCategory,
-    diceRolled: hitRolls
+    diceRolled: allHitRolls
   };
 }
 
