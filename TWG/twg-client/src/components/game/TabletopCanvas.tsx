@@ -28,7 +28,8 @@ import {
   checkUniversalTokenCollisions,
   validateNormalMovementEnemyProximity,
   checkPathCrossesUnits,
-  ENGAGEMENT_PROXIMITY_PX
+  ENGAGEMENT_PROXIMITY_PX,
+  hasFiringDeckTrait
 } from '../../engine/formationEngine';
 import { vttDragBridge, DragDebugEntry } from '../../services/dragBridge';
 
@@ -57,6 +58,8 @@ interface TabletopCanvasProps {
   onZoomChange?: (newZoom: number) => void;
   coherencyDistanceInches?: number;
   onMoveGroupTokens?: (updates: { unitId: string; tokenId: string; newPos: WorldPoint }[]) => void;
+  mapWidth?: number;
+  mapHeight?: number;
 }
 
 export interface TraitBadgeInfo {
@@ -125,6 +128,9 @@ export const getTraitBadgeInfo = (trait: string, isTemp = false): TraitBadgeInfo
       return { icon: '💚', label: 'Regeneration', badgeClass: 'bg-emerald-950/90 border-emerald-400 text-emerald-300' };
     case 'skimmer':
       return { icon: '⛵', label: 'Skimmer', badgeClass: 'bg-cyan-950/90 border-cyan-400 text-cyan-300' };
+    case 'firing deck':
+    case 'firingdeck':
+      return { icon: '🔫', label: 'Firing Deck', badgeClass: 'bg-amber-950/90 border-amber-500 text-amber-300' };
     default:
       return { icon: '🏷️', label: t, badgeClass: 'bg-zinc-850 border-zinc-600 text-zinc-300' };
   }
@@ -223,6 +229,9 @@ export const getTraitExplanation = (trait: string): string => {
   if (lower.includes('skimmer')) {
     return 'Hovers over low ground obstacles and ignores difficult terrain penalties.';
   }
+  if (lower.includes('firing deck') || lower.includes('firingdeck')) {
+    return 'Units embarked inside this vehicle can shoot using the vehicle as their firing position.';
+  }
   return 'Special tactical unit trait.';
 };
 
@@ -250,13 +259,15 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
   activeTool,
   zoomLevel,
   onZoomChange,
-  coherencyDistanceInches = 2
+  coherencyDistanceInches = 2,
+  mapWidth,
+  mapHeight
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Tabletop World Dimensions
-  const WORLD_WIDTH = 1200;
-  const WORLD_HEIGHT = 800;
+  const WORLD_WIDTH = mapWidth || 1200;
+  const WORLD_HEIGHT = mapHeight || 800;
   const GRID_SIZE = DEFAULT_GRID_SIZE;
   const p1ZoneWidth = deploymentConfig?.player1?.maxX ?? (GRID_SIZE * 4);
   const p2ZoneWidth = deploymentConfig ? (WORLD_WIDTH - deploymentConfig.player2.minX) : (GRID_SIZE * 4);
@@ -1795,25 +1806,92 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
               <rect width="100%" height="100%" fill="url(#vtt-grid)" />
             </svg>
 
-            {/* Deployment Flank Indicators (West: Player 1, East: Player 2) */}
+            {/* Deployment Flank Indicators (Player 1, Player 2, Player 3, Player 4) */}
             {activePhase === 'Deployment' && (
               <>
-                <div 
-                  style={{ width: `${p1ZoneWidth}px` }}
-                  className="absolute inset-y-0 left-0 bg-rose-950/20 border-r-2 border-rose-500/50 flex items-center justify-center pointer-events-none"
-                >
-                  <span className="font-mono font-black text-rose-300 text-xs tracking-widest uppercase rotate-90 opacity-60">
-                    {deploymentConfig?.player1?.label || 'Player 1 Deployment Zone'}
-                  </span>
-                </div>
-                <div 
-                  style={{ width: `${p2ZoneWidth}px` }}
-                  className="absolute inset-y-0 right-0 bg-sky-950/20 border-l-2 border-sky-500/50 flex items-center justify-center pointer-events-none"
-                >
-                  <span className="font-mono font-black text-sky-300 text-xs tracking-widest uppercase -rotate-90 opacity-60">
-                    {deploymentConfig?.player2?.label || 'Player 2 Deployment Zone'}
-                  </span>
-                </div>
+                {deploymentConfig?.player1 ? (
+                  <div 
+                    style={{ 
+                      left: `${deploymentConfig.player1.minX}px`,
+                      top: `${deploymentConfig.player1.minY}px`,
+                      width: `${deploymentConfig.player1.maxX - deploymentConfig.player1.minX}px`,
+                      height: `${deploymentConfig.player1.maxY - deploymentConfig.player1.minY}px`
+                    }}
+                    className="absolute bg-rose-950/25 border-2 border-rose-500/60 rounded flex items-center justify-center pointer-events-none shadow-[inset_0_0_20px_rgba(244,63,94,0.15)]"
+                  >
+                    <span className="font-mono font-black text-rose-300 text-xs tracking-widest uppercase opacity-70 px-2 text-center">
+                      {deploymentConfig.player1.label || 'Player 1 Zone'}
+                    </span>
+                  </div>
+                ) : (
+                  <div 
+                    style={{ width: `${p1ZoneWidth}px` }}
+                    className="absolute inset-y-0 left-0 bg-rose-950/20 border-r-2 border-rose-500/50 flex items-center justify-center pointer-events-none"
+                  >
+                    <span className="font-mono font-black text-rose-300 text-xs tracking-widest uppercase rotate-90 opacity-60">
+                      Player 1 Deployment Zone
+                    </span>
+                  </div>
+                )}
+
+                {deploymentConfig?.player2 ? (
+                  <div 
+                    style={{ 
+                      left: `${deploymentConfig.player2.minX}px`,
+                      top: `${deploymentConfig.player2.minY}px`,
+                      width: `${deploymentConfig.player2.maxX - deploymentConfig.player2.minX}px`,
+                      height: `${deploymentConfig.player2.maxY - deploymentConfig.player2.minY}px`
+                    }}
+                    className="absolute bg-sky-950/25 border-2 border-sky-500/60 rounded flex items-center justify-center pointer-events-none shadow-[inset_0_0_20px_rgba(14,165,233,0.15)]"
+                  >
+                    <span className="font-mono font-black text-sky-300 text-xs tracking-widest uppercase opacity-70 px-2 text-center">
+                      {deploymentConfig.player2.label || 'Player 2 Zone'}
+                    </span>
+                  </div>
+                ) : (
+                  <div 
+                    style={{ width: `${p2ZoneWidth}px` }}
+                    className="absolute inset-y-0 right-0 bg-sky-950/20 border-l-2 border-sky-500/50 flex items-center justify-center pointer-events-none"
+                  >
+                    <span className="font-mono font-black text-sky-300 text-xs tracking-widest uppercase -rotate-90 opacity-60">
+                      Player 2 Deployment Zone
+                    </span>
+                  </div>
+                )}
+
+                {/* Player 3 Deployment Zone (2v2 Partner / 3-Way Triad / 4-Player FFA) */}
+                {deploymentConfig?.player3 && (
+                  <div 
+                    style={{ 
+                      left: `${deploymentConfig.player3.minX}px`,
+                      top: `${deploymentConfig.player3.minY}px`,
+                      width: `${deploymentConfig.player3.maxX - deploymentConfig.player3.minX}px`,
+                      height: `${deploymentConfig.player3.maxY - deploymentConfig.player3.minY}px`
+                    }}
+                    className="absolute bg-emerald-950/25 border-2 border-emerald-500/60 rounded flex items-center justify-center pointer-events-none shadow-[inset_0_0_20px_rgba(16,185,129,0.15)]"
+                  >
+                    <span className="font-mono font-black text-emerald-300 text-xs tracking-widest uppercase opacity-70 px-2 text-center">
+                      {deploymentConfig.player3.label || 'Player 3 Zone'}
+                    </span>
+                  </div>
+                )}
+
+                {/* Player 4 Deployment Zone (2v2 Partner / 4-Player FFA) */}
+                {deploymentConfig?.player4 && (
+                  <div 
+                    style={{ 
+                      left: `${deploymentConfig.player4.minX}px`,
+                      top: `${deploymentConfig.player4.minY}px`,
+                      width: `${deploymentConfig.player4.maxX - deploymentConfig.player4.minX}px`,
+                      height: `${deploymentConfig.player4.maxY - deploymentConfig.player4.minY}px`
+                    }}
+                    className="absolute bg-amber-950/25 border-2 border-amber-500/60 rounded flex items-center justify-center pointer-events-none shadow-[inset_0_0_20px_rgba(245,158,11,0.15)]"
+                  >
+                    <span className="font-mono font-black text-amber-300 text-xs tracking-widest uppercase opacity-70 px-2 text-center">
+                      {deploymentConfig.player4.label || 'Player 4 Zone'}
+                    </span>
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -1908,218 +1986,221 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
             }
 
             {/* Selected Unit Range Spheres */}
-            {selectedUnit && selectedUnit.position && (
-              <>
-                {/* Fixed Movement-Zone Highlight (Does NOT follow cursor or live-drag) */}
-                {activePhase === 'Movement' && !selectedUnit.hasMoved && (() => {
-                  const fixedMoveOrigin = (selectedUnit.isPendingMoveConfirm && selectedUnit.pendingOriginalPosition)
-                    ? selectedUnit.pendingOriginalPosition
-                    : (draggingUnitId === selectedUnit.id ? dragInitialUnitPos : selectedUnit.position!);
-                  const moveRadius = selectedUnit.stats.mv * GRID_SIZE;
+            {selectedUnit && (selectedUnit.position || (selectedUnit.embarkedIn && units.find(u => u.id === selectedUnit.embarkedIn)?.position)) && (() => {
+              const carrier = selectedUnit.embarkedIn ? units.find(u => u.id === selectedUnit.embarkedIn) : null;
+              const isCarrierFiringDeck = !!(carrier && hasFiringDeckTrait(carrier));
+              const effectiveOrigin = selectedUnit.position || carrier?.position;
+              if (!effectiveOrigin) return null;
 
-                  const originTokens = (selectedUnit.isPendingMoveConfirm && selectedUnit.pendingOriginalTokens)
-                    ? selectedUnit.pendingOriginalTokens
-                    : (draggingUnitId === selectedUnit.id && Object.keys(groupDragInitialPositions).length > 0
-                      ? (selectedUnit.tokens || []).map(t => ({ ...t, x: groupDragInitialPositions[t.id]?.x ?? t.x, y: groupDragInitialPositions[t.id]?.y ?? t.y }))
-                      : (selectedUnit.tokens || []));
+              return (
+                <>
+                  {/* Fixed Movement-Zone Highlight (Does NOT follow cursor or live-drag) */}
+                  {!selectedUnit.embarkedIn && activePhase === 'Movement' && !selectedUnit.hasMoved && (() => {
+                    const fixedMoveOrigin = (selectedUnit.isPendingMoveConfirm && selectedUnit.pendingOriginalPosition)
+                      ? selectedUnit.pendingOriginalPosition
+                      : (draggingUnitId === selectedUnit.id ? dragInitialUnitPos : selectedUnit.position!);
+                    const moveRadius = selectedUnit.stats.mv * GRID_SIZE;
 
-                  return (
-                    <g className="movement-zone-highlight">
-                      {/* Fixed Movement Zone Overlay */}
-                      <circle
-                        cx={fixedMoveOrigin.x}
-                        cy={fixedMoveOrigin.y}
-                        r={moveRadius}
-                        fill="rgba(56, 189, 248, 0.12)"
-                        stroke="#38bdf8"
-                        strokeWidth="2.5"
-                        strokeDasharray="6 4"
-                      />
+                    const originTokens = (selectedUnit.isPendingMoveConfirm && selectedUnit.pendingOriginalTokens)
+                      ? selectedUnit.pendingOriginalTokens
+                      : (draggingUnitId === selectedUnit.id && Object.keys(groupDragInitialPositions).length > 0
+                        ? (selectedUnit.tokens || []).map(t => ({ ...t, x: groupDragInitialPositions[t.id]?.x ?? t.x, y: groupDragInitialPositions[t.id]?.y ?? t.y }))
+                        : (selectedUnit.tokens || []));
 
-                      {/* Origin Turn-Start Anchor Marker */}
-                      <circle
-                        cx={fixedMoveOrigin.x}
-                        cy={fixedMoveOrigin.y}
-                        r="5"
-                        fill="#38bdf8"
-                      />
-                      <circle
-                        cx={fixedMoveOrigin.x}
-                        cy={fixedMoveOrigin.y}
-                        r="12"
-                        fill="none"
-                        stroke="#38bdf8"
-                        strokeWidth="1.5"
-                        strokeDasharray="2 2"
-                        opacity="0.8"
-                      />
-
-                      {/* Multi-Model Squad Reach per Model from start positions */}
-                      {originTokens.length > 1 && originTokens.map((tok: Token, i: number) => (
-                        <g key={`tok_reach_${tok.id || i}`}>
-                          <circle
-                            cx={tok.x}
-                            cy={tok.y}
-                            r={moveRadius}
-                            fill="none"
-                            stroke="rgba(56, 189, 248, 0.22)"
-                            strokeWidth="1"
-                            strokeDasharray="4 4"
-                          />
-                          <circle
-                            cx={tok.x}
-                            cy={tok.y}
-                            r="3"
-                            fill="rgba(56, 189, 248, 0.7)"
-                          />
-                        </g>
-                      ))}
-
-                      {/* Distance / Movement Badge at North Perimeter */}
-                      <g transform={`translate(${fixedMoveOrigin.x}, ${fixedMoveOrigin.y - moveRadius - 12})`}>
-                        <rect
-                          x="-50"
-                          y="-11"
-                          width="100"
-                          height="22"
-                          rx="6"
-                          fill="#0b1120"
+                    return (
+                      <g className="movement-zone-highlight">
+                        {/* Fixed Movement Zone Overlay */}
+                        <circle
+                          cx={fixedMoveOrigin.x}
+                          cy={fixedMoveOrigin.y}
+                          r={moveRadius}
+                          fill="rgba(56, 189, 248, 0.12)"
                           stroke="#38bdf8"
-                          strokeWidth="1.5"
+                          strokeWidth="2.5"
+                          strokeDasharray="6 4"
+                        />
+
+                        {/* Origin Turn-Start Anchor Marker */}
+                        <circle
+                          cx={fixedMoveOrigin.x}
+                          cy={fixedMoveOrigin.y}
+                          r="5"
+                          fill="#38bdf8"
+                          stroke="#0c4a6e"
+                          strokeWidth="2"
+                        />
+
+                        {/* Fixed Footprint Ghost Markers at original positions */}
+                        {originTokens.map((t, idx) => {
+                          const baseRadius = getUnitBaseRadius(selectedUnit);
+                          return (
+                            <circle
+                              key={`ghost_${t.id || idx}`}
+                              cx={t.x}
+                              cy={t.y}
+                              r={baseRadius}
+                              fill="rgba(56, 189, 248, 0.08)"
+                              stroke="#38bdf8"
+                              strokeWidth="1.5"
+                              strokeDasharray="3 3"
+                            />
+                          );
+                        })}
+
+                        {/* Radial Movement Limit Boundary Distance Text */}
+                        <text
+                          x={fixedMoveOrigin.x}
+                          y={fixedMoveOrigin.y - moveRadius - 6}
+                          textAnchor="middle"
+                          fill="#38bdf8"
+                          fontSize="11"
+                          fontWeight="bold"
+                          className="select-none filter drop-shadow font-mono"
+                        >
+                          MOVE LIMIT ({selectedUnit.stats.mv}″)
+                        </text>
+                      </g>
+                    );
+                  })()}
+
+                  {/* 3" Disembark Placement Zone Preview around Transports (Movement Phase) */}
+                  {activePhase === 'Movement' &&
+                    (selectedUnit.type === 'Vehicle' || selectedUnit.role === 'Vehicle / Monster') &&
+                    selectedUnit.position &&
+                    units.some(u => u.embarkedIn === selectedUnit.id) && (() => {
+                    const vehicleBaseRadius = getUnitCollisionRadius(selectedUnit);
+                    const disembarkReachPx = 3 * DEFAULT_GRID_SIZE;
+                    const disembarkOuterRadius = vehicleBaseRadius + disembarkReachPx;
+
+                    return (
+                      <g pointerEvents="none">
+                        <circle
+                          cx={selectedUnit.position.x}
+                          cy={selectedUnit.position.y}
+                          r={disembarkOuterRadius}
+                          fill="rgba(56, 189, 248, 0.08)"
+                          stroke="#38bdf8"
+                          strokeWidth="2"
+                          strokeDasharray="6 4"
+                        />
+                        <circle
+                          cx={selectedUnit.position.x}
+                          cy={selectedUnit.position.y}
+                          r={vehicleBaseRadius}
+                          fill="none"
+                          stroke="#38bdf8"
+                          strokeWidth="1"
+                          strokeDasharray="2 2"
                         />
                         <text
-                          x="0"
-                          y="3.5"
+                          x={selectedUnit.position.x}
+                          y={selectedUnit.position.y - disembarkOuterRadius - 6}
                           textAnchor="middle"
                           fill="#38bdf8"
                           fontSize="10"
-                          fontFamily="monospace"
                           fontWeight="bold"
+                          className="select-none filter drop-shadow"
                         >
-                          MOVE: {selectedUnit.stats.mv}" ({moveRadius}px)
+                          3″ DISEMBARK ZONE
                         </text>
                       </g>
-                    </g>
-                  );
-                })()}
+                    );
+                  })()}
 
-                {/* 3" Disembark Zone Annular Ring around Transport Vehicle (Movement Phase) */}
-                {activePhase === 'Movement' && (selectedUnit.type === 'Vehicle' || selectedUnit.role === 'Vehicle / Monster') && (
-                  units.some(u => u.embarkedIn === selectedUnit.id)
-                ) && (() => {
-                  const vRadius = getUnitCollisionRadius(selectedUnit);
-                  const disembarkOuterRadius = vRadius + 150; // 3 inches = 150px
-                  return (
-                    <g pointerEvents="none">
-                      <circle
-                        cx={selectedUnit.position.x}
-                        cy={selectedUnit.position.y}
-                        r={disembarkOuterRadius}
-                        fill="rgba(14, 165, 233, 0.08)"
-                        stroke="#0ea5e9"
-                        strokeWidth="2"
-                        strokeDasharray="6 4"
-                      />
-                      <circle
-                        cx={selectedUnit.position.x}
-                        cy={selectedUnit.position.y}
-                        r={vRadius + 8}
-                        fill="none"
-                        stroke="#0ea5e9"
-                        strokeWidth="1.5"
-                        strokeDasharray="3 3"
-                        opacity={0.6}
-                      />
-                      <text
-                        x={selectedUnit.position.x}
-                        y={selectedUnit.position.y - disembarkOuterRadius - 6}
-                        textAnchor="middle"
-                        fill="#38bdf8"
-                        fontSize="10"
-                        fontWeight="bold"
-                        className="select-none filter drop-shadow"
-                      >
-                        3″ DISEMBARK ZONE
-                      </text>
-                    </g>
-                  );
-                })()}
-
-                {/* Shooting Range Sphere (Active in Shooting or Action Phase) */}
-                {(activePhase === 'Shooting' || activePhase === 'Action') && selectedUnit.stats.range > 0 && (activePhase === 'Action' ? (selectedUnit.actionsRemaining ?? 2) > 0 : !selectedUnit.hasShot) && (() => {
-                  if (selectedUnit.attachedTo) {
-                    const hostSquad = units.find(u => u.id === selectedUnit.attachedTo);
-                    if (hostSquad && (hostSquad.stats.range === 0 || (activePhase === 'Action' ? (hostSquad.actionsRemaining ?? 2) <= 0 : hostSquad.hasShot))) {
-                      return null;
+                  {/* Shooting Range Sphere (Active in Shooting or Action Phase) */}
+                  {(activePhase === 'Shooting' || activePhase === 'Action') && selectedUnit.stats.range > 0 &&
+                   (!selectedUnit.embarkedIn || isCarrierFiringDeck) &&
+                   (activePhase === 'Action' ? (selectedUnit.actionsRemaining ?? 2) > 0 : !selectedUnit.hasShot) && (() => {
+                    if (selectedUnit.attachedTo) {
+                      const hostSquad = units.find(u => u.id === selectedUnit.attachedTo);
+                      if (hostSquad && (hostSquad.stats.range === 0 || (activePhase === 'Action' ? (hostSquad.actionsRemaining ?? 2) <= 0 : hostSquad.hasShot))) {
+                        return null;
+                      }
                     }
-                  }
-                  return (
-                    <g pointerEvents="none">
-                      <circle
-                        cx={selectedUnit.position.x}
-                        cy={selectedUnit.position.y}
-                        r={selectedUnit.stats.range * GRID_SIZE}
-                        fill="rgba(244, 63, 94, 0.08)"
-                        stroke="#f43f5e"
-                        strokeWidth="2"
-                        strokeDasharray="4 4"
-                      />
-                      {selectedUnit.tokens && selectedUnit.tokens.length > 1 && selectedUnit.tokens.map(tok => (
+                    return (
+                      <g pointerEvents="none">
                         <circle
-                          key={`tok_range_${tok.id}`}
-                          cx={tok.x}
-                          cy={tok.y}
+                          cx={effectiveOrigin.x}
+                          cy={effectiveOrigin.y}
                           r={selectedUnit.stats.range * GRID_SIZE}
-                          fill="none"
-                          stroke="#f43f5e"
-                          strokeWidth="1"
-                          strokeDasharray="2 4"
-                          opacity={0.35}
+                          fill={selectedUnit.embarkedIn ? "rgba(245, 158, 11, 0.10)" : "rgba(244, 63, 94, 0.08)"}
+                          stroke={selectedUnit.embarkedIn ? "#f59e0b" : "#f43f5e"}
+                          strokeWidth="2"
+                          strokeDasharray="4 4"
                         />
-                      ))}
-                    </g>
-                  );
-                })()}
+                        {selectedUnit.embarkedIn && (
+                          <text
+                            x={effectiveOrigin.x}
+                            y={effectiveOrigin.y - (selectedUnit.stats.range * GRID_SIZE) - 6}
+                            textAnchor="middle"
+                            fill="#f59e0b"
+                            fontSize="11"
+                            fontWeight="bold"
+                            className="select-none filter drop-shadow font-mono"
+                          >
+                            🔫 FIRING DECK ({selectedUnit.stats.range}″ from {carrier?.name})
+                          </text>
+                        )}
+                        {!selectedUnit.embarkedIn && selectedUnit.tokens && selectedUnit.tokens.length > 1 && selectedUnit.tokens.map(tok => (
+                          <circle
+                            key={`tok_range_${tok.id}`}
+                            cx={tok.x}
+                            cy={tok.y}
+                            r={selectedUnit.stats.range * GRID_SIZE}
+                            fill="none"
+                            stroke="#f43f5e"
+                            strokeWidth="1"
+                            strokeDasharray="2 4"
+                            opacity={0.35}
+                          />
+                        ))}
+                      </g>
+                    );
+                  })()}
 
-                {/* Engagement Reach Sphere (Active in Charge or Action Phase) */}
-                {(activePhase === 'Charge' || activePhase === 'Action') && (activePhase === 'Action' ? (selectedUnit.actionsRemaining ?? 2) > 0 : !selectedUnit.hasCharged) && (
-                  <circle
-                    cx={selectedUnit.position.x}
-                    cy={selectedUnit.position.y}
-                    r={selectedUnit.stats.mv * GRID_SIZE}
-                    fill="rgba(245, 158, 11, 0.12)"
-                    stroke="#f59e0b"
-                    strokeWidth="2"
-                    strokeDasharray="5 3"
-                  />
-                )}
-              </>
-            )}
+                  {/* Engagement Reach Sphere (Active in Charge or Action Phase) - Only when not embarked */}
+                  {!selectedUnit.embarkedIn && (activePhase === 'Charge' || activePhase === 'Action') && (activePhase === 'Action' ? (selectedUnit.actionsRemaining ?? 2) > 0 : !selectedUnit.hasCharged) && (
+                    <circle
+                      cx={effectiveOrigin.x}
+                      cy={effectiveOrigin.y}
+                      r={selectedUnit.stats.mv * GRID_SIZE}
+                      fill="rgba(245, 158, 11, 0.12)"
+                      stroke="#f59e0b"
+                      strokeWidth="2"
+                      strokeDasharray="5 3"
+                    />
+                  )}
+                </>
+              );
+            })()}
 
             {/* Combat Targeting Vector Laser */}
-            {selectedUnit && targetUnit && selectedUnit.position && targetUnit.position && (
-              <g>
-                <line
-                  x1={selectedUnit.position.x}
-                  y1={selectedUnit.position.y}
-                  x2={targetUnit.position.x}
-                  y2={targetUnit.position.y}
-                  stroke="#f43f5e"
-                  strokeWidth="3"
-                  strokeDasharray="8 4"
-                  className="animate-pulse"
-                />
-                <circle
-                  cx={targetUnit.position.x}
-                  cy={targetUnit.position.y}
-                  r={32}
-                  fill="none"
-                  stroke="#f43f5e"
-                  strokeWidth="3"
-                  strokeDasharray="6 3"
-                />
-              </g>
-            )}
+            {selectedUnit && targetUnit && (selectedUnit.position || (selectedUnit.embarkedIn && units.find(u => u.id === selectedUnit.embarkedIn)?.position)) && targetUnit.position && (() => {
+              const laserOrigin = selectedUnit.position || units.find(u => u.id === selectedUnit.embarkedIn)!.position!;
+              return (
+                <g>
+                  <line
+                    x1={laserOrigin.x}
+                    y1={laserOrigin.y}
+                    x2={targetUnit.position.x}
+                    y2={targetUnit.position.y}
+                    stroke="#f43f5e"
+                    strokeWidth="3"
+                    strokeDasharray="8 4"
+                    className="animate-pulse"
+                  />
+                  <circle
+                    cx={targetUnit.position.x}
+                    cy={targetUnit.position.y}
+                    r={32}
+                    fill="none"
+                    stroke="#f43f5e"
+                    strokeWidth="3"
+                    strokeDasharray="6 3"
+                  />
+                </g>
+              );
+            })()}
           </svg>
         </div>
 
@@ -2415,14 +2496,22 @@ export const TabletopCanvas: React.FC<TabletopCanvasProps> = ({
                         <span>Commander</span>
                       </span>
                     )}
-                    {(unit.type === 'Vehicle' || unit.role === 'Vehicle / Monster' || (unit.carryCapacity && unit.carryCapacity > 0)) && (() => {
+                    {unit.type !== 'Monster' && (unit.type === 'Vehicle' || (unit.traits?.includes('Transport') ?? false) || (unit.carryCapacity && unit.carryCapacity > 0)) && (() => {
                       const embarkedSquads = units.filter(u => u.embarkedIn === unit.id);
                       const currentLoad = embarkedSquads.reduce((acc, u) => acc + (u.stats?.modelCount || 1) + (u.attachedUnits?.length || 0), 0);
                       const maxCapacity = unit.carryCapacity ?? unit.stats?.carryCapacity ?? (unit.transportCapacity ? unit.transportCapacity * 5 : 6);
+                      const hasDeck = hasFiringDeckTrait(unit);
                       return (
-                        <span className="bg-sky-950 border border-sky-400 text-sky-300 text-[8px] px-1.5 py-0.5 rounded uppercase font-black flex items-center space-x-1">
-                          <span>Capacity: {currentLoad}/{maxCapacity}</span>
-                        </span>
+                        <div className="flex items-center space-x-1">
+                          <span className="bg-sky-950 border border-sky-400 text-sky-300 text-[8px] px-1.5 py-0.5 rounded uppercase font-black flex items-center space-x-1">
+                            <span>Capacity: {currentLoad}/{maxCapacity}</span>
+                          </span>
+                          {hasDeck && (
+                            <span className="bg-amber-950 border border-amber-400 text-amber-300 text-[8px] px-1.5 py-0.5 rounded uppercase font-black flex items-center space-x-1" title="Firing Deck: Embarked passengers can fire ranged weapons from vehicle firing ports">
+                              <span>🔫 Deck</span>
+                            </span>
+                          )}
+                        </div>
                       );
                     })()}
                   </div>

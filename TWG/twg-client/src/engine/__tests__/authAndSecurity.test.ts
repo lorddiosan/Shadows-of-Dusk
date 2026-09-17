@@ -229,4 +229,35 @@ describe('AUTH-001 - AUTH-010: Authentication, Profile & Access Control Tests', 
       expect(factionsAfterDelete.find(f => f.id === 'admin_test_faction')).toBeUndefined();
     });
   });
+
+  describe('PROF-001 - PROF-004: Customizable Commander Profile Tests', () => {
+    it('supports customizing profile title, bio, faction allegiance, banner theme, and badges', () => {
+      const initialUser = AuthService.getCurrentUser();
+      const customizedUser: UserProfile = {
+        ...initialUser,
+        displayName: 'Grand Warmaster Vane',
+        title: 'Lord of Embers',
+        bio: 'Through ash and fire, the legion endures.',
+        factionAlignment: 'crimson_empire',
+        bannerTheme: 'crimson_flame',
+        avatarFrame: 'frame_gold',
+        badgeIcon: '🔥',
+        equippedBoardSkin: 'board_crimson_foundry',
+        equippedDiceSkin: 'dice_bloodstone'
+      };
+
+      StorageService.saveUserProfile(customizedUser);
+      const retrieved = StorageService.getUserProfile();
+
+      expect(retrieved.displayName).toBe('Grand Warmaster Vane');
+      expect(retrieved.title).toBe('Lord of Embers');
+      expect(retrieved.bio).toBe('Through ash and fire, the legion endures.');
+      expect(retrieved.factionAlignment).toBe('crimson_empire');
+      expect(retrieved.bannerTheme).toBe('crimson_flame');
+      expect(retrieved.avatarFrame).toBe('frame_gold');
+      expect(retrieved.badgeIcon).toBe('🔥');
+      expect(retrieved.equippedBoardSkin).toBe('board_crimson_foundry');
+      expect(retrieved.equippedDiceSkin).toBe('dice_bloodstone');
+    });
+  });
 });

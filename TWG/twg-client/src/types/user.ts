@@ -16,6 +16,18 @@ export interface UserProfile {
   equippedBoardSkin: string;
   equippedDiceSkin: string;
   claimedPassTiers?: number[];
+  // Profile customization options
+  title?: string;
+  bio?: string;
+  factionAlignment?: string;
+  bannerTheme?: string;
+  avatarFrame?: string;
+  badgeIcon?: string;
+  showcaseUnitIds?: string[];
+  // Guild affiliation
+  guildId?: string;
+  guildTag?: string;
+  guildRole?: 'leader' | 'officer' | 'member';
 }
 
 export interface BattlePassTier {

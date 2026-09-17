@@ -38,13 +38,14 @@ import {
   getUnitCollisionRadius, isUnitInShootingRange, isUnitInMeleeRange,
   getUnitsModelDistance, findValidMovePositionForBot, findNearestNonOverlappingPosition,
   checkPathCrossesUnits, validateDisembarkPlacement, getUnitBodiesAndLives,
-  executeAbandonShipProtocol, findValidEngagementPosition
+  executeAbandonShipProtocol, findValidEngagementPosition, hasFiringDeckTrait
 } from '../../engine/formationEngine';
 
 interface BattlefieldProps {
   customRoster?: ArmyRoster | null;
   boardSkin: string;
   onReturnHome?: () => void;
+  initialMapId?: string;
 }
 
 const PHASES_ORDER: Phase[] = ['Deployment', 'Command', 'Movement', 'Action', 'Scoring'];
@@ -139,7 +140,7 @@ const CARD_RARITY_BADGES: Record<CardRarity, { label: string; badge: string }> =
   Legendary: { label: 'Legendary', badge: 'bg-gradient-to-r from-amber-600 to-yellow-500 text-black font-black border-amber-300 shadow-[0_0_8px_rgba(251,191,36,0.6)]' }
 };
 
-export const createInitialGameState = (customRoster?: ArmyRoster | null): GameState => {
+export const createInitialGameState = (customRoster?: ArmyRoster | null, initialMapId?: string): GameState => {
   const allTemplates = StorageService.getUnitTemplates();
 
   const ensureValidLives = (u: any): Unit => {
@@ -196,7 +197,7 @@ export const createInitialGameState = (customRoster?: ArmyRoster | null): GameSt
   const p2AllCards = [...SECONDARY_MISSION_CARDS, ...FIELD_EFFECT_CARDS, ...GENERAL_CARDS, ...(FACTION_CARDS['daughters_astraea'] || [])];
 
   const initialMaps = StorageService.getMaps();
-  const initialMap = initialMaps[0] || PRESET_MAPS[0];
+  const initialMap = (initialMapId ? initialMaps.find(m => m.id === initialMapId) : null) || initialMaps[0] || PRESET_MAPS[0];
   const initialPois: POI[] = initialMap && initialMap.objectives.length > 0 ? initialMap.objectives.map(obj => ({
     id: obj.id,
     name: obj.name,
@@ -251,8 +252,8 @@ export const createInitialGameState = (customRoster?: ArmyRoster | null): GameSt
   };
 };
 
-export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSkin, onReturnHome }) => {
-  const [gameState, setGameState] = useState<GameState>(() => createInitialGameState(customRoster));
+export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSkin, onReturnHome, initialMapId }) => {
+  const [gameState, setGameState] = useState<GameState>(() => createInitialGameState(customRoster, initialMapId));
 
   // UI-003: Ability Cards Dock State
   const [abilitiesDockOpen, setAbilitiesDockOpen] = useState<boolean>(false);
@@ -260,13 +261,18 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
   const [usedAbilitiesThisGame, setUsedAbilitiesThisGame] = useState<Record<string, boolean>>({});
 
   const handleRestartMatch = () => {
-    setGameState(createInitialGameState(customRoster));
+    setGameState(createInitialGameState(customRoster, initialMapId));
     setSelectedUnitId(null);
     setTargetUnitId(null);
     setRecentCombatResult(null);
     setUsedAbilitiesThisRound({});
     setUsedAbilitiesThisGame({});
     setAbilitiesDockOpen(false);
+    setShowRightSidebar(false);
+    setShowPartyColumn(false);
+    setShowActionDock(false);
+    setShowHotbar(false);
+    setShowInitiativeQueue(false);
   };
 
   // Reset once-per-round abilities whenever round changes
@@ -293,16 +299,16 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
   const [reservesDrawerOpen, setReservesDrawerOpen] = useState<boolean>(false);
   const [embarkedDrawerOpen, setEmbarkedDrawerOpen] = useState<boolean>(false);
 
-  // UI-004: Right Sidebar collapse toggle (enables full-width tactical canvas)
-  const [showRightSidebar, setShowRightSidebar] = useState<boolean>(true);
+  // UI-004: Right Sidebar collapse toggle (enables full-width tactical canvas) - Hidden by default
+  const [showRightSidebar, setShowRightSidebar] = useState<boolean>(false);
 
-  // Collapsible HUD character displays (turn queue & party column)
+  // Collapsible HUD character displays (turn queue & party column) - Hidden by default
   const [showInitiativeQueue, setShowInitiativeQueue] = useState<boolean>(false);
-  const [showPartyColumn, setShowPartyColumn] = useState<boolean>(true);
+  const [showPartyColumn, setShowPartyColumn] = useState<boolean>(false);
 
-  // Collapsible lower Action Dock and Skill Hotbar
-  const [showActionDock, setShowActionDock] = useState<boolean>(true);
-  const [showHotbar, setShowHotbar] = useState<boolean>(true);
+  // Collapsible lower Action Dock and Skill Hotbar - Hidden by default
+  const [showActionDock, setShowActionDock] = useState<boolean>(false);
+  const [showHotbar, setShowHotbar] = useState<boolean>(false);
 
   // BUG-026: Deployment error toast & Bot action status indicators
   const [deploymentErrorNotice, setDeploymentErrorNotice] = useState<string | null>(null);
@@ -477,7 +483,20 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     if (!selectedUnit || selectedUnit.owner !== gameState.activePlayer) return [];
     const isAttachedLeader = !!selectedUnit.attachedTo;
     const hostSquad = isAttachedLeader ? gameState.units.find(u => u.id === selectedUnit.attachedTo) : null;
-    const effectivePos = selectedUnit.position || hostSquad?.position;
+    const isEmbarked = !!selectedUnit.embarkedIn;
+    const carrierVehicle = isEmbarked ? gameState.units.find(u => u.id === selectedUnit.embarkedIn) : null;
+
+    // RULE: Embarked units can ONLY shoot, and ONLY IF carrier vehicle has the Firing Deck trait
+    if (isEmbarked) {
+      if (!carrierVehicle || !carrierVehicle.position || !hasFiringDeckTrait(carrierVehicle) || selectedUnit.stats.range <= 0) {
+        return [];
+      }
+      if (gameState.phase === 'Charge' || gameState.phase === 'Fight') {
+        return [];
+      }
+    }
+
+    const effectivePos = selectedUnit.position || hostSquad?.position || carrierVehicle?.position;
     if (!effectivePos) return [];
 
     const enemyOwner = selectedUnit.owner === 'player1' ? 'player2' : 'player1';
@@ -486,6 +505,17 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     if (gameState.phase === 'Action') {
       const remActions = selectedUnit.actionsRemaining ?? 2;
       if (remActions <= 0) return [];
+
+      if (isEmbarked && carrierVehicle) {
+        const measuringUnit: Unit = {
+          ...carrierVehicle,
+          stats: {
+            ...carrierVehicle.stats,
+            range: selectedUnit.stats.range
+          }
+        };
+        return enemies.filter(e => isUnitInShootingRange(measuringUnit, e, DEFAULT_GRID_SIZE));
+      }
 
       const attachedLeaders = (selectedUnit.attachedUnits || [])
         .map(id => gameState.units.find(u => u.id === id))
@@ -528,6 +558,18 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     }
 
     if (gameState.phase === 'Shooting') {
+      if (isEmbarked && carrierVehicle) {
+        if (selectedUnit.hasShot || selectedUnit.stats.range <= 0) return [];
+        const measuringUnit: Unit = {
+          ...carrierVehicle,
+          stats: {
+            ...carrierVehicle.stats,
+            range: selectedUnit.stats.range
+          }
+        };
+        return enemies.filter(e => isUnitInShootingRange(measuringUnit, e, DEFAULT_GRID_SIZE));
+      }
+
       const attachedLeaders = (selectedUnit.attachedUnits || [])
         .map(id => gameState.units.find(u => u.id === id))
         .filter((l): l is Unit => !!l && (l.stats?.lives ?? 0) > 0);
@@ -719,6 +761,11 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     setTargetUnitId(null);
     setShowArmySelectionModal(false);
     setArmyTrayDrawerOpen(false);
+    setShowRightSidebar(false);
+    setShowPartyColumn(false);
+    setShowActionDock(false);
+    setShowHotbar(false);
+    setShowInitiativeQueue(false);
 
     setBotSelectedNotice(`Bot selected: "${botRoster.name}" (${botRoster.totalPoints} pts)`);
     setTimeout(() => setBotSelectedNotice(null), 4500);
@@ -965,14 +1012,18 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     
     // Proximity check if unit is already placed on the battlefield
     if (infantry.position && vehicle.position) {
-      const distCheck = canEmbarkWithDistance(infantry, vehicle, currentEmbarkedModels, 150);
+      const distCheck = canEmbarkWithDistance(infantry, vehicle, currentEmbarkedModels, 150, currentEmbarkedUnits.length);
       if (!distCheck.canEmbark) {
         addLog(`⛔ Cannot Embark: ${distCheck.reason}`, 'event');
         return;
       }
-    } else if (!canEmbark(infantry, vehicle, currentEmbarkedModels)) {
-      const maxCap = vehicle.carryCapacity ?? vehicle.stats?.carryCapacity ?? 6;
-      addLog(`Cannot embark ${infantry.name} into ${vehicle.name}: vehicle capacity exceeded (Current: ${currentEmbarkedModels}/${maxCap} models).`, 'info');
+    } else if (!canEmbark(infantry, vehicle, currentEmbarkedModels, currentEmbarkedUnits.length)) {
+      if (vehicle.type === 'Monster') {
+        addLog(`⛔ Cannot Embark: Monsters do not have the ability to carry others.`, 'info');
+      } else {
+        const maxCap = vehicle.carryCapacity ?? vehicle.stats?.carryCapacity ?? (vehicle.transportCapacity ? vehicle.transportCapacity * 5 : 6);
+        addLog(`Cannot embark ${infantry.name} into ${vehicle.name}: vehicle capacity exceeded (Current: ${currentEmbarkedModels}/${maxCap} models).`, 'info');
+      }
       return;
     }
 
@@ -2506,6 +2557,14 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       ? (gameState.units.find(u => u.id === selectedUnit.attachedTo) || selectedUnit)
       : selectedUnit;
 
+    const carrierVehicle = selectedUnit.embarkedIn ? gameState.units.find(u => u.id === selectedUnit.embarkedIn) : null;
+    if (selectedUnit.embarkedIn) {
+      if (!carrierVehicle || !carrierVehicle.position || !hasFiringDeckTrait(carrierVehicle)) {
+        addLog(`⛔ Cannot Shoot: ${selectedUnit.name} is embarked inside a transport without Firing Deck!`, 'info');
+        return;
+      }
+    }
+
     const attachedLeaderUnits = (hostSquad.attachedUnits || [])
       .map(id => gameState.units.find(u => u.id === id))
       .filter((l): l is Unit => !!l && l.stats.lives > 0);
@@ -2520,11 +2579,12 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       return;
     }
 
-    const originPos = hostSquad.position || selectedUnit.position;
+    const originPos = hostSquad.position || selectedUnit.position || carrierVehicle?.position;
     if (!originPos) return;
 
-    // Check which components of the combined unit can shoot
-    const squadCanShoot = hostSquad.stats.range > 0 && isUnitInShootingRange(hostSquad, targetUnit, DEFAULT_GRID_SIZE);
+    // Check which components of the combined unit can shoot (measured from originPos)
+    const measuringHost: Unit = { ...hostSquad, position: originPos };
+    const squadCanShoot = hostSquad.stats.range > 0 && isUnitInShootingRange(measuringHost, targetUnit, DEFAULT_GRID_SIZE);
     const shootingLeaders = attachedLeaderUnits.filter(l => {
       if (l.stats.range <= 0) return false;
       const measuringLeader: Unit = { ...l, position: originPos };
@@ -2536,11 +2596,15 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       if (maxRng === 0) {
         addLog(`⛔ Cannot Shoot: ${hostSquad.name} and attached leaders are melee-only (range 0)!`, 'info');
       } else {
-        const { minModelDistPx } = getUnitsModelDistance(hostSquad, targetUnit);
+        const { minModelDistPx } = getUnitsModelDistance(measuringHost, targetUnit);
         const distSq = (minModelDistPx / DEFAULT_GRID_SIZE).toFixed(1);
         addLog(`Target is out of range (${distSq} sq > max range ${maxRng} sq).`, 'info');
       }
       return;
+    }
+
+    if (selectedUnit.embarkedIn && carrierVehicle) {
+      addLog(`🔫 Firing Deck: ${selectedUnit.name} fired through the open firing ports of ${carrierVehicle.name}!`, 'combat');
     }
 
     const onHighGround = gameState.specialTiles.some(t => {
@@ -4291,6 +4355,16 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
         setShowCardDrawer(prev => !prev);
       } else if (e.key.toLowerCase() === 'm') {
         setActiveTool(prev => prev === 'measure' ? 'select' : 'measure');
+      } else if (e.key.toLowerCase() === 'h') {
+        setShowHotbar(prev => !prev);
+      } else if (e.key.toLowerCase() === 'p') {
+        setShowRightSidebar(prev => !prev);
+      } else if (e.key.toLowerCase() === 'f') {
+        setShowPartyColumn(prev => !prev);
+      } else if (e.key.toLowerCase() === 'q') {
+        setShowInitiativeQueue(prev => !prev);
+      } else if (e.key.toLowerCase() === 'x') {
+        setShowActionDock(prev => !prev);
       } else if (e.key === ' ') {
         e.preventDefault();
         if (gameState.activePlayer === 'player2') {
@@ -4319,6 +4393,8 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
               specialTiles={gameState.specialTiles}
               terrain={gameState.currentMap?.terrain}
               deploymentConfig={gameState.currentMap?.deploymentZones}
+              mapWidth={gameState.currentMap?.width}
+              mapHeight={gameState.currentMap?.height}
               backgroundImageUrl={gameState.currentMap?.backgroundImageUrl}
               paintedZones={gameState.currentMap?.paintedZones}
               structures={gameState.currentMap?.structures}
@@ -4976,6 +5052,11 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
           targetUnit={targetUnit}
           phase={gameState.phase}
           activePlayer={gameState.activePlayer}
+          canShootEmbarked={(() => {
+            if (!selectedUnit?.embarkedIn) return false;
+            const carrier = gameState.units.find(u => u.id === selectedUnit.embarkedIn);
+            return !!(carrier && hasFiringDeckTrait(carrier));
+          })()}
           onConfirmDeployment={() => selectedUnit && handleConfirmDeployment(selectedUnit.id)}
           onCancelDeployment={() => selectedUnit && handleCancelDeployment(selectedUnit.id)}
           onConfirmMove={() => selectedUnit && handleConfirmMove(selectedUnit.id)}
@@ -5049,11 +5130,11 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
         <div className="w-full bg-[#0a0c13]/90 border-t border-amber-900/40 flex items-center justify-center py-1 z-40 select-none backdrop-blur-md">
           <button
             onClick={() => setShowHotbar(true)}
-            title="Show Action Hotbar"
+            title="Show Action Hotbar (Key H)"
             className="flex items-center space-x-1.5 px-4 py-1 rounded-full bg-[#131622] hover:bg-[#1e2338] border border-amber-600/50 text-amber-300 hover:text-white text-xs font-mono font-bold shadow-lg transition cursor-pointer"
           >
             <ChevronUp className="w-3.5 h-3.5 text-amber-400" />
-            <span>Show Action Hotbar</span>
+            <span>Show Action Hotbar (H)</span>
           </button>
         </div>
       )}
@@ -5293,8 +5374,11 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                               if (dragged) {
                                 if (canAttachLeader(dragged, u)) {
                                   handleAttachLeader(dragged.id, u.id);
-                                } else if (canEmbark(dragged, u, embarkedTroops.length)) {
-                                  handleEmbarkUnit(dragged.id, u.id);
+                                } else {
+                                  const currentModels = embarkedTroops.reduce((acc, x) => acc + (x.stats.modelCount || 1) + (x.attachedUnits?.length || 0), 0);
+                                  if (canEmbark(dragged, u, currentModels, embarkedTroops.length)) {
+                                    handleEmbarkUnit(dragged.id, u.id);
+                                  }
                                 }
                               }
                             }
@@ -6236,8 +6320,11 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
         const infantry = gameState.units.find(u => u.id === embarkModalUnitId);
         if (!infantry) return null;
         const candidates = gameState.units.filter(cand => {
-          const currentEmbarkedCount = gameState.units.filter(u => u.embarkedIn === cand.id).length;
-          return canEmbark(infantry, cand, currentEmbarkedCount);
+          if (cand.type === 'Monster') return false;
+          if (cand.type !== 'Vehicle' && !cand.traits?.includes('Transport')) return false;
+          const currentEmbarkedUnits = gameState.units.filter(u => u.embarkedIn === cand.id);
+          const currentEmbarkedModels = currentEmbarkedUnits.reduce((acc, u) => acc + (u.stats.modelCount || 1) + (u.attachedUnits?.length || 0), 0);
+          return canEmbark(infantry, cand, currentEmbarkedModels, currentEmbarkedUnits.length);
         });
 
         return (
@@ -6263,19 +6350,24 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
               {candidates.length === 0 ? (
                 <div className="p-6 text-center border border-dashed border-zinc-800 rounded-xl space-y-1">
                   <span className="text-xs text-zinc-400 block font-medium">No eligible friendly transport vehicles with capacity available.</span>
-                  <span className="text-[10px] text-zinc-500 block">Vehicles must be friendly Vehicle type with available passenger capacity.</span>
+                  <span className="text-[10px] text-zinc-500 block">Transports must be friendly Vehicle type (Monsters cannot carry units) with available capacity.</span>
                 </div>
               ) : (
                 <div className="space-y-2 max-h-60 overflow-y-auto">
                   {candidates.map(cand => {
-                    const embarkedCount = gameState.units.filter(u => u.embarkedIn === cand.id).length;
+                    const currentEmbarkedUnits = gameState.units.filter(u => u.embarkedIn === cand.id);
+                    const embarkedCount = currentEmbarkedUnits.length;
                     const maxCapacity = cand.transportCapacity ?? 1;
+                    const currentModels = currentEmbarkedUnits.reduce((acc, u) => acc + (u.stats.modelCount || 1) + (u.attachedUnits?.length || 0), 0);
+                    const maxModels = cand.carryCapacity ?? cand.stats?.carryCapacity ?? (cand.transportCapacity ? cand.transportCapacity * 5 : 6);
+                    const hasDeck = hasFiringDeckTrait(cand);
                     const isDeployed = !!(infantry.position && cand.position);
                     let inRange = true;
                     let distInches = 0;
                     if (isDeployed) {
                       const dist = getUnitsModelDistance(infantry, cand);
                       distInches = Math.round((dist.minEdgeDistPx / DEFAULT_GRID_SIZE) * 10) / 10;
+                      distInches = Math.max(0, distInches);
                       inRange = dist.minEdgeDistPx <= 150;
                     }
 
@@ -6294,9 +6386,16 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                         <div className="flex items-center space-x-2.5">
                           <span className="text-2xl">{cand.avatar}</span>
                           <div>
-                            <span className="font-bold text-white text-xs block">{cand.name}</span>
+                            <div className="flex items-center space-x-1.5">
+                              <span className="font-bold text-white text-xs block">{cand.name}</span>
+                              {hasDeck && (
+                                <span className="bg-amber-950 border border-amber-500/60 text-amber-300 text-[8px] px-1 py-0.2 rounded font-black font-mono">
+                                  🔫 Firing Deck
+                                </span>
+                              )}
+                            </div>
                             <span className="text-[10px] text-zinc-400 font-mono">
-                              Capacity: {embarkedCount} / {maxCapacity} squads • {cand.position ? `Distance: ${distInches}" (Max 3")` : 'In Reserve'}
+                              Capacity: {embarkedCount}/{maxCapacity} squads ({currentModels}/{maxModels} models) • {cand.position ? `Distance: ${distInches}" (Max 3")` : 'In Reserve'}
                             </span>
                             {!inRange && (
                               <span className="text-[10px] text-rose-400 font-mono block">

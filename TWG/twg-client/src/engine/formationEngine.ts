@@ -1357,21 +1357,56 @@ export function canAttachLeader(leader: Unit, bodyguard: Unit, zoneDepth: number
 }
 
 /**
- * Checks if an infantry squad can embark inside a transport vehicle.
- * Enforces vehicle carryCapacity (in models, default 6 models).
+ * Checks if a vehicle has the Firing Deck trait or passive,
+ * allowing embarked passenger units to fire weapons from open ports.
  */
-export function canEmbark(infantry: Unit, vehicle: Unit, currentLoadModels: number = 0): boolean {
+export function hasFiringDeckTrait(unit?: Unit | null): boolean {
+  if (!unit) return false;
+  const match = (str: string) => {
+    const lower = str.toLowerCase().replace(/[-_]/g, ' ');
+    return lower.includes('firing deck') || lower === 'firing deck';
+  };
+  const hasTrait = (unit.traits || []).some(match);
+  const hasPassive = (unit.passives || []).some(match);
+  return hasTrait || hasPassive;
+}
+
+/**
+ * Checks if an infantry squad can embark inside a transport vehicle.
+ * Enforces:
+ * - Monsters CANNOT carry others.
+ * - Only Vehicles can carry passengers.
+ * - A vehicle carries inferior or equal to its squad/unit capacity (transportCapacity).
+ * - A vehicle carries inferior or equal to its model capacity (carryCapacity).
+ */
+export function canEmbark(
+  infantry: Unit, 
+  vehicle: Unit, 
+  currentLoadModels: number = 0,
+  currentUnitCount: number = 0
+): boolean {
   if (infantry.owner !== vehicle.owner) return false;
   if (infantry.id === vehicle.id) return false;
   if (infantry.type !== 'Infantry') return false;
-  const isTransport = vehicle.traits?.includes('Transport') || vehicle.type === 'Vehicle' || vehicle.role === 'Vehicle / Monster';
+
+  // RULE: A monster does NOT have the ability to carry others!
+  if (vehicle.type === 'Monster') return false;
+
+  // RULE: Only Vehicles can carry passengers
+  const isTransport = vehicle.type === 'Vehicle' || vehicle.traits?.includes('Transport');
   if (!isTransport) return false;
+
   if (infantry.embarkedIn || infantry.inStrategicReserve || infantry.attachedTo) return false;
 
-  const maxCapacity = vehicle.carryCapacity ?? vehicle.stats?.carryCapacity ?? (vehicle.transportCapacity ? vehicle.transportCapacity * 5 : 6);
+  // RULE: A vehicle carries inferior or equal to its squad capacity
+  const maxUnitCapacity = vehicle.transportCapacity ?? 1;
+  if (currentUnitCount >= maxUnitCapacity) return false;
+
+  // RULE: A vehicle carries inferior or equal to its model capacity
+  const maxModelCapacity = vehicle.carryCapacity ?? vehicle.stats?.carryCapacity ?? (maxUnitCapacity * 6);
   const incomingModels = (infantry.stats?.modelCount || 1) + (infantry.attachedUnits?.length || 0);
 
-  return (currentLoadModels + incomingModels) <= maxCapacity;
+  return (currentLoadModels + incomingModels) <= maxModelCapacity;
 }
 
 /**
@@ -1382,10 +1417,16 @@ export function canEmbarkWithDistance(
   infantry: Unit,
   vehicle: Unit,
   currentLoadModels: number = 0,
-  maxDistancePx: number = 150
+  maxDistancePx: number = 150,
+  currentUnitCount: number = 0
 ): { canEmbark: boolean; reason?: string; distancePx?: number } {
-  if (!canEmbark(infantry, vehicle, currentLoadModels)) {
-    return { canEmbark: false, reason: 'Capacity exceeded or invalid unit types.' };
+  // RULE: A monster does NOT have the ability to carry others!
+  if (vehicle.type === 'Monster') {
+    return { canEmbark: false, reason: 'Monsters do not have the ability to carry others.' };
+  }
+
+  if (!canEmbark(infantry, vehicle, currentLoadModels, currentUnitCount)) {
+    return { canEmbark: false, reason: 'Vehicle transport capacity exceeded or invalid unit types.' };
   }
 
   // If infantry is deployed on the board, check proximity to vehicle

@@ -12,7 +12,7 @@ import { FactionLogo } from '../common/FactionLogo';
 import { WarRoomBackground } from './WarRoomBackground';
 
 interface WarRoomHomeProps {
-  onNavigate: (tab: 'play' | 'builder' | 'shop' | 'battlepass' | 'lore' | 'admin') => void;
+  onNavigate: (tab: 'play' | 'matchmaking' | 'builder' | 'shop' | 'battlepass' | 'lore' | 'admin') => void;
   onSelectArmyToDeploy: (roster: ArmyRoster) => void;
   onStartMatchmaking?: (roster: ArmyRoster) => void;
   onOpenDuelZone?: () => void;

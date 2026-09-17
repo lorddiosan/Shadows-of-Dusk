@@ -57,6 +57,9 @@ interface CrpgSkillHotbarProps {
 
   // Ability count
   readyAbilitiesCount: number;
+
+  // Firing deck / embark status
+  canShootEmbarked?: boolean;
 }
 
 export const CrpgSkillHotbar: React.FC<CrpgSkillHotbarProps> = ({
@@ -98,12 +101,14 @@ export const CrpgSkillHotbar: React.FC<CrpgSkillHotbarProps> = ({
   onSelectTool,
   readyAbilitiesCount,
   onToggleHotbar,
+  canShootEmbarked,
 }) => {
   const [isLocked, setIsLocked] = React.useState(true);
 
   const isOwner = selectedUnit?.owner === activePlayer;
   const remActions = selectedUnit?.actionsRemaining ?? 2;
   const hasActions = remActions > 0;
+  const isEmbarked = !!selectedUnit?.embarkedIn;
 
   // Formation cycler
   const formations: FormationType[] = ['circle', 'line', 'grid', 'stack', 'auto'];
@@ -299,11 +304,15 @@ export const CrpgSkillHotbar: React.FC<CrpgSkillHotbarProps> = ({
             </div>
           ) : (
             <button
-              disabled={!selectedUnit || !isOwner}
+              disabled={!selectedUnit || !isOwner || isEmbarked}
               onClick={() => onSelectTool('move')}
-              title={`Move (Key 1) - Mv: ${selectedUnit?.stats.mv || 5} sq`}
+              title={
+                isEmbarked
+                  ? 'Cannot Move - Unit is Embarked inside Transport'
+                  : `Move (Key 1) - Mv: ${selectedUnit?.stats.mv || 5} sq`
+              }
               className={`w-10 h-10 sm:w-11 sm:h-11 rounded-lg border flex flex-col items-center justify-center transition-all ${
-                selectedUnit && isOwner
+                selectedUnit && isOwner && !isEmbarked
                   ? 'bg-gradient-to-b from-[#1b253b] to-[#0f1624] border-sky-500/70 hover:border-sky-400 text-sky-200 cursor-pointer shadow hover:scale-105'
                   : 'bg-[#0f1118] border-zinc-800 text-zinc-600 cursor-not-allowed opacity-50'
               }`}
@@ -319,36 +328,54 @@ export const CrpgSkillHotbar: React.FC<CrpgSkillHotbarProps> = ({
 
         {/* Slot 2: Shoot */}
         <div className="relative group">
-          <button
-            disabled={!selectedUnit || !isOwner || !hasActions}
-            onClick={onExecuteShooting}
-            title={
-              selectedUnit?.stats.range && selectedUnit.stats.range > 0
-                ? `Shoot (Key 2) - Range: ${selectedUnit.stats.range} sq`
-                : 'Shoot (Key 2) - Melee Only'
-            }
-            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-lg border flex flex-col items-center justify-center transition-all ${
-              selectedUnit && isOwner && hasActions && (selectedUnit.stats.range > 0)
-                ? 'bg-gradient-to-b from-[#2b1b22] to-[#180f14] border-rose-500/80 hover:border-rose-400 text-rose-200 cursor-pointer shadow hover:scale-105'
-                : 'bg-[#0f1118] border-zinc-800 text-zinc-600 cursor-not-allowed opacity-50'
-            }`}
-          >
-            <Target className="w-4 h-4" />
-            <span className="text-[7px] font-mono uppercase font-bold text-rose-300 leading-none">
-              {selectedUnit?.stats.range ? `${selectedUnit.stats.range}sq` : '0sq'}
-            </span>
-            <span className="absolute bottom-0.5 right-1 text-[8px] font-mono font-black text-zinc-400">2</span>
-          </button>
+          {(() => {
+            const canShoot = selectedUnit && isOwner && hasActions && (selectedUnit.stats.range > 0) && (!isEmbarked || !!canShootEmbarked);
+            const shootTitle = isEmbarked
+              ? (canShootEmbarked
+                  ? `🔫 Firing Deck Shoot (Key 2) - Range: ${selectedUnit?.stats.range} sq from Transport`
+                  : 'Shoot (Key 2) - Embarked (Transport lacks Firing Deck)')
+              : (selectedUnit?.stats.range && selectedUnit.stats.range > 0
+                  ? `Shoot (Key 2) - Range: ${selectedUnit.stats.range} sq`
+                  : 'Shoot (Key 2) - Melee Only');
+
+            return (
+              <button
+                disabled={!canShoot}
+                onClick={onExecuteShooting}
+                title={shootTitle}
+                className={`w-10 h-10 sm:w-11 sm:h-11 rounded-lg border flex flex-col items-center justify-center transition-all ${
+                  canShoot
+                    ? isEmbarked
+                      ? 'bg-gradient-to-b from-[#3a2512] to-[#1c1208] border-amber-500 hover:border-amber-400 text-amber-200 cursor-pointer shadow-[0_0_12px_rgba(245,158,11,0.4)] hover:scale-105'
+                      : 'bg-gradient-to-b from-[#2b1b22] to-[#180f14] border-rose-500/80 hover:border-rose-400 text-rose-200 cursor-pointer shadow hover:scale-105'
+                    : 'bg-[#0f1118] border-zinc-800 text-zinc-600 cursor-not-allowed opacity-50'
+                }`}
+              >
+                <Target className="w-4 h-4" />
+                <span className="text-[7px] font-mono uppercase font-bold text-rose-300 leading-none">
+                  {selectedUnit?.stats.range ? `${selectedUnit.stats.range}sq` : '0sq'}
+                </span>
+                {isEmbarked && canShootEmbarked && (
+                  <span className="text-[6px] font-mono uppercase text-amber-400 font-black leading-none">DECK</span>
+                )}
+                <span className="absolute bottom-0.5 right-1 text-[8px] font-mono font-black text-zinc-400">2</span>
+              </button>
+            );
+          })()}
         </div>
 
         {/* Slot 3: Charge / Engage */}
         <div className="relative group">
           <button
-            disabled={!selectedUnit || !isOwner || !hasActions}
+            disabled={!selectedUnit || !isOwner || !hasActions || isEmbarked}
             onClick={phase === 'Action' ? onExecuteEngagement : onExecuteCharge}
-            title="Charge / Engage (Key 3) - Costs 1 Action"
+            title={
+              isEmbarked
+                ? 'Cannot Engage - Unit is Embarked inside Transport'
+                : 'Charge / Engage (Key 3) - Costs 1 Action'
+            }
             className={`w-10 h-10 sm:w-11 sm:h-11 rounded-lg border flex flex-col items-center justify-center transition-all ${
-              selectedUnit && isOwner && hasActions
+              selectedUnit && isOwner && hasActions && !isEmbarked
                 ? 'bg-gradient-to-b from-[#332211] to-[#1c1208] border-amber-500/80 hover:border-amber-400 text-amber-200 cursor-pointer shadow hover:scale-105'
                 : 'bg-[#0f1118] border-zinc-800 text-zinc-600 cursor-not-allowed opacity-50'
             }`}
@@ -362,11 +389,15 @@ export const CrpgSkillHotbar: React.FC<CrpgSkillHotbarProps> = ({
         {/* Slot 4: Fight (Melee) */}
         <div className="relative group">
           <button
-            disabled={!selectedUnit || !isOwner || !hasActions}
+            disabled={!selectedUnit || !isOwner || !hasActions || isEmbarked}
             onClick={onExecuteFight}
-            title="Fight (Key 4) - Melee Combat"
+            title={
+              isEmbarked
+                ? 'Cannot Fight - Unit is Embarked inside Transport'
+                : 'Fight (Key 4) - Melee Combat'
+            }
             className={`w-10 h-10 sm:w-11 sm:h-11 rounded-lg border flex flex-col items-center justify-center transition-all ${
-              selectedUnit && isOwner && hasActions
+              selectedUnit && isOwner && hasActions && !isEmbarked
                 ? 'bg-gradient-to-b from-[#3a1515] to-[#1a0808] border-red-500/80 hover:border-red-400 text-red-200 cursor-pointer shadow hover:scale-105'
                 : 'bg-[#0f1118] border-zinc-800 text-zinc-600 cursor-not-allowed opacity-50'
             }`}
@@ -380,11 +411,15 @@ export const CrpgSkillHotbar: React.FC<CrpgSkillHotbarProps> = ({
         {/* Slot 5: Mission Action */}
         <div className="relative group">
           <button
-            disabled={!selectedUnit || !isOwner || !hasActions}
+            disabled={!selectedUnit || !isOwner || !hasActions || isEmbarked}
             onClick={onExecuteMissionAction}
-            title="Mission Action (Key 5) - Objective POI Score"
+            title={
+              isEmbarked
+                ? 'Cannot Score Mission - Unit is Embarked inside Transport'
+                : 'Mission Action (Key 5) - Objective POI Score'
+            }
             className={`w-10 h-10 sm:w-11 sm:h-11 rounded-lg border flex flex-col items-center justify-center transition-all ${
-              selectedUnit && isOwner && hasActions
+              selectedUnit && isOwner && hasActions && !isEmbarked
                 ? 'bg-gradient-to-b from-[#0e2a1b] to-[#07170e] border-emerald-500/80 hover:border-emerald-400 text-emerald-200 cursor-pointer shadow hover:scale-105'
                 : 'bg-[#0f1118] border-zinc-800 text-zinc-600 cursor-not-allowed opacity-50'
             }`}
@@ -398,11 +433,15 @@ export const CrpgSkillHotbar: React.FC<CrpgSkillHotbarProps> = ({
         {/* Slot 6: Formation Switcher */}
         <div className="relative group">
           <button
-            disabled={!selectedUnit || !isOwner}
+            disabled={!selectedUnit || !isOwner || isEmbarked}
             onClick={handleCycleFormation}
-            title={`Cycle Formation (Key 6) - Current: ${selectedUnit?.formation || 'circle'}`}
+            title={
+              isEmbarked
+                ? 'Cannot Change Formation - Unit is Embarked inside Transport'
+                : `Cycle Formation (Key 6) - Current: ${selectedUnit?.formation || 'circle'}`
+            }
             className={`w-10 h-10 sm:w-11 sm:h-11 rounded-lg border flex flex-col items-center justify-center transition-all ${
-              selectedUnit && isOwner
+              selectedUnit && isOwner && !isEmbarked
                 ? 'bg-gradient-to-b from-[#1b1c2e] to-[#0d0e17] border-indigo-500/80 hover:border-indigo-400 text-indigo-200 cursor-pointer shadow hover:scale-105'
                 : 'bg-[#0f1118] border-zinc-800 text-zinc-600 cursor-not-allowed opacity-50'
             }`}

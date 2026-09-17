@@ -1,10 +1,10 @@
 import React from 'react';
-import { Swords, Shield, ShoppingBag, Award, BookOpen, Settings, Compass, Home } from 'lucide-react';
+import { Swords, Shield, ShoppingBag, Award, BookOpen, Settings, Compass, Home, Crosshair, User, Users } from 'lucide-react';
 import { UserProfile } from '../../types/user';
 
 interface NavbarProps {
-  currentTab: 'home' | 'play' | 'builder' | 'shop' | 'battlepass' | 'lore' | 'admin';
-  setTab: (tab: 'home' | 'play' | 'builder' | 'shop' | 'battlepass' | 'lore' | 'admin') => void;
+  currentTab: 'home' | 'matchmaking' | 'play' | 'builder' | 'guilds' | 'shop' | 'battlepass' | 'lore' | 'profile' | 'admin';
+  setTab: (tab: 'home' | 'matchmaking' | 'play' | 'builder' | 'guilds' | 'shop' | 'battlepass' | 'lore' | 'profile' | 'admin') => void;
   user: UserProfile;
   onOpenAuth?: () => void;
   onOpenProfile?: () => void;
@@ -36,7 +36,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
       </div>
 
-      {/* Main Tabs */}
+      {/* Main Tabs (Configured: Home Page -> Matchmaking -> Battlefield -> Armies -> Guilds -> ...) */}
       <nav className="flex items-center space-x-1 sm:space-x-1.5">
         <button
           onClick={() => setTab('home')}
@@ -47,7 +47,19 @@ export const Navbar: React.FC<NavbarProps> = ({
           }`}
         >
           <Home className="w-3.5 h-3.5" />
-          <span>War Room</span>
+          <span>Home</span>
+        </button>
+
+        <button
+          onClick={() => setTab('matchmaking')}
+          className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-md font-medium text-xs transition-all ${
+            currentTab === 'matchmaking'
+              ? 'bg-[#9a281e] text-white shadow-md border border-[#c94a29]/60'
+              : 'text-[#a39482] hover:text-[#f4efe6] hover:bg-[#241710]'
+          }`}
+        >
+          <Crosshair className="w-3.5 h-3.5" />
+          <span>Matchmaking</span>
         </button>
 
         <button
@@ -72,6 +84,18 @@ export const Navbar: React.FC<NavbarProps> = ({
         >
           <Shield className="w-3.5 h-3.5" />
           <span>Armies</span>
+        </button>
+
+        <button
+          onClick={() => setTab('guilds')}
+          className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-md font-medium text-xs transition-all ${
+            currentTab === 'guilds'
+              ? 'bg-[#9a281e] text-white shadow-md border border-[#c94a29]/60'
+              : 'text-[#a39482] hover:text-[#f4efe6] hover:bg-[#241710]'
+          }`}
+        >
+          <Users className="w-3.5 h-3.5" />
+          <span>Guilds</span>
         </button>
 
         <button
@@ -108,6 +132,18 @@ export const Navbar: React.FC<NavbarProps> = ({
         >
           <BookOpen className="w-3.5 h-3.5" />
           <span>Codex</span>
+        </button>
+
+        <button
+          onClick={() => setTab('profile')}
+          className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-md font-medium text-xs transition-all ${
+            currentTab === 'profile'
+              ? 'bg-[#9a281e] text-white shadow-md border border-[#c94a29]/60'
+              : 'text-[#a39482] hover:text-[#f4efe6] hover:bg-[#241710]'
+          }`}
+        >
+          <User className="w-3.5 h-3.5" />
+          <span>Profile</span>
         </button>
 
         {/* AUTH-009: Admin Tab strictly gated to role === 'admin' */}

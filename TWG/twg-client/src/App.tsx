@@ -11,13 +11,16 @@ import { AuthModal } from './components/auth/AuthModal';
 import { ProfileModal } from './components/auth/ProfileModal';
 import { MatchmakingModal } from './components/matchmaking/MatchmakingModal';
 import { DuelZoneModal } from './components/matchmaking/DuelZoneModal';
+import { MatchmakingPage } from './components/matchmaking/MatchmakingPage';
+import { ProfilePage } from './components/profile/ProfilePage';
+import { GuildPage } from './components/guild/GuildPage';
 import { AuthService } from './services/authService';
 import { StorageService } from './services/storageService';
 import { UserProfile, ShopItem } from './types/user';
 import { ArmyRoster } from './types/army';
 
 export function App() {
-  const [currentTab, setCurrentTab] = useState<'home' | 'play' | 'builder' | 'shop' | 'battlepass' | 'lore' | 'admin'>('home');
+  const [currentTab, setCurrentTab] = useState<'home' | 'matchmaking' | 'play' | 'builder' | 'guilds' | 'shop' | 'battlepass' | 'lore' | 'profile' | 'admin'>('home');
   const [user, setUser] = useState<UserProfile>(() => AuthService.getCurrentUser());
   const [activeBattleRoster, setActiveBattleRoster] = useState<ArmyRoster | null>(null);
   const [matchmakingRoster, setMatchmakingRoster] = useState<ArmyRoster | null>(null);
@@ -26,6 +29,7 @@ export function App() {
   const [isMatchmakingModalOpen, setIsMatchmakingModalOpen] = useState(false);
   const [isDuelZoneOpen, setIsDuelZoneOpen] = useState(false);
   const [dataVersion, setDataVersion] = useState(0);
+  const [activeBattleMapId, setActiveBattleMapId] = useState<string | undefined>(undefined);
 
   // Subscribe to auth state changes from Supabase / AuthService
   useEffect(() => {
@@ -47,7 +51,7 @@ export function App() {
     StorageService.saveUserProfile(user);
   }, [user]);
 
-  const handleSetTab = (tab: 'home' | 'play' | 'builder' | 'shop' | 'battlepass' | 'lore' | 'admin') => {
+  const handleSetTab = (tab: 'home' | 'matchmaking' | 'play' | 'builder' | 'guilds' | 'shop' | 'battlepass' | 'lore' | 'profile' | 'admin') => {
     // AUTH-009: Prevent non-admin access to admin tab
     if (tab === 'admin' && user.role !== 'admin') {
       setIsAuthModalOpen(true);
@@ -127,16 +131,32 @@ export function App() {
               setMatchmakingRoster(roster);
               setIsMatchmakingModalOpen(true);
             }}
-            onOpenDuelZone={() => setIsDuelZoneOpen(true)}
+            onOpenDuelZone={() => handleSetTab('matchmaking')}
           />
         )}
 
         {currentTab === 'play' && (
           <Battlefield
-            key={`battle_${dataVersion}`}
+            key={`battle_${dataVersion}_${activeBattleMapId || 'default'}`}
             customRoster={activeBattleRoster}
             boardSkin={user.equippedBoardSkin}
+            initialMapId={activeBattleMapId}
             onReturnHome={() => setCurrentTab('home')}
+          />
+        )}
+
+        {currentTab === 'matchmaking' && (
+          <MatchmakingPage
+            user={user}
+            rosters={StorageService.getRosters()}
+            activeRoster={matchmakingRoster || activeBattleRoster || StorageService.getRosters()[0]}
+            onSelectRoster={(roster) => setMatchmakingRoster(roster)}
+            onDeployToBattle={(roster, _opponent, mapId) => {
+              setActiveBattleRoster(roster);
+              if (mapId) setActiveBattleMapId(mapId);
+              setCurrentTab('play');
+            }}
+            onNavigate={handleSetTab}
           />
         )}
 
@@ -144,6 +164,14 @@ export function App() {
           <ArmyBuilder
             key={`builder_${dataVersion}`}
             onDeployRosterToBattle={handleDeployRosterToBattle}
+          />
+        )}
+
+        {currentTab === 'guilds' && (
+          <GuildPage
+            user={user}
+            onUpdateUser={(updated) => setUser(updated)}
+            onNavigate={handleSetTab}
           />
         )}
 
@@ -165,6 +193,21 @@ export function App() {
 
         {currentTab === 'lore' && (
           <LoreCodex />
+        )}
+
+        {currentTab === 'profile' && (
+          <ProfilePage
+            user={user}
+            onUpdateUser={(updated) => setUser(updated)}
+            rosters={StorageService.getRosters()}
+            onNavigate={handleSetTab}
+            onOpenAuth={() => setIsAuthModalOpen(true)}
+            onSwitchAccount={() => setIsAuthModalOpen(true)}
+            onSignOut={async () => {
+              const guest = await AuthService.signOut();
+              setUser(guest);
+            }}
+          />
         )}
 
         {currentTab === 'admin' && (
@@ -197,6 +240,22 @@ export function App() {
         onSwitchAccount={() => {
           setIsProfileModalOpen(false);
           setIsAuthModalOpen(true);
+        }}
+        onOpenAdmin={() => {
+          setIsProfileModalOpen(false);
+          handleSetTab('admin');
+        }}
+        onOpenFullProfile={() => {
+          setIsProfileModalOpen(false);
+          handleSetTab('profile');
+        }}
+        onQuickAdminLogin={async () => {
+          const admin = await AuthService.signInAsDemoAdmin();
+          setUser(admin);
+        }}
+        onQuickPlayerLogin={async () => {
+          const player = await AuthService.signInAsDemoPlayer();
+          setUser(player);
         }}
       />
 

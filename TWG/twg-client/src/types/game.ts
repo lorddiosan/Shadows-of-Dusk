@@ -296,6 +296,34 @@ export interface DeploymentZoneConfig {
     maxY: number;
     label?: string;
   };
+  player3?: {
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+    label?: string;
+  };
+  player4?: {
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+    label?: string;
+  };
+  teamA?: {
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+    label?: string;
+  };
+  teamB?: {
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+    label?: string;
+  };
 }
 
 export type PaintedZoneType = 'Impassable' | 'DifficultTerrain' | 'DeploymentP1' | 'DeploymentP2' | 'ObjectiveArea';
@@ -359,6 +387,10 @@ export interface BattleMap {
   createdAt?: string;
   isCustom?: boolean;
   isPreset?: boolean;
+  // Multi-Mode Specifications
+  supportedModes?: ('1v1' | '2v2' | '3way' | '4ffa' | 'tournament')[];
+  recommendedMode?: '1v1' | '2v2' | '3way' | '4ffa' | 'tournament';
+  maxPlayers?: number;
 }
 
 export interface TraitDefinition {
@@ -505,6 +537,15 @@ export const CORE_TRAIT_DEFINITIONS: Record<string, TraitDefinition> = {
     category: 'Command',
     summary: 'Undaunted garrison presence that dominates control zones',
     mechanicalRule: 'Provides +1 bonus Control Power (CP) when contesting Points of Interest (POIs).',
+    isMVP: true
+  },
+  FiringDeck: {
+    id: 'FiringDeck',
+    name: 'Firing Deck',
+    icon: '🔫',
+    category: 'Combat',
+    summary: 'Embarked passenger units can shoot out of open firing ports',
+    mechanicalRule: 'Units embarked inside this vehicle can fire their ranged weapons during the Action or Shooting phase using this vehicle as their origin point.',
     isMVP: true
   }
 };

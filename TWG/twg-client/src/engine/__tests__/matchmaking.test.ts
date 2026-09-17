@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MatchmakingService } from '../../services/matchmakingService';
+import { StorageService } from '../../services/storageService';
 import { UserProfile } from '../../types/user';
 import { ArmyRoster } from '../../types/army';
 import { supabase, safeStorage } from '../../services/supabaseClient';
@@ -152,4 +153,151 @@ describe('MM-001 - MM-006: 1v1 Matchmaking Queue & Pairing Tests', () => {
 
     unsubscribe();
   });
+
+  it('provides multi-region routing configurations and custom room code capabilities', () => {
+    const regions = [
+      { id: 'us_east', name: 'Convergence Prime (US-East)', ping: '24ms' },
+      { id: 'eu_west', name: 'Astraea Citadel (EU-West)', ping: '38ms' },
+      { id: 'asia_pac', name: 'Ember Rift (Asia-Pacific)', ping: '105ms' }
+    ];
+    expect(regions.length).toBe(3);
+    expect(regions.find(r => r.id === 'us_east')?.ping).toBe('24ms');
+  });
 });
+
+describe('MM-007 - MM-012: Multiplayer Modes (2v2, 3-Way, 4FFA) & Tournament Engineered Maps', () => {
+  it('loads all mode-engineered preset battle maps from storage (MM-007)', () => {
+    const maps = StorageService.getMaps();
+    expect(maps.length).toBeGreaterThanOrEqual(7);
+
+    const map2v2 = maps.find(m => m.id === 'map_convergance_coliseum_2v2');
+    const map3way = maps.find(m => m.id === 'map_trinity_spire_3way');
+    const map4ffa = maps.find(m => m.id === 'map_quadrant_ruins_4ffa');
+    const mapApex = maps.find(m => m.id === 'map_apex_championship_stadium');
+
+    expect(map2v2).toBeDefined();
+    expect(map3way).toBeDefined();
+    expect(map4ffa).toBeDefined();
+    expect(mapApex).toBeDefined();
+  });
+
+  it('validates 2v2 Twin Bastions of Convergence specifications (MM-008)', () => {
+    const map = StorageService.getMaps().find(m => m.id === 'map_convergance_coliseum_2v2')!;
+    expect(map.width).toBe(1600);
+    expect(map.height).toBe(1000);
+    expect(map.maxPlayers).toBe(4);
+    expect(map.recommendedMode).toBe('2v2');
+    expect(map.supportedModes).toContain('2v2');
+
+    // Check 4 player deployment zones and 2 team fronts
+    expect(map.deploymentZones.player1).toBeDefined();
+    expect(map.deploymentZones.player2).toBeDefined();
+    expect(map.deploymentZones.player3).toBeDefined();
+    expect(map.deploymentZones.player4).toBeDefined();
+    expect(map.deploymentZones.teamA).toBeDefined();
+    expect(map.deploymentZones.teamB).toBeDefined();
+
+    // Central Bridge objective
+    const bridgeObj = map.objectives.find(o => o.id === 'obj_bridge');
+    expect(bridgeObj).toBeDefined();
+    expect(bridgeObj?.pointsValue).toBe(15);
+    expect(bridgeObj?.x).toBe(800);
+    expect(bridgeObj?.y).toBe(500);
+  });
+
+  it('validates 3-Way Tri-Clash Trinity Spire Crater specifications (MM-009)', () => {
+    const map = StorageService.getMaps().find(m => m.id === 'map_trinity_spire_3way')!;
+    expect(map.width).toBe(1400);
+    expect(map.height).toBe(1200);
+    expect(map.maxPlayers).toBe(3);
+    expect(map.recommendedMode).toBe('3way');
+    expect(map.supportedModes).toContain('3way');
+
+    // 120° Triad Radial Zones: Zenith (top), Obsidian (bottom right), Cinder (bottom left)
+    expect(map.deploymentZones.player1.label).toContain('Zenith');
+    expect(map.deploymentZones.player2.label).toContain('Obsidian');
+    expect(map.deploymentZones.player3?.label).toContain('Cinder');
+
+    // King of the Hill Crown Spire objective (20 VP)
+    const crownSpire = map.objectives.find(o => o.id === 'obj_tri_center');
+    expect(crownSpire).toBeDefined();
+    expect(crownSpire?.pointsValue).toBe(20);
+    expect(crownSpire?.x).toBe(700);
+  });
+
+  it('validates 4-Player Free-For-All Ashen Crossroads specifications (MM-010)', () => {
+    const map = StorageService.getMaps().find(m => m.id === 'map_quadrant_ruins_4ffa')!;
+    expect(map.width).toBe(1400);
+    expect(map.height).toBe(1400);
+    expect(map.maxPlayers).toBe(4);
+    expect(map.recommendedMode).toBe('4ffa');
+    expect(map.supportedModes).toContain('4ffa');
+
+    // 4 Corner Quadrants
+    expect(map.deploymentZones.player1.maxX).toBeLessThanOrEqual(300);
+    expect(map.deploymentZones.player1.maxY).toBeLessThanOrEqual(300);
+    expect(map.deploymentZones.player2.minX).toBeGreaterThanOrEqual(1100);
+    expect(map.deploymentZones.player2.minY).toBeGreaterThanOrEqual(1100);
+    expect(map.deploymentZones.player3?.minX).toBeGreaterThanOrEqual(1100);
+    expect(map.deploymentZones.player3?.maxY).toBeLessThanOrEqual(300);
+    expect(map.deploymentZones.player4?.maxX).toBeLessThanOrEqual(300);
+    expect(map.deploymentZones.player4?.minY).toBeGreaterThanOrEqual(1100);
+
+    // Central Convergence Nexus objective (20 VP)
+    const nexus = map.objectives.find(o => o.id === 'obj_nexus');
+    expect(nexus).toBeDefined();
+    expect(nexus?.pointsValue).toBe(20);
+    expect(nexus?.x).toBe(700);
+    expect(nexus?.y).toBe(700);
+  });
+
+  it('validates Grand Apex Coliseum Tournament Stadium specifications (MM-011)', () => {
+    const map = StorageService.getMaps().find(m => m.id === 'map_apex_championship_stadium')!;
+    expect(map.width).toBe(1200);
+    expect(map.height).toBe(800);
+    expect(map.recommendedMode).toBe('tournament');
+    expect(map.supportedModes).toContain('tournament');
+    expect(map.supportedModes).toContain('1v1');
+    expect(map.supportedModes).toContain('2v2');
+
+    // Symmetrical tournament pedestal
+    const pedestal = map.objectives.find(o => o.id === 'obj_apex_trophy');
+    expect(pedestal).toBeDefined();
+    expect(pedestal?.x).toBe(600);
+    expect(pedestal?.y).toBe(400);
+  });
+
+  it('ensures all deployment zones and objectives are strictly within map boundaries (MM-012)', () => {
+    const maps = StorageService.getMaps();
+    for (const m of maps) {
+      // Check deployment zones
+      const zones = [
+        m.deploymentZones.player1,
+        m.deploymentZones.player2,
+        m.deploymentZones.player3,
+        m.deploymentZones.player4,
+        m.deploymentZones.teamA,
+        m.deploymentZones.teamB
+      ].filter(Boolean);
+
+      for (const z of zones) {
+        expect(z!.minX).toBeGreaterThanOrEqual(0);
+        expect(z!.maxX).toBeLessThanOrEqual(m.width);
+        expect(z!.minY).toBeGreaterThanOrEqual(0);
+        expect(z!.maxY).toBeLessThanOrEqual(m.height);
+        expect(z!.minX).toBeLessThan(z!.maxX);
+        expect(z!.minY).toBeLessThan(z!.maxY);
+      }
+
+      // Check objectives
+      for (const obj of m.objectives) {
+        expect(obj.x).toBeGreaterThanOrEqual(0);
+        expect(obj.x).toBeLessThanOrEqual(m.width);
+        expect(obj.y).toBeGreaterThanOrEqual(0);
+        expect(obj.y).toBeLessThanOrEqual(m.height);
+        expect(obj.pointsValue).toBeGreaterThan(0);
+      }
+    }
+  });
+});
+

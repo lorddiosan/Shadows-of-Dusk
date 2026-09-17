@@ -15,7 +15,10 @@ import {
   applyDamageToTokens,
   findValidEngagementPosition,
   getUnitCollisionRadius,
-  moveUnit
+  moveUnit,
+  canEmbark,
+  canEmbarkWithDistance,
+  hasFiringDeckTrait
 } from '../formationEngine';
 import { resolveCombat, calculateArmorSaveTarget } from '../combatEngine';
 import { checkWinConditions } from '../scoringEngine';
@@ -875,6 +878,165 @@ describe('Infiltration and Leader Attachment Rules', () => {
       const res = findValidEngagementPosition(charger, target, [charger, target], 50);
       expect(res.valid).toBe(false);
       expect(res.position).toEqual(charger.position);
+    });
+  });
+
+  describe('Vehicle Carrying Capacity, Monster Restrictions & Firing Deck', () => {
+    const makeInfantry = (id: string, modelCount: number, attachedLeaderCount: number = 0): Unit => ({
+      id,
+      name: `Infantry Squad ${id}`,
+      type: 'Infantry',
+      role: 'Battleline',
+      avatar: '🛡️',
+      owner: 'player1',
+      stats: {
+        lives: modelCount,
+        maxLives: modelCount,
+        mv: 6,
+        am: 6,
+        def: 8,
+        baseDef: 8,
+        defModifier: 0,
+        modelCount,
+        hpPerModel: 1,
+        cp: 0,
+        range: 4
+      },
+      attachedUnits: attachedLeaderCount > 0 ? Array.from({ length: attachedLeaderCount }, (_, i) => `leader_${i}`) : [],
+      tokens: Array.from({ length: modelCount }, (_, i) => ({ id: `tok_${id}_${i}`, x: 100 + i * 20, y: 100 }))
+    });
+
+    const makeVehicle = (id: string, transportCapacity: number = 1, carryCapacity: number = 6, extra: Partial<Unit> = {}): Unit => ({
+      id,
+      name: `Armored Transport ${id}`,
+      type: 'Vehicle',
+      role: 'Vehicle / Monster',
+      avatar: '🚜',
+      owner: 'player1',
+      transportCapacity,
+      carryCapacity,
+      stats: {
+        lives: 12,
+        maxLives: 12,
+        mv: 10,
+        am: 10,
+        def: 12,
+        baseDef: 12,
+        defModifier: 0,
+        modelCount: 1,
+        hpPerModel: 12,
+        cp: 0,
+        range: 0
+      },
+      tokens: [{ id: `tok_${id}_0`, x: 100, y: 100 }],
+      ...extra
+    });
+
+    const makeMonster = (id: string, extra: Partial<Unit> = {}): Unit => ({
+      id,
+      name: `Behemoth Monster ${id}`,
+      type: 'Monster',
+      role: 'Vehicle / Monster',
+      avatar: '🐉',
+      owner: 'player1',
+      transportCapacity: 2,
+      carryCapacity: 12,
+      stats: {
+        lives: 16,
+        maxLives: 16,
+        mv: 8,
+        am: 12,
+        def: 14,
+        baseDef: 14,
+        defModifier: 0,
+        modelCount: 1,
+        hpPerModel: 16,
+        cp: 0,
+        range: 0
+      },
+      tokens: [{ id: `tok_${id}_0`, x: 100, y: 100 }],
+      ...extra
+    });
+
+    it('RULE: vehicle carries inferior or equal to its capacity (model and squad count)', () => {
+      // Vehicle with transportCapacity: 1 squad, carryCapacity: 6 models
+      const transport = makeVehicle('rhino_1', 1, 6);
+
+      // Squad with 5 models + 1 attached leader = 6 models total
+      const squad6 = makeInfantry('squad_6', 5, 1);
+      expect(canEmbark(squad6, transport, 0, 0)).toBe(true);
+
+      // Squad with 6 models + 1 attached leader = 7 models total (exceeds carryCapacity 6)
+      const squad7 = makeInfantry('squad_7', 6, 1);
+      expect(canEmbark(squad7, transport, 0, 0)).toBe(false);
+
+      // If vehicle already has 1 squad embarked (currentUnitCount = 1), cannot embark a 2nd squad
+      const squadSmall = makeInfantry('squad_small', 2);
+      expect(canEmbark(squadSmall, transport, 2, 1)).toBe(false);
+
+      // If vehicle allows 2 squads (transportCapacity: 2, carryCapacity: 10)
+      const bigTransport = makeVehicle('land_raider_1', 2, 10);
+      const squadA = makeInfantry('squad_a', 4);
+      const squadB = makeInfantry('squad_b', 4);
+      expect(canEmbark(squadA, bigTransport, 0, 0)).toBe(true);
+      expect(canEmbark(squadB, bigTransport, 4, 1)).toBe(true);
+
+      // A 3rd squad cannot embark because unit count would reach 3 > 2
+      const squadC = makeInfantry('squad_c', 2);
+      expect(canEmbark(squadC, bigTransport, 8, 2)).toBe(false);
+
+      // And a squad that exceeds model capacity (4 + 7 = 11 > 10) is rejected
+      const squadHeavy = makeInfantry('squad_heavy', 7);
+      expect(canEmbark(squadHeavy, bigTransport, 4, 1)).toBe(false);
+    });
+
+    it('RULE: a monster does NOT have the ability to carry others', () => {
+      const monster = makeMonster('carnifex_1');
+      const infantry = makeInfantry('gaunt_squad', 5);
+
+      // canEmbark returns false for Monster
+      expect(canEmbark(infantry, monster, 0, 0)).toBe(false);
+
+      // canEmbarkWithDistance returns false for Monster with clear reason
+      monster.position = { x: 100, y: 100 };
+      infantry.position = { x: 120, y: 100 };
+      const distCheck = canEmbarkWithDistance(infantry, monster, 0, 150, 0);
+      expect(distCheck.canEmbark).toBe(false);
+      expect(distCheck.reason).toContain('Monsters do not have the ability to carry others');
+
+      // Even if the monster has 'Transport' in traits, type === 'Monster' strictly bans it
+      const mutantMonster = makeMonster('mutant_behemoth', { traits: ['Transport'] });
+      expect(canEmbark(infantry, mutantMonster, 0, 0)).toBe(false);
+    });
+
+    it('RULE: recognizes Firing Deck trait on vehicles for embarked shooting', () => {
+      // Vehicle with Firing Deck in traits array
+      const battlewagon = makeVehicle('wagon_1', 1, 10, {
+        traits: ['Firing Deck', 'Heavy Armor']
+      });
+      expect(hasFiringDeckTrait(battlewagon)).toBe(true);
+
+      // Vehicle with firing_deck in traits array
+      const chimera = makeVehicle('chimera_1', 1, 6, {
+        traits: ['firing_deck']
+      });
+      expect(hasFiringDeckTrait(chimera)).toBe(true);
+
+      // Vehicle with Firing Deck in passives
+      const trukk = makeVehicle('trukk_1', 1, 6, {
+        passives: ['Firing Deck: Open-topped firing ports']
+      });
+      expect(hasFiringDeckTrait(trukk)).toBe(true);
+
+      // Standard transport without Firing Deck
+      const standardRhino = makeVehicle('rhino_std', 1, 6, {
+        traits: ['Transport', 'Smoke Launchers']
+      });
+      expect(hasFiringDeckTrait(standardRhino)).toBe(false);
+
+      // Null or undefined check
+      expect(hasFiringDeckTrait(null)).toBe(false);
+      expect(hasFiringDeckTrait(undefined)).toBe(false);
     });
   });
 });
