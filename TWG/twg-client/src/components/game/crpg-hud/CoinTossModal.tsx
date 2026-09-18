@@ -55,19 +55,19 @@ export const CoinTossModal: React.FC<CoinTossModalProps> = ({
     if (isFlipping || !isOpen) return;
 
     const interval = setInterval(() => {
-      setCountdown(prev => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          onComplete(displayedWinner);
-          return 0;
-        }
-        return prev - 1;
-      });
+      setCountdown(prev => Math.max(0, prev - 1));
     }, 1000);
 
     autoProceedTimerRef.current = interval;
     return () => clearInterval(interval);
-  }, [isFlipping, isOpen, displayedWinner, onComplete]);
+  }, [isFlipping, isOpen]);
+
+  // When countdown reaches 0, invoke onComplete
+  useEffect(() => {
+    if (countdown === 0 && !isFlipping && isOpen) {
+      onComplete(displayedWinner);
+    }
+  }, [countdown, isFlipping, isOpen, displayedWinner, onComplete]);
 
   if (!isOpen) return null;
 

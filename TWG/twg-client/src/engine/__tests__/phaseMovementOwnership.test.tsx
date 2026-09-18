@@ -4,7 +4,7 @@ import { renderToString } from 'react-dom/server';
 import { CrpgSkillHotbar } from '../../components/game/crpg-hud/CrpgSkillHotbar';
 import { CrpgActionDock } from '../../components/game/crpg-hud/CrpgActionDock';
 import { CoinTossModal } from '../../components/game/crpg-hud/CoinTossModal';
-import { getDeterministicCoinWinner } from '../../components/game/Battlefield';
+import { getDeterministicCoinWinner } from '../../utils/coinFlipUtils';
 import { Unit } from '../../types/game';
 
 describe('Phase and Movement/Formation Restrictions', () => {

@@ -239,26 +239,52 @@ function matchmakingDevServerPlugin(): Plugin {
         if (req.method === 'POST' && (pathOnly === '/action' || pathOnly.endsWith('/action'))) {
           const body = await readBody();
           const { matchId, action } = body;
-          const state = loadState();
-          const match = state.matches.find(m => m.id === matchId);
-          if (match) {
-            match.actions.push({ ...action, timestamp: Date.now() });
-            saveState(state);
-            res.statusCode = 200;
-            res.end(JSON.stringify({ ok: true, actionCount: match.actions.length }));
+          if (!matchId) {
+            res.statusCode = 400;
+            res.end(JSON.stringify({ error: 'Missing matchId' }));
             return;
           }
-          res.statusCode = 404;
-          res.end(JSON.stringify({ error: 'Match not found' }));
+          const state = loadState();
+          let match = state.matches.find(m => m.id === matchId);
+          if (!match) {
+            match = {
+              id: matchId,
+              mode: '1v1',
+              mapId: 'map_apex_championship_stadium',
+              player1Id: 'player1',
+              player2Id: 'player2',
+              createdAt: new Date().toISOString(),
+              actions: []
+            };
+            state.matches.push(match);
+          }
+          const seq = match.actions.length + 1;
+          const actionItem = {
+            ...action,
+            id: action?.id || `act_${Date.now()}_${seq}_${Math.random().toString(36).substring(2, 7)}`,
+            seq,
+            timestamp: Date.now()
+          };
+          match.actions.push(actionItem);
+          saveState(state);
+          res.statusCode = 200;
+          res.end(JSON.stringify({ ok: true, actionCount: match.actions.length, action: actionItem }));
           return;
         }
 
         if (req.method === 'GET' && (pathOnly === '/actions' || pathOnly.endsWith('/actions'))) {
           const matchId = searchParams.get('matchId');
+          const sinceSeq = parseInt(searchParams.get('sinceSeq') || '0', 10);
           const since = parseInt(searchParams.get('since') || '0', 10);
           const state = loadState();
           const match = state.matches.find(m => m.id === matchId);
-          const actions = (match?.actions || []).filter(a => a.timestamp > since);
+          const allActions = match?.actions || [];
+          const actions = allActions.filter(a => {
+            if (sinceSeq > 0) {
+              return (a.seq || 0) > sinceSeq;
+            }
+            return a.timestamp > since;
+          });
           res.statusCode = 200;
           res.end(JSON.stringify({ actions }));
           return;

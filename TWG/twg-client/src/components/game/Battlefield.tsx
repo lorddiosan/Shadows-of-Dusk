@@ -44,15 +44,7 @@ import {
 } from '../../engine/formationEngine';
 
 import { MatchmakingService } from '../../services/matchmakingService';
-
-export const getDeterministicCoinWinner = (seed?: string): 'player1' | 'player2' => {
-  if (!seed) return Math.random() >= 0.5 ? 'player1' : 'player2';
-  let hash = 0;
-  for (let i = 0; i < seed.length; i++) {
-    hash = ((hash << 5) - hash + seed.charCodeAt(i)) | 0;
-  }
-  return Math.abs(hash) % 2 === 0 ? 'player1' : 'player2';
-};
+import { getDeterministicCoinWinner } from '../../utils/coinFlipUtils';
 
 interface BattlefieldProps {
   customRoster?: ArmyRoster | null;
@@ -2189,6 +2181,24 @@ export const Battlefield: React.FC<BattlefieldProps> = ({
     setGameState(prev => ({ ...prev, units: updatedUnits }));
     setSelectedUnitId(unit.id);
     addLog(`🎯 ${unit.name} placed from Army Tray to (${dropPos.x}px, ${dropPos.y}px). Adjust position or formation, then click "Confirm Placement" to commit.`, 'info');
+
+    if (isPvP && matchId) {
+      MatchmakingService.sendBattleAction(matchId, {
+        type: 'UNIT_DEPLOYED',
+        sender: playerRole,
+        unitId: unit.id,
+        unitName: unit.name,
+        owner: unit.owner,
+        position: dropPos,
+        tokens: deployed.tokens,
+        formation: deployed.formation,
+        isPendingDeploymentConfirm: true,
+        gameState: {
+          ...gameState,
+          units: updatedUnits
+        }
+      });
+    }
   };
 
   // Deploy unit from Army Tray via drag-and-drop onto the Tabletop Canvas
@@ -2347,6 +2357,23 @@ export const Battlefield: React.FC<BattlefieldProps> = ({
     setSelectedUnitId(null);
     setArmyTrayDrawerOpen(true);
     addLog(`↩️ Deployment Cancelled: ${unit.name} returned to Army Tray.`, 'info');
+
+    if (isPvP && matchId) {
+      MatchmakingService.sendBattleAction(matchId, {
+        type: 'UNIT_DEPLOYED',
+        sender: playerRole,
+        unitId: unit.id,
+        unitName: unit.name,
+        owner: unit.owner,
+        position: null,
+        tokens: (unit.tokens || []).map(t => ({ ...t, x: 0, y: 0, turnStartPos: undefined })),
+        isPendingDeploymentConfirm: false,
+        gameState: {
+          ...gameState,
+          units: updatedUnits
+        }
+      });
+    }
   };
 
   // Dice Tray Roll Execution
@@ -4383,11 +4410,18 @@ export const Battlefield: React.FC<BattlefieldProps> = ({
 
   // Realtime synchronization between Player 1 and Player 2 in PvP matches
   const lastSyncTimeRef = useRef<number>(0);
+  const lastSeqRef = useRef<number>(0);
   const isApplyingRemoteSyncRef = useRef<boolean>(false);
+  const isInitialMountRef = useRef<boolean>(true);
 
   // 1. Broadcast local state when player takes an action in PvP
   useEffect(() => {
-    if (!isPvP || !matchId || isApplyingRemoteSyncRef.current) return;
+    if (!isPvP || !matchId) return;
+    if (isInitialMountRef.current) {
+      isInitialMountRef.current = false;
+      return;
+    }
+    if (isApplyingRemoteSyncRef.current) return;
     
     MatchmakingService.sendBattleAction(matchId, {
       type: 'SYNC_GAME_STATE',
@@ -4409,29 +4443,97 @@ export const Battlefield: React.FC<BattlefieldProps> = ({
     playerRole
   ]);
 
-  // 2. Poll remote actions from opponent in PvP
+  // 2. Fast Polling (250ms) for remote actions from opponent in PvP
   useEffect(() => {
     if (!isPvP || !matchId) return;
 
     const syncInterval = setInterval(async () => {
       try {
-        const actions = await MatchmakingService.getBattleActions(matchId, lastSyncTimeRef.current);
+        const actions = await MatchmakingService.getBattleActions(matchId, lastSeqRef.current, lastSyncTimeRef.current);
         if (actions && actions.length > 0) {
           for (const act of actions) {
-            if (act.timestamp > lastSyncTimeRef.current) {
+            if (act.seq && act.seq > lastSeqRef.current) {
+              lastSeqRef.current = act.seq;
+            }
+            if (act.timestamp && act.timestamp > lastSyncTimeRef.current) {
               lastSyncTimeRef.current = act.timestamp;
             }
-            if (act.sender !== playerRole && act.type === 'SYNC_GAME_STATE' && act.gameState) {
+
+            if (act.sender !== playerRole) {
               isApplyingRemoteSyncRef.current = true;
-              setGameState(act.gameState);
+
+              setGameState(prev => {
+                const remoteUnits = act.gameState?.units;
+                let nextUnits = prev.units;
+
+                if (remoteUnits && Array.isArray(remoteUnits)) {
+                  nextUnits = prev.units.map(localU => {
+                    // If unit belongs to opponent, sync its state from remote
+                    if (localU.owner !== playerRole) {
+                      const rMatch = remoteUnits.find((r: any) => r.id === localU.id || (r.owner === localU.owner && r.name === localU.name));
+                      if (rMatch) {
+                        return {
+                          ...localU,
+                          position: rMatch.position,
+                          tokens: rMatch.tokens,
+                          formation: rMatch.formation,
+                          isPendingDeploymentConfirm: rMatch.isPendingDeploymentConfirm ?? false,
+                          isPendingMoveConfirm: rMatch.isPendingMoveConfirm ?? false,
+                          hasMoved: rMatch.hasMoved ?? false,
+                          stats: rMatch.stats || localU.stats,
+                          inStrategicReserve: rMatch.inStrategicReserve,
+                          embarkedIn: rMatch.embarkedIn,
+                          attachedTo: rMatch.attachedTo,
+                          attachedUnits: rMatch.attachedUnits
+                        };
+                      }
+                    }
+                    return localU;
+                  });
+                } else if (act.unitId) {
+                  // Discrete action (e.g. UNIT_DEPLOYED)
+                  nextUnits = prev.units.map(localU => {
+                    if (localU.id === act.unitId || (localU.owner === act.owner && localU.name === act.unitName)) {
+                      return {
+                        ...localU,
+                        position: act.position,
+                        tokens: act.tokens || localU.tokens,
+                        formation: act.formation || localU.formation,
+                        isPendingDeploymentConfirm: act.isPendingDeploymentConfirm ?? false
+                      };
+                    }
+                    return localU;
+                  });
+                }
+
+                const nextPhase = act.gameState?.phase || (act.nextPhase || prev.phase);
+                const nextRound = act.gameState?.round ?? prev.round;
+                const nextActivePlayer = act.gameState?.activePlayer || (act.nextDeployer || prev.activePlayer);
+                const nextDeployingPlayer = act.gameState?.deployingPlayer !== undefined ? act.gameState.deployingPlayer : (act.nextDeployer !== undefined ? act.nextDeployer : prev.deployingPlayer);
+
+                return {
+                  ...prev,
+                  phase: nextPhase,
+                  round: nextRound,
+                  activePlayer: nextActivePlayer,
+                  deployingPlayer: nextDeployingPlayer,
+                  units: nextUnits,
+                  player1Score: act.gameState?.player1Score ?? prev.player1Score,
+                  player2Score: act.gameState?.player2Score ?? prev.player2Score,
+                  player1CP: act.gameState?.player1CP ?? prev.player1CP,
+                  player2CP: act.gameState?.player2CP ?? prev.player2CP,
+                  logs: act.gameState?.logs && act.gameState.logs.length > prev.logs.length ? act.gameState.logs : prev.logs
+                };
+              });
+
               setTimeout(() => {
                 isApplyingRemoteSyncRef.current = false;
-              }, 100);
+              }, 250);
             }
           }
         }
       } catch {}
-    }, 700);
+    }, 250);
 
     return () => clearInterval(syncInterval);
   }, [isPvP, matchId, playerRole]);

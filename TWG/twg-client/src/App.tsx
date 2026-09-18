@@ -371,8 +371,17 @@ export function App() {
           onClose={() => setIsMatchmakingModalOpen(false)}
           user={user}
           roster={activeRosterForMatchmaking}
-          onMatchFound={() => {
+          onMatchFound={(matchedTicket) => {
             setActiveBattleRoster(activeRosterForMatchmaking);
+            if (matchedTicket?.mapId) setActiveBattleMapId(matchedTicket.mapId);
+            setPvpBattleConfig({
+              isPvP: true,
+              matchId: matchedTicket?.matchId,
+              playerRole: matchedTicket?.playerRole || 'player1',
+              opponentRoster: matchedTicket?.opponentRoster,
+              opponentCommander: matchedTicket?.matchedWithName,
+              coinWinner: matchedTicket?.coinWinner
+            });
             setIsMatchmakingModalOpen(false);
             setCurrentTab('play');
           }}

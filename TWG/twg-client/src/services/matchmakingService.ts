@@ -294,10 +294,10 @@ export const MatchmakingService = {
     } catch {}
   },
 
-  async getBattleActions(matchId: string, since: number = 0): Promise<any[]> {
+  async getBattleActions(matchId: string, sinceSeq: number = 0, since: number = 0): Promise<any[]> {
     try {
       if (typeof window !== 'undefined' && typeof window.fetch === 'function') {
-        const res = await fetch(`/api/matchmaking/actions?matchId=${encodeURIComponent(matchId)}&since=${since}`);
+        const res = await fetch(`/api/matchmaking/actions?matchId=${encodeURIComponent(matchId)}&sinceSeq=${sinceSeq}&since=${since}`);
         if (res.ok) {
           const json = await res.json();
           return json.actions || [];
