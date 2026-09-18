@@ -10,7 +10,7 @@ import { UserProfile } from '../../types/user';
 import { ArmyRoster } from '../../types/army';
 import { BattleMap } from '../../types/game';
 import { FactionLogo } from '../common/FactionLogo';
-import { MatchmakingService } from '../../services/matchmakingService';
+import { MatchmakingService, QueueTicket } from '../../services/matchmakingService';
 import { StorageService, PRESET_MAPS } from '../../services/storageService';
 import { vfxDispatcher } from '../../services/audioVfxService';
 
@@ -44,7 +44,18 @@ interface MatchmakingPageProps {
   rosters: ArmyRoster[];
   activeRoster: ArmyRoster;
   onSelectRoster: (roster: ArmyRoster) => void;
-  onDeployToBattle: (roster: ArmyRoster, opponent?: any, mapId?: string) => void;
+  onDeployToBattle: (
+    roster: ArmyRoster, 
+    opponent?: any, 
+    mapId?: string,
+    pvpConfig?: {
+      isPvP?: boolean;
+      matchId?: string;
+      playerRole?: 'player1' | 'player2';
+      opponentRoster?: ArmyRoster;
+      coinWinner?: 'player1' | 'player2';
+    }
+  ) => void;
   onNavigate: (tab: 'home' | 'play' | 'matchmaking' | 'builder' | 'shop' | 'battlepass' | 'lore' | 'admin') => void;
 }
 
@@ -115,7 +126,7 @@ export const MatchmakingPage: React.FC<MatchmakingPageProps> = ({
     };
   }, [user.id]);
 
-  const handleStartMatchmaking = async (mode: MatchQueueMode, targetMapId?: string) => {
+  const handleStartMatchmaking = async (mode: MatchQueueMode, targetMapId?: string, customCode?: string) => {
     if (!activeRoster) return;
     
     const targetMap = targetMapId ? getMapById(targetMapId) : PRESET_MAPS[0];
@@ -127,75 +138,133 @@ export const MatchmakingPage: React.FC<MatchmakingPageProps> = ({
     setMatchedCommanders([]);
     setCountdown(3);
 
+    // Clear any previous subscriptions or timers
+    if (timerRef.current) clearInterval(timerRef.current);
+    if (fallbackMatchTimerRef.current) clearTimeout(fallbackMatchTimerRef.current);
+    if (unsubscribeRef.current) {
+      unsubscribeRef.current();
+      unsubscribeRef.current = null;
+    }
+
     // Start search elapsed timer
     timerRef.current = setInterval(() => {
       setSearchTime(t => t + 1);
     }, 1000);
 
-    // Simulated multi-commander matching (adapted per mode)
-    fallbackMatchTimerRef.current = setTimeout(() => {
+    const onMatchSuccess = (matchedTicket: QueueTicket) => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (fallbackMatchTimerRef.current) clearTimeout(fallbackMatchTimerRef.current);
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+        unsubscribeRef.current = null;
+      }
+
+      const isP2 = matchedTicket.playerRole === 'player2';
       const userCommander: MatchedCommander = {
         id: user.id,
         name: user.displayName || 'You (Commander)',
         faction: activeRoster?.factionName || 'Convergence Vanguard',
         rating: 1480,
         avatar: '👑',
-        roleOrTeam: mode === '2v2' || mode === 'tournament_2v2' ? 'Team Alpha (P1)' : mode === '4ffa' ? 'NW Citadel (P1)' : mode === '3way' ? 'Zenith Apex (P1)' : 'Challenger',
+        roleOrTeam: isP2 ? 'Player 2 (Challenger)' : 'Player 1 (Host)',
         color: '#f43f5e',
         isUser: true
       };
 
-      let rosterPool: MatchedCommander[] = [];
+      const opponentCommander: MatchedCommander = {
+        id: matchedTicket.matchedWith || 'opp_challenger',
+        name: matchedTicket.matchedWithName || (matchedTicket.opponentRoster?.name ? `${matchedTicket.opponentRoster.name} Commander` : 'Challenger Commander'),
+        faction: matchedTicket.matchedWithFaction || matchedTicket.opponentRoster?.factionName || 'Challenger Vanguard',
+        rating: 1475,
+        avatar: '⚔️',
+        roleOrTeam: isP2 ? 'Player 1 (Host)' : 'Player 2 (Challenger)',
+        color: '#0ea5e9',
+        isUser: false
+      };
 
-      if (mode === '2v2' || mode === 'tournament_2v2') {
-        rosterPool = [
-          userCommander,
-          { id: 'p2', name: 'Inquisitor Raven', faction: 'The Silver Vanguard', rating: 1465, avatar: '🛡️', roleOrTeam: 'Team Alpha (P3)', color: '#10b981' },
-          { id: 'p3', name: 'Warmaster Cynthia', faction: 'The Crimson Empire', rating: 1490, avatar: '⚔️', roleOrTeam: 'Team Omega (P2)', color: '#0ea5e9' },
-          { id: 'p4', name: 'Iron-Juggernaut Brak', faction: 'The Ironclad Legion', rating: 1440, avatar: '⚙️', roleOrTeam: 'Team Omega (P4)', color: '#f59e0b' }
-        ];
-      } else if (mode === '3way') {
-        rosterPool = [
-          userCommander,
-          { id: 'p2', name: 'Arch-Magus Vorrak', faction: 'The Eldritch Coven', rating: 1520, avatar: '🔮', roleOrTeam: 'Obsidian Trench (P2)', color: '#0ea5e9' },
-          { id: 'p3', name: 'Shadowblade Lyra', faction: 'The Obsidian Enclave', rating: 1495, avatar: '🗡️', roleOrTeam: 'Cinder Basin (P3)', color: '#10b981' }
-        ];
-      } else if (mode === '4ffa') {
-        rosterPool = [
-          userCommander,
-          { id: 'p2', name: 'Warmaster Cynthia', faction: 'The Crimson Empire', rating: 1490, avatar: '⚔️', roleOrTeam: 'SE Redoubt (P2)', color: '#0ea5e9' },
-          { id: 'p3', name: 'Arch-Magus Vorrak', faction: 'The Eldritch Coven', rating: 1520, avatar: '🔮', roleOrTeam: 'NE Citadel (P3)', color: '#10b981' },
-          { id: 'p4', name: 'Forge-Baron Kroll', faction: 'The Ironclad Legion', rating: 1440, avatar: '⚙️', roleOrTeam: 'SW Outpost (P4)', color: '#f59e0b' }
-        ];
-      } else if (mode === 'tournament_solo') {
-        rosterPool = [
-          userCommander,
-          { id: 'p2', name: 'Grand Warmaster Vane', faction: 'The Crimson Empire', rating: 1650, avatar: '🥇', roleOrTeam: 'Round 1 Opponent (Seed #2)', color: '#0ea5e9' }
-        ];
-      } else if (mode === 'tournament_guild') {
-        rosterPool = [
-          userCommander,
-          { id: 'p2', name: 'Archon Ignatius [Knights of Dawn]', faction: 'The Ember Dominion', rating: 1580, avatar: '🏰', roleOrTeam: 'Guild War Matchup', color: '#0ea5e9' }
-        ];
-      } else {
-        // Standard 1v1
-        const mockOpponents = [
-          { id: 'p2', name: 'Warmaster Cynthia', faction: 'The Silver Vanguard', rating: 1475, avatar: '🛡️', roleOrTeam: 'Opponent', color: '#0ea5e9' },
-          { id: 'p2', name: 'Arch-Magus Vorrak', faction: 'The Eldritch Coven', rating: 1520, avatar: '🔮', roleOrTeam: 'Opponent', color: '#0ea5e9' },
-          { id: 'p2', name: 'Iron-Juggernaut Brak', faction: 'The Ironclad Legion', rating: 1410, avatar: '⚙️', roleOrTeam: 'Opponent', color: '#0ea5e9' },
-          { id: 'p2', name: 'Shadowblade Lyra', faction: 'The Obsidian Enclave', rating: 1495, avatar: '🗡️', roleOrTeam: 'Opponent', color: '#0ea5e9' }
-        ];
-        const randomOpp = mockOpponents[Math.floor(Math.random() * mockOpponents.length)];
-        rosterPool = [userCommander, randomOpp];
-      }
+      const matchedMap = getMapById(matchedTicket.mapId || targetMap.id);
+      triggerMultiMatchFound([userCommander, opponentCommander], matchedMap, {
+        isPvP: true,
+        matchId: matchedTicket.matchId,
+        playerRole: matchedTicket.playerRole || (isP2 ? 'player2' : 'player1'),
+        opponentRoster: matchedTicket.opponentRoster,
+        coinWinner: matchedTicket.coinWinner
+      });
+    };
 
-      triggerMultiMatchFound(rosterPool, targetMap);
-    }, 5500);
+    // Join real queue
+    const { ticket, error } = await MatchmakingService.joinQueue(
+      user,
+      activeRoster,
+      mode,
+      targetMap.id,
+      customCode
+    );
+
+    if (error) {
+      setErrorMsg(error.message || 'Failed to connect to matchmaking server.');
+      return;
+    }
+
+    if (!ticket) return;
+
+    if (ticket.status === 'matched') {
+      // Instant match!
+      onMatchSuccess(ticket);
+    } else {
+      // Waiting in queue - listen for real opponent
+      unsubscribeRef.current = MatchmakingService.subscribeToTicket(ticket.id, (matchedTicket) => {
+        onMatchSuccess(matchedTicket);
+      });
+    }
   };
 
-  const triggerMultiMatchFound = (commanders: MatchedCommander[], map: BattleMap) => {
+  const handleForceAiMatch = () => {
     if (timerRef.current) clearInterval(timerRef.current);
     if (fallbackMatchTimerRef.current) clearTimeout(fallbackMatchTimerRef.current);
+    if (unsubscribeRef.current) {
+      unsubscribeRef.current();
+      unsubscribeRef.current = null;
+    }
+    MatchmakingService.leaveQueue(user.id);
+
+    const mockOpponents = [
+      { id: 'p2', name: 'Warmaster Cynthia', faction: 'The Silver Vanguard', rating: 1475, avatar: '🛡️', roleOrTeam: 'Opponent (Bot)', color: '#0ea5e9' },
+      { id: 'p2', name: 'Arch-Magus Vorrak', faction: 'The Eldritch Coven', rating: 1520, avatar: '🔮', roleOrTeam: 'Opponent (Bot)', color: '#0ea5e9' },
+      { id: 'p2', name: 'Iron-Juggernaut Brak', faction: 'The Ironclad Legion', rating: 1410, avatar: '⚙️', roleOrTeam: 'Opponent (Bot)', color: '#0ea5e9' },
+      { id: 'p2', name: 'Shadowblade Lyra', faction: 'The Obsidian Enclave', rating: 1495, avatar: '🗡️', roleOrTeam: 'Opponent (Bot)', color: '#0ea5e9' }
+    ];
+    const randomOpp = mockOpponents[Math.floor(Math.random() * mockOpponents.length)];
+    const userCommander: MatchedCommander = {
+      id: user.id,
+      name: user.displayName || 'You (Commander)',
+      faction: activeRoster?.factionName || 'Convergence Vanguard',
+      rating: 1480,
+      avatar: '👑',
+      roleOrTeam: 'Player 1',
+      color: '#f43f5e',
+      isUser: true
+    };
+    triggerMultiMatchFound([userCommander, randomOpp], activeQueueMap || PRESET_MAPS[0], { isPvP: false });
+  };
+
+  const triggerMultiMatchFound = (
+    commanders: MatchedCommander[], 
+    map: BattleMap,
+    pvpConfig?: {
+      isPvP?: boolean;
+      matchId?: string;
+      playerRole?: 'player1' | 'player2';
+      opponentRoster?: ArmyRoster;
+      coinWinner?: 'player1' | 'player2';
+    }
+  ) => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    if (fallbackMatchTimerRef.current) clearTimeout(fallbackMatchTimerRef.current);
+    if (unsubscribeRef.current) {
+      unsubscribeRef.current();
+      unsubscribeRef.current = null;
+    }
     setMatchedCommanders(commanders);
     setQueueState('matched');
 
@@ -213,7 +282,7 @@ export const MatchmakingPage: React.FC<MatchmakingPageProps> = ({
       if (currentCount <= 0) {
         clearInterval(countInterval);
         const opponent = commanders.find(c => !c.isUser) || commanders[1];
-        onDeployToBattle(activeRoster, opponent, map.id);
+        onDeployToBattle(activeRoster, opponent, map.id, pvpConfig);
       }
     }, 1000);
   };
@@ -221,7 +290,10 @@ export const MatchmakingPage: React.FC<MatchmakingPageProps> = ({
   const handleCancelQueue = () => {
     if (timerRef.current) clearInterval(timerRef.current);
     if (fallbackMatchTimerRef.current) clearTimeout(fallbackMatchTimerRef.current);
-    if (unsubscribeRef.current) unsubscribeRef.current();
+    if (unsubscribeRef.current) {
+      unsubscribeRef.current();
+      unsubscribeRef.current = null;
+    }
     MatchmakingService.leaveQueue(user.id);
     setQueueState('idle');
     setSearchTime(0);
@@ -236,7 +308,7 @@ export const MatchmakingPage: React.FC<MatchmakingPageProps> = ({
       faction: 'Synthesized AI Opponent',
       rating: aiDifficulty === 'recruit' ? 1100 : aiDifficulty === 'veteran' ? 1450 : 1800,
       avatar: '🤖'
-    }, standardMap.id);
+    }, standardMap.id, { isPvP: false });
   };
 
   const handleCopyRoomCode = () => {
@@ -245,13 +317,15 @@ export const MatchmakingPage: React.FC<MatchmakingPageProps> = ({
     setTimeout(() => setCopiedCode(false), 2000);
   };
 
+  const handleHostCustomRoom = (code: string) => {
+    const coliseumMap = getMapById('map_apex_championship_stadium');
+    handleStartMatchmaking('custom', coliseumMap.id, code);
+  };
+
   const handleJoinCustomRoom = () => {
     if (!customInputCode.trim()) return;
     const coliseumMap = getMapById('map_apex_championship_stadium');
-    triggerMultiMatchFound([
-      { id: user.id, name: user.displayName || 'You', faction: activeRoster?.factionName || 'Faction', rating: 1480, avatar: '👑', isUser: true, roleOrTeam: 'Host' },
-      { id: 'c_guest', name: `Challenger (${customInputCode.toUpperCase()})`, faction: 'Convergence Syndicate', rating: 1460, avatar: '🗝️', roleOrTeam: 'Challenger' }
-    ], coliseumMap);
+    handleStartMatchmaking('custom', coliseumMap.id, customInputCode.trim().toUpperCase());
   };
 
   const formatTime = (secs: number) => {
@@ -541,13 +615,23 @@ export const MatchmakingPage: React.FC<MatchmakingPageProps> = ({
                   </div>
                 ))
               ) : queueState === 'searching' ? (
-                <button
-                  onClick={handleCancelQueue}
-                  className="px-5 py-2.5 bg-[#1f1510] hover:bg-[#2b1b14] border border-[#4a3522] hover:border-rose-500 text-rose-300 font-mono text-xs font-bold rounded-xl transition cursor-pointer flex items-center space-x-2"
-                >
-                  <X className="w-4 h-4" />
-                  <span>Cancel Search</span>
-                </button>
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={handleForceAiMatch}
+                    className="px-4 py-2.5 bg-amber-950/70 hover:bg-amber-900 border border-amber-600/70 hover:border-amber-400 text-amber-200 font-mono text-xs font-bold rounded-xl transition cursor-pointer flex items-center space-x-2 shadow-lg"
+                    title="Match against a Codex AI Bot immediately"
+                  >
+                    <Bot className="w-4 h-4 text-amber-400" />
+                    <span>Play Bot Now</span>
+                  </button>
+                  <button
+                    onClick={handleCancelQueue}
+                    className="px-5 py-2.5 bg-[#1f1510] hover:bg-[#2b1b14] border border-[#4a3522] hover:border-rose-500 text-rose-300 font-mono text-xs font-bold rounded-xl transition cursor-pointer flex items-center space-x-2"
+                  >
+                    <X className="w-4 h-4" />
+                    <span>Cancel Search</span>
+                  </button>
+                </div>
               ) : null}
             </div>
 
@@ -1271,17 +1355,12 @@ export const MatchmakingPage: React.FC<MatchmakingPageProps> = ({
 
               <button
                 onClick={() => {
-                  setCustomRoomCode('VALE-' + Math.floor(1000 + Math.random() * 9000));
-                  const coliseumMap = getMapById('map_apex_championship_stadium');
-                  triggerMultiMatchFound([
-                    { id: user.id, name: user.displayName || 'You', faction: activeRoster?.factionName || 'Faction', rating: 1480, avatar: '👑', isUser: true, roleOrTeam: 'Host' },
-                    { id: 'c_guest', name: 'Challenger (Custom Lobby)', faction: 'Shadows of Dusk', rating: 1500, avatar: '🗝️', roleOrTeam: 'Guest' }
-                  ], coliseumMap);
+                  handleHostCustomRoom(customRoomCode);
                 }}
-                className="w-full py-3 bg-[#1a1220] hover:bg-[#251830] border border-purple-800/80 text-purple-300 font-bold text-xs uppercase tracking-widest rounded-xl transition cursor-pointer flex items-center justify-center space-x-2"
+                className="w-full py-3 bg-[#1a1220] hover:bg-[#251830] border border-purple-800/80 text-purple-300 font-bold text-xs uppercase tracking-widest rounded-xl transition cursor-pointer flex items-center justify-center space-x-2 shadow-lg"
               >
                 <Users className="w-4 h-4" />
-                <span>Host Custom Match</span>
+                <span>Host Custom Match ({customRoomCode})</span>
               </button>
             </div>
           )}

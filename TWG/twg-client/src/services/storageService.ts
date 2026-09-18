@@ -62,15 +62,57 @@ function getDefaultPresetArmies(): ArmyRoster[] {
   ];
 }
 
+function getUniqueGuestProfile(): UserProfile {
+  let suffix = '';
+  if (typeof window !== 'undefined') {
+    const port = window.location.port;
+    if (port) {
+      suffix = `_${port}`;
+    } else {
+      let storedId = '';
+      try {
+        storedId = window.sessionStorage?.getItem('sod_guest_session_id') || '';
+        if (!storedId) {
+          storedId = Math.random().toString(36).substring(2, 7);
+          window.sessionStorage?.setItem('sod_guest_session_id', storedId);
+        }
+      } catch {}
+      suffix = storedId ? `_${storedId}` : '';
+    }
+  }
+  const portLabel = typeof window !== 'undefined' && window.location.port ? ` [Port ${window.location.port}]` : '';
+  return {
+    ...DEFAULT_PROFILE,
+    id: `usr_guest${suffix || '_01'}`,
+    displayName: `Commander${portLabel || ' Prime'}`,
+    username: `commander${suffix || '_01'}`
+  };
+}
+
 export const StorageService = {
   getUserProfile(): UserProfile {
     try {
       const data = safeStorage.getItem(USER_STORAGE_KEY);
-      if (data) return JSON.parse(data);
+      if (data) {
+        const parsed = JSON.parse(data);
+        if (parsed.id === 'usr_guest_01' && typeof window !== 'undefined' && window.location.port) {
+          const uniqueGuest = getUniqueGuestProfile();
+          const updated = { 
+            ...parsed, 
+            id: uniqueGuest.id, 
+            displayName: parsed.displayName === 'Dusk Commander' ? uniqueGuest.displayName : parsed.displayName 
+          };
+          safeStorage.setItem(USER_STORAGE_KEY, JSON.stringify(updated));
+          return updated;
+        }
+        return parsed;
+      }
     } catch {
       // ignore
     }
-    return DEFAULT_PROFILE;
+    const guest = getUniqueGuestProfile();
+    try { safeStorage.setItem(USER_STORAGE_KEY, JSON.stringify(guest)); } catch {}
+    return guest;
   },
 
   saveUserProfile(profile: UserProfile): void {

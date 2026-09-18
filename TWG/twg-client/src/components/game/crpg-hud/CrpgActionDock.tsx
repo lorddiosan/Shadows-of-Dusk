@@ -6,25 +6,36 @@ import { getUnitBodiesAndLives } from '../../../engine/formationEngine';
 interface CrpgActionDockProps {
   selectedUnit: Unit | null;
   activePlayer: 'player1' | 'player2';
+  deployingPlayer?: 'player1' | 'player2';
   phase: Phase;
   round?: number;
   isOpen?: boolean;
   onToggle?: () => void;
   onAdvancePhase: () => void;
   onExecuteBotAction: () => void;
+  isPvP?: boolean;
+  playerRole?: 'player1' | 'player2';
 }
 
 export const CrpgActionDock: React.FC<CrpgActionDockProps> = ({
   selectedUnit,
   activePlayer,
+  deployingPlayer,
   phase,
   round = 1,
   isOpen = true,
   onToggle,
   onAdvancePhase,
   onExecuteBotAction,
+  isPvP = false,
+  playerRole = 'player1',
 }) => {
-  const isPlayerTurn = activePlayer === 'player1';
+  const currentActiveTurn = phase === 'Deployment' ? (deployingPlayer || activePlayer) : activePlayer;
+  const myRole = isPvP ? playerRole : 'player1';
+  const isPlayerTurn = currentActiveTurn === myRole;
+  const turnLabel = isPlayerTurn 
+    ? (phase === 'Deployment' ? 'YOUR DEPLOYMENT' : 'YOUR TURN') 
+    : (isPvP ? "OPPONENT'S TURN" : 'BOT TURN');
 
   // Calculate lives & vitals of selected unit (or active squad)
   const bl = selectedUnit ? getUnitBodiesAndLives(selectedUnit) : { remainingLives: 10, maxLives: 10 };
@@ -49,7 +60,7 @@ export const CrpgActionDock: React.FC<CrpgActionDockProps> = ({
           <div className="flex items-center space-x-2 transition-opacity duration-200 group-hover/dock:opacity-25">
             <span className={`w-2.5 h-2.5 rounded-full ${isPlayerTurn ? 'bg-sky-400' : 'bg-rose-500'} animate-pulse`} />
             <span className="font-serif font-black text-xs uppercase tracking-wider text-white drop-shadow">
-              {isPlayerTurn ? 'YOUR TURN' : 'BOT TURN'}
+              {turnLabel}
             </span>
             <span className="text-[10px] font-mono font-bold text-amber-300">
               • R{round} {phase.toUpperCase()}
@@ -58,23 +69,34 @@ export const CrpgActionDock: React.FC<CrpgActionDockProps> = ({
 
           <span className="text-zinc-600 font-mono text-[9px] transition-opacity duration-200 group-hover/dock:opacity-25">│</span>
 
-          {/* Turn / Phase Advance Quick Action - STAYS SHOWN ON BUTTONS */}
+          {/* Turn / Phase Advance Quick Action */}
           {!isPlayerTurn ? (
-            <button
-              onClick={onExecuteBotAction}
-              className="px-2.5 py-0.5 rounded bg-sky-700 hover:bg-sky-500 text-white font-mono text-[10px] font-bold flex items-center space-x-1 transition cursor-pointer shadow opacity-90 hover:!opacity-100"
-              title="Execute Bot Action"
-            >
-              <span>Bot Action</span>
-              <ArrowRight className="w-3 h-3" />
-            </button>
+            isPvP ? (
+              <button
+                disabled
+                className="px-2.5 py-0.5 rounded bg-zinc-900 border border-zinc-750 text-zinc-500 font-mono text-[10px] font-bold flex items-center space-x-1 cursor-not-allowed opacity-75 select-none"
+                title="Waiting for opponent's turn"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400/80 animate-ping mr-1" />
+                <span>Waiting</span>
+              </button>
+            ) : (
+              <button
+                onClick={onExecuteBotAction}
+                className="px-2.5 py-0.5 rounded bg-sky-700 hover:bg-sky-500 text-white font-mono text-[10px] font-bold flex items-center space-x-1 transition cursor-pointer shadow opacity-90 hover:!opacity-100"
+                title="Execute Bot Action"
+              >
+                <span>Bot Action</span>
+                <ArrowRight className="w-3 h-3" />
+              </button>
+            )
           ) : (
             <button
               onClick={onAdvancePhase}
               className="px-2.5 py-0.5 rounded bg-amber-600 hover:bg-amber-400 text-black font-mono text-[10px] font-black flex items-center space-x-1 transition cursor-pointer shadow opacity-90 hover:!opacity-100"
               title="Advance to next phase or turn"
             >
-              <span>End Phase</span>
+              <span>{phase === 'Deployment' ? 'End Deploy' : 'End Phase'}</span>
               <ArrowRight className="w-3 h-3" />
             </button>
           )}
@@ -108,7 +130,7 @@ export const CrpgActionDock: React.FC<CrpgActionDockProps> = ({
           <div className="flex items-center space-x-1.5 transition-opacity duration-200 group-hover/dock:opacity-25">
             <span className={`text-[10px] font-mono ${isPlayerTurn ? 'text-sky-300' : 'text-rose-300'}`}>[</span>
             <span className="text-[11px] font-serif font-black tracking-widest uppercase text-white drop-shadow">
-              {isPlayerTurn ? 'YOUR TURN' : 'ENEMY TURN'}
+              {turnLabel}
             </span>
             <span className="text-[9px] font-mono text-amber-300 font-bold ml-1">
               • R{round} {phase.toUpperCase()}
@@ -193,19 +215,30 @@ export const CrpgActionDock: React.FC<CrpgActionDockProps> = ({
         {/* Right: END PHASE / TURN Button - STAYS SHOWN ON BUTTONS */}
         <div>
           {!isPlayerTurn ? (
-            <button
-              onClick={onExecuteBotAction}
-              className="px-4 py-2 bg-gradient-to-b from-sky-700 via-sky-800 to-sky-950 hover:from-sky-600 hover:to-sky-900 border-2 border-sky-400/80 rounded-lg text-white font-serif font-black text-xs uppercase tracking-wider shadow-[0_0_15px_rgba(56,189,248,0.3)] cursor-pointer flex items-center space-x-1.5 transition active:scale-95 opacity-90 hover:!opacity-100"
-            >
-              <span>BOT ACTION</span>
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
+            isPvP ? (
+              <button
+                disabled
+                className="px-4 py-2 bg-zinc-900/90 border-2 border-zinc-750 rounded-lg text-zinc-500 font-serif font-bold text-xs uppercase tracking-wider cursor-not-allowed flex items-center space-x-1.5 opacity-75 select-none"
+                title="Waiting for opponent to finish their turn"
+              >
+                <span className="w-2 h-2 rounded-full bg-amber-400/80 animate-ping mr-1" />
+                <span>WAITING FOR OPPONENT</span>
+              </button>
+            ) : (
+              <button
+                onClick={onExecuteBotAction}
+                className="px-4 py-2 bg-gradient-to-b from-sky-700 via-sky-800 to-sky-950 hover:from-sky-600 hover:to-sky-900 border-2 border-sky-400/80 rounded-lg text-white font-serif font-black text-xs uppercase tracking-wider shadow-[0_0_15px_rgba(56,189,248,0.3)] cursor-pointer flex items-center space-x-1.5 transition active:scale-95 opacity-90 hover:!opacity-100"
+              >
+                <span>BOT ACTION</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            )
           ) : (
             <button
               onClick={onAdvancePhase}
               className="px-4 py-2 bg-gradient-to-b from-[#1b263b] via-[#101b2b] to-[#0a111b] hover:from-[#243350] hover:to-[#142338] border-2 border-amber-400/90 rounded-lg text-amber-200 hover:text-amber-100 font-serif font-black text-xs uppercase tracking-wider shadow-[0_0_16px_rgba(251,191,36,0.3),inset_0_1px_1px_rgba(255,255,255,0.2)] cursor-pointer flex items-center space-x-1.5 transition active:scale-95 opacity-90 hover:!opacity-100"
             >
-              <span>END PHASE / TURN</span>
+              <span>{phase === 'Deployment' ? 'END DEPLOY' : 'END PHASE / TURN'}</span>
               <ArrowRight className="w-3.5 h-3.5 text-amber-400" />
             </button>
           )}

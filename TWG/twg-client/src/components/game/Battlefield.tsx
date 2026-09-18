@@ -5,7 +5,7 @@ import {
   Layers, ChevronRight, ChevronLeft, ChevronUp, ChevronDown, RefreshCw, X, Play, Move, ZoomIn, ZoomOut,
   Maximize2, Send, MessageSquare, BookOpen, Volume2, Settings,
   HelpCircle, UserCheck, Plus, Circle, Box, Truck, UserPlus, UserMinus,
-  Users, Boxes, FolderOpen, Tag, MapPin
+  Users, Boxes, FolderOpen, Tag, MapPin, Coins
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { 
@@ -19,7 +19,8 @@ import { resolveCombat, rollCharge, CombatResult, checkTypeAdvantage, getAbility
 import { calculatePOIScores, checkWinConditions } from '../../engine/scoringEngine';
 import { checkAndTriggerEvents, relocateSpecialTiles } from '../../engine/eventsEngine';
 import { StorageService, PRESET_MAPS } from '../../services/storageService';
-import { TabletopCanvas, getTraitBadgeInfo } from './TabletopCanvas';
+import { TabletopCanvas } from './TabletopCanvas';
+import { getTraitBadgeInfo } from '../../utils/traitUtils';
 import { vttDragBridge } from '../../services/dragBridge';
 import { vfxDispatcher } from '../../services/audioVfxService';
 import { FactionLogo } from '../common/FactionLogo';
@@ -27,6 +28,7 @@ import { CrpgInitiativeQueue } from './crpg-hud/CrpgInitiativeQueue';
 import { CrpgPartyColumn } from './crpg-hud/CrpgPartyColumn';
 import { CrpgActionDock } from './crpg-hud/CrpgActionDock';
 import { CrpgSkillHotbar } from './crpg-hud/CrpgSkillHotbar';
+import { CoinTossModal } from './crpg-hud/CoinTossModal';
 import { 
   gridDistance, worldDistance, moveUnit, setUnitFormation, 
   syncUnitTokens, applyDamageToTokens, isInsideDeploymentZone, 
@@ -41,11 +43,33 @@ import {
   executeAbandonShipProtocol, findValidEngagementPosition, hasFiringDeckTrait
 } from '../../engine/formationEngine';
 
+import { MatchmakingService } from '../../services/matchmakingService';
+
+export const getDeterministicCoinWinner = (seed?: string): 'player1' | 'player2' => {
+  if (!seed) return Math.random() >= 0.5 ? 'player1' : 'player2';
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    hash = ((hash << 5) - hash + seed.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash) % 2 === 0 ? 'player1' : 'player2';
+};
+
 interface BattlefieldProps {
   customRoster?: ArmyRoster | null;
   boardSkin: string;
   onReturnHome?: () => void;
   initialMapId?: string;
+  isPvP?: boolean;
+  matchId?: string;
+  playerRole?: 'player1' | 'player2';
+  opponentRoster?: ArmyRoster | null;
+  opponentCommander?: {
+    name: string;
+    faction: string;
+    rating?: number;
+    avatar?: string;
+  };
+  coinWinner?: 'player1' | 'player2';
 }
 
 const PHASES_ORDER: Phase[] = ['Deployment', 'Command', 'Movement', 'Action', 'Scoring'];
@@ -140,7 +164,14 @@ const CARD_RARITY_BADGES: Record<CardRarity, { label: string; badge: string }> =
   Legendary: { label: 'Legendary', badge: 'bg-gradient-to-r from-amber-600 to-yellow-500 text-black font-black border-amber-300 shadow-[0_0_8px_rgba(251,191,36,0.6)]' }
 };
 
-export const createInitialGameState = (customRoster?: ArmyRoster | null, initialMapId?: string): GameState => {
+const createInitialGameState = (
+  customRoster?: ArmyRoster | null, 
+  initialMapId?: string,
+  opponentRoster?: ArmyRoster | null,
+  playerRole: 'player1' | 'player2' = 'player1',
+  matchId?: string,
+  coinWinner?: 'player1' | 'player2'
+): GameState => {
   const allTemplates = StorageService.getUnitTemplates();
 
   const ensureValidLives = (u: any): Unit => {
@@ -163,9 +194,21 @@ export const createInitialGameState = (customRoster?: ArmyRoster | null, initial
     };
   };
 
+  // In PvP, when playerRole is 'player2', customRoster is Player 2's army and opponentRoster is Player 1's army.
+  // In all other cases (or when playerRole is 'player1'), customRoster is Player 1's army and opponentRoster is Player 2's army.
+  const p1Roster = playerRole === 'player2' ? opponentRoster : customRoster;
+  const p2Roster = playerRole === 'player2' ? customRoster : opponentRoster;
+
   // Player 1 Units (Reserves)
-  const baseP1 = customRoster 
-    ? customRoster.units.map(u => syncUnitTokens(ensureValidLives({ ...u, owner: 'player1' as const, position: null, formation: 'circle' as const, transportCapacity: u.type === 'Vehicle' ? (u.transportCapacity || 1) : undefined })))
+  const baseP1 = p1Roster 
+    ? p1Roster.units.map((u, i) => syncUnitTokens(ensureValidLives({
+        ...u,
+        id: u.id || `p1_unit_${i}`,
+        owner: 'player1' as const,
+        position: null,
+        formation: 'circle' as const,
+        transportCapacity: u.type === 'Vehicle' ? (u.transportCapacity || 1) : undefined
+      })))
     : allTemplates.filter(u => u.factionId === 'crimson_empire').slice(0, 5).map((u, i) => syncUnitTokens(ensureValidLives({
         ...u,
         id: `p1_unit_${i}`,
@@ -175,26 +218,37 @@ export const createInitialGameState = (customRoster?: ArmyRoster | null, initial
         transportCapacity: u.type === 'Vehicle' ? 1 : undefined
       })));
 
-  // Player 2 Units (Reserves)
-  const baseP2 = allTemplates.filter(u => u.factionId === 'daughters_astraea').slice(0, 5).map((u, i) => syncUnitTokens(ensureValidLives({
-    ...u,
-    id: `p2_unit_${i}`,
-    owner: 'player2' as const,
-    position: null,
-    formation: 'circle' as const,
-    transportCapacity: u.type === 'Vehicle' ? 1 : undefined
-  })));
+  // Player 2 Units (Reserves - Real Opponent or AI Roster)
+  const baseP2 = p2Roster && p2Roster.units && p2Roster.units.length > 0
+    ? p2Roster.units.map((u, i) => syncUnitTokens(ensureValidLives({
+        ...u,
+        id: u.id ? (u.id.startsWith('p2_') ? u.id : `p2_${u.id}`) : `p2_unit_${i}`,
+        owner: 'player2' as const,
+        position: null,
+        formation: 'circle' as const,
+        transportCapacity: u.type === 'Vehicle' ? (u.transportCapacity || 1) : undefined
+      })))
+    : allTemplates.filter(u => u.factionId === 'daughters_astraea').slice(0, 5).map((u, i) => syncUnitTokens(ensureValidLives({
+        ...u,
+        id: `p2_unit_${i}`,
+        owner: 'player2' as const,
+        position: null,
+        formation: 'circle' as const,
+        transportCapacity: u.type === 'Vehicle' ? 1 : undefined
+      })));
 
-  // Coin flip for deployment phase (alternating 1 unit per turn)
-  const deploymentCoinFlip: 'player1' | 'player2' = Math.random() >= 0.5 ? 'player1' : 'player2';
+  // Coin flip for deployment phase (deterministic from matchId in PvP, or provided coinWinner)
+  const deploymentCoinFlip: 'player1' | 'player2' = coinWinner || getDeterministicCoinWinner(matchId);
 
   // Initiative roll (Section 2)
   const p1InitRoll = Math.floor(Math.random() * 6) + 1;
   const p2InitRoll = Math.floor(Math.random() * 6) + 1;
   const initWinner: 'player1' | 'player2' = p1InitRoll >= p2InitRoll ? 'player1' : 'player2';
 
-  const p1AllCards = [...SECONDARY_MISSION_CARDS, ...FIELD_EFFECT_CARDS, ...GENERAL_CARDS, ...(FACTION_CARDS['crimson_empire'] || [])];
-  const p2AllCards = [...SECONDARY_MISSION_CARDS, ...FIELD_EFFECT_CARDS, ...GENERAL_CARDS, ...(FACTION_CARDS['daughters_astraea'] || [])];
+  const p1Faction = p1Roster?.factionId || 'crimson_empire';
+  const p2Faction = p2Roster?.factionId || 'daughters_astraea';
+  const p1AllCards = [...SECONDARY_MISSION_CARDS, ...FIELD_EFFECT_CARDS, ...GENERAL_CARDS, ...(FACTION_CARDS[p1Faction] || [])];
+  const p2AllCards = [...SECONDARY_MISSION_CARDS, ...FIELD_EFFECT_CARDS, ...GENERAL_CARDS, ...(FACTION_CARDS[p2Faction] || [])];
 
   const initialMaps = StorageService.getMaps();
   const initialMap = (initialMapId ? initialMaps.find(m => m.id === initialMapId) : null) || initialMaps[0] || PRESET_MAPS[0];
@@ -209,7 +263,7 @@ export const createInitialGameState = (customRoster?: ArmyRoster | null, initial
   })) : DEFAULT_POIS;
 
   return {
-    matchId: `match_${Date.now()}`,
+    matchId: matchId || `match_${Date.now()}`,
     round: 1,
     phase: 'Deployment',
     initiativeWinner: initWinner,
@@ -252,8 +306,22 @@ export const createInitialGameState = (customRoster?: ArmyRoster | null, initial
   };
 };
 
-export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSkin, onReturnHome, initialMapId }) => {
-  const [gameState, setGameState] = useState<GameState>(() => createInitialGameState(customRoster, initialMapId));
+export const Battlefield: React.FC<BattlefieldProps> = ({ 
+  customRoster, 
+  boardSkin, 
+  onReturnHome, 
+  initialMapId,
+  isPvP = false,
+  matchId,
+  playerRole = 'player1',
+  opponentRoster,
+  opponentCommander,
+  coinWinner
+}) => {
+  const [gameState, setGameState] = useState<GameState>(() => createInitialGameState(customRoster, initialMapId, opponentRoster, playerRole, matchId, coinWinner));
+
+  // Sector Center Coin Toss Modal State (Decides first deployer)
+  const [showCoinTossModal, setShowCoinTossModal] = useState<boolean>(() => gameState.phase === 'Deployment' && gameState.round === 1);
 
   // UI-003: Ability Cards Dock State
   const [abilitiesDockOpen, setAbilitiesDockOpen] = useState<boolean>(false);
@@ -261,7 +329,8 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
   const [usedAbilitiesThisGame, setUsedAbilitiesThisGame] = useState<Record<string, boolean>>({});
 
   const handleRestartMatch = () => {
-    setGameState(createInitialGameState(customRoster, initialMapId));
+    setGameState(createInitialGameState(customRoster, initialMapId, opponentRoster, playerRole, matchId, coinWinner));
+    setShowCoinTossModal(true);
     setSelectedUnitId(null);
     setTargetUnitId(null);
     setRecentCombatResult(null);
@@ -273,6 +342,42 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     setShowActionDock(false);
     setShowHotbar(false);
     setShowInitiativeQueue(false);
+  };
+
+  const handleCompleteCoinToss = (winner: 'player1' | 'player2') => {
+    setShowCoinTossModal(false);
+    setGameState(prev => ({
+      ...prev,
+      activePlayer: winner,
+      deployingPlayer: winner,
+      deploymentCoinFlipWinner: winner,
+      logs: [
+        {
+          id: `log_cointoss_${Date.now()}`,
+          round: prev.round,
+          phase: 'Deployment',
+          source: 'Sector Initiative',
+          message: `🪙 Coin Toss Resolved in Sector Center: ${winner === 'player1' ? 'Player 1 (West)' : 'Player 2 (East)'} won the toss and deploys first! Armies deploy 1 squad alternating per turn.`,
+          type: 'info',
+          timestamp: new Date().toLocaleTimeString()
+        },
+        ...prev.logs.slice(0, 74)
+      ]
+    }));
+
+    if (!isPvP || winner === playerRole) {
+      setArmyTrayDrawerOpen(true);
+    }
+  };
+
+  const handleRetossCoin = () => {
+    const nextWinner: 'player1' | 'player2' = (gameState.deployingPlayer === 'player1') ? 'player2' : 'player1';
+    setGameState(prev => ({
+      ...prev,
+      activePlayer: nextWinner,
+      deployingPlayer: nextWinner,
+      deploymentCoinFlipWinner: nextWinner
+    }));
   };
 
   // Reset once-per-round abilities whenever round changes
@@ -848,6 +953,10 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       return;
     }
     const currentDeployer = gameState.deployingPlayer || gameState.activePlayer;
+    if (isPvP && (unit.owner !== playerRole || currentDeployer !== playerRole)) {
+      addLog(`⛔ Waiting for opponent: It is not your turn to hold units in reserve.`, 'info');
+      return;
+    }
     if (unit.owner !== currentDeployer) {
       addLog(`It is ${currentDeployer === 'player1' ? 'Player 1' : 'Player 2'}'s turn to deploy!`, 'info');
       return;
@@ -868,6 +977,10 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     }
     if (gameState.round < 2) {
       addLog('⛔ Strategic Reserves can only arrive on the board from Round 2 onward!', 'info');
+      return;
+    }
+    if (isPvP && (unit.owner !== playerRole || gameState.activePlayer !== playerRole)) {
+      addLog(`⛔ Waiting for opponent: You can only deploy reserves on your turn.`, 'info');
       return;
     }
     if (unit.owner !== gameState.activePlayer) {
@@ -1798,7 +1911,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
   // Reset Movement to pre-move position
   const handleResetMove = (unitId: string) => {
     const unit = gameState.units.find(u => u.id === unitId);
-    if (!unit || !unit.pendingOriginalPosition) return;
+    if (!unit || !unit.pendingOriginalPosition || typeof unit.pendingOriginalPosition.x !== 'number') return;
 
     const restoredPos = unit.pendingOriginalPosition;
     const restoredTokens = (unit.pendingOriginalTokens || (unit.tokens || [])).map((t: Token) => ({
@@ -1850,8 +1963,12 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     }
   };
 
-  // Squad Formation Change Handler
+  // Squad Formation Change Handler (strictly restricted to Movement and Deployment phases)
   const handleChangeFormation = (unitId: string, formation: FormationType) => {
+    if (gameState.phase !== 'Movement' && gameState.phase !== 'Deployment') {
+      addLog(`⚠️ Formations can only be changed during the Movement phase.`, 'info');
+      return;
+    }
     setGameState(prev => ({
       ...prev,
       units: prev.units.map(u => u.id === unitId ? setUnitFormation(u, formation) : u)
@@ -1932,6 +2049,13 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     }
 
     const currentDeployer = gameState.deployingPlayer || gameState.activePlayer;
+    if (isPvP && (unit.owner !== playerRole || currentDeployer !== playerRole)) {
+      const msg = `⛔ Waiting for opponent: It is not your turn to deploy.`;
+      addLog(msg, 'info');
+      setDeploymentErrorNotice(msg);
+      setTimeout(() => setDeploymentErrorNotice(null), 3500);
+      return;
+    }
     if (unit.owner !== currentDeployer) {
       const msg = `⚠️ It is ${currentDeployer === 'player1' ? 'Player 1' : 'Player 2 (Bot)'}'s turn to deploy!`;
       addLog(msg, 'info');
@@ -2078,8 +2202,10 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     }
 
     const currentDeployer = gameState.deployingPlayer || gameState.activePlayer;
-    if (unit.owner !== currentDeployer) {
-      const msg = `⚠️ It is ${currentDeployer === 'player1' ? 'Player 1' : 'Player 2 (Bot)'}'s turn to deploy!`;
+    if (unit.owner !== currentDeployer || (isPvP && (unit.owner !== playerRole || currentDeployer !== playerRole))) {
+      const msg = isPvP
+        ? `⚠️ It is your opponent's turn to deploy! Waiting for ${currentDeployer === 'player1' ? 'Player 1' : 'Player 2'}.`
+        : `⚠️ It is ${currentDeployer === 'player1' ? 'Player 1' : 'Player 2 (Bot)'}'s turn to deploy!`;
       addLog(msg, 'info');
       setDeploymentErrorNotice(msg);
       setTimeout(() => setDeploymentErrorNotice(null), 3500);
@@ -2147,6 +2273,12 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     const unit = gameState.units.find(u => u.id === unitId);
     if (!unit) return;
 
+    const currentDeployer = gameState.deployingPlayer || gameState.activePlayer;
+    if (isPvP && (unit.owner !== playerRole || currentDeployer !== playerRole)) {
+      addLog(`⚠️ You can only confirm deployment on your own deployment turn.`, 'info');
+      return;
+    }
+
     // Validate Coherency before confirming placement (BUG-013)
     const coherencyDistInches = gameState.currentMap?.coherencyDistanceInches || 2;
     const coherencyDistPx = coherencyDistInches * 50;
@@ -2204,7 +2336,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     const updatedUnits = gameState.units.map(u => u.id === unitId ? {
       ...u,
       position: null,
-      tokens: [],
+      tokens: (u.tokens || []).map(t => ({ ...t, x: 0, y: 0, turnStartPos: undefined })),
       isPendingDeploymentConfirm: false
     } : u);
 
@@ -2213,6 +2345,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       units: updatedUnits
     }));
     setSelectedUnitId(null);
+    setArmyTrayDrawerOpen(true);
     addLog(`↩️ Deployment Cancelled: ${unit.name} returned to Army Tray.`, 'info');
   };
 
@@ -2549,7 +2682,20 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
   // Combat Execution
   // Combat Execution: Combined Shooting (Squad + Attached Leaders)
   const handleExecuteShooting = (_specificShooter?: Unit) => {
-    if (!selectedUnit || !targetUnit || !targetUnit.position) return;
+    if (!selectedUnit) return;
+    if (gameState.phase !== 'Action') {
+      addLog(`⚠️ Shooting is only permitted during the Action Phase! Advance from Movement to Action Phase first.`, 'info');
+      return;
+    }
+    if (isPvP && (selectedUnit.owner !== playerRole || gameState.activePlayer !== playerRole)) {
+      addLog(`⚠️ It is not your turn to shoot!`, 'info');
+      return;
+    }
+    if (!targetUnit || !targetUnit.position) {
+      setActiveTool('target');
+      addLog(`🎯 Target Required: Click an enemy unit on the battlefield to target them with ${selectedUnit.name}.`, 'info');
+      return;
+    }
 
     // Identify host squad and all attached leaders
     const isAttachedLeader = !!selectedUnit.attachedTo;
@@ -2692,7 +2838,20 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
   };
 
   const handleExecuteEngagement = () => {
-    if (!selectedUnit || !targetUnit || !targetUnit.position) return;
+    if (!selectedUnit) return;
+    if (gameState.phase !== 'Action') {
+      addLog(`⚠️ Charge & Engagement is only permitted during the Action Phase! Advance from Movement to Action Phase first.`, 'info');
+      return;
+    }
+    if (isPvP && (selectedUnit.owner !== playerRole || gameState.activePlayer !== playerRole)) {
+      addLog(`⚠️ It is not your turn to engage!`, 'info');
+      return;
+    }
+    if (!targetUnit || !targetUnit.position) {
+      setActiveTool('target');
+      addLog(`🎯 Target Required: Click an enemy unit on the battlefield to target them for Charge/Engagement.`, 'info');
+      return;
+    }
 
     // Identify host squad and all attached leaders
     const isAttachedLeader = !!selectedUnit.attachedTo;
@@ -2836,7 +2995,21 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
   // Combat Execution: Combined Melee Fight (Squad + Attached Leaders)
   const handleExecuteFight = () => {
-    if (!selectedUnit || !targetUnit || !selectedUnit.position || !targetUnit.position) return;
+    if (!selectedUnit) return;
+    if (gameState.phase !== 'Action') {
+      addLog(`⚠️ Melee Combat is only permitted during the Action Phase! Advance from Movement to Action Phase first.`, 'info');
+      return;
+    }
+    if (isPvP && (selectedUnit.owner !== playerRole || gameState.activePlayer !== playerRole)) {
+      addLog(`⚠️ It is not your turn to fight!`, 'info');
+      return;
+    }
+    if (!targetUnit || !targetUnit.position) {
+      setActiveTool('target');
+      addLog(`🎯 Target Required: Click an enemy unit on the battlefield to target them for Melee Combat.`, 'info');
+      return;
+    }
+    if (!selectedUnit.position) return;
 
     // Identify host squad and all attached leaders
     const isAttachedLeader = !!selectedUnit.attachedTo;
@@ -2937,6 +3110,14 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
   const handleExecuteMissionAction = () => {
     if (!selectedUnit) return;
+    if (gameState.phase !== 'Action') {
+      addLog(`⛔ Mission Actions can only be performed during the Action Phase.`, 'info');
+      return;
+    }
+    if (isPvP && (selectedUnit.owner !== playerRole || gameState.activePlayer !== playerRole)) {
+      addLog(`⛔ You can only command your own units during your turn.`, 'info');
+      return;
+    }
     const currentActions = selectedUnit.actionsRemaining ?? 2;
     if (gameState.phase === 'Action' && currentActions <= 0) {
       addLog(`⛔ Cannot perform Mission Action: ${selectedUnit.name} has no actions remaining!`, 'info');
@@ -3317,8 +3498,16 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
   const BATTLE_PHASES: Phase[] = ['Command', 'Movement', 'Action'];
 
   const executeAdvancePhase = () => {
+    const currentActiveTurn = gameState.phase === 'Deployment' 
+      ? (gameState.deployingPlayer || gameState.activePlayer) 
+      : gameState.activePlayer;
+    if (isPvP && currentActiveTurn !== playerRole) return;
+
     setSelectedUnitId(null);
     setTargetUnitId(null);
+    if (activeTool === 'move') {
+      setActiveTool('select');
+    }
 
     setGameState(prev => {
       // 1. Deployment Phase
@@ -3696,6 +3885,18 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
   // Advance Phase with Leader Attachment Warning Guard
   const handleAdvancePhase = () => {
+    const currentActiveTurn = gameState.phase === 'Deployment' 
+      ? (gameState.deployingPlayer || gameState.activePlayer) 
+      : gameState.activePlayer;
+    if (isPvP && currentActiveTurn !== playerRole) {
+      addLog(`⛔ Waiting for opponent: It is not your turn to pass or advance.`, 'info');
+      return;
+    }
+
+    if (activeTool === 'move') {
+      setActiveTool('select');
+    }
+
     if (gameState.phase === 'Deployment') {
       const currentDeployer = gameState.deployingPlayer || gameState.activePlayer;
       const pendingDeploymentUnit = gameState.units.find(u => u.owner === currentDeployer && u.isPendingDeploymentConfirm);
@@ -3726,7 +3927,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     const currentDeployer = gameState.phase === 'Deployment' 
       ? (gameState.deployingPlayer || gameState.activePlayer) 
       : gameState.activePlayer;
-    if (currentDeployer !== 'player2' || gameState.isGameOver) return;
+    if (isPvP || currentDeployer !== 'player2' || gameState.isGameOver) return;
     const p2Units = gameState.units.filter(u => u.owner === 'player2' && u.stats.lives > 0);
     const p1Units = gameState.units.filter(u => u.owner === 'player1' && u.stats.lives > 0);
 
@@ -4180,15 +4381,70 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
     handleAdvancePhase();
   };
 
+  // Realtime synchronization between Player 1 and Player 2 in PvP matches
+  const lastSyncTimeRef = useRef<number>(0);
+  const isApplyingRemoteSyncRef = useRef<boolean>(false);
+
+  // 1. Broadcast local state when player takes an action in PvP
+  useEffect(() => {
+    if (!isPvP || !matchId || isApplyingRemoteSyncRef.current) return;
+    
+    MatchmakingService.sendBattleAction(matchId, {
+      type: 'SYNC_GAME_STATE',
+      sender: playerRole,
+      gameState
+    });
+  }, [
+    gameState.phase,
+    gameState.round,
+    gameState.activePlayer,
+    gameState.deployingPlayer,
+    gameState.units,
+    gameState.player1Score,
+    gameState.player2Score,
+    gameState.player1CP,
+    gameState.player2CP,
+    isPvP,
+    matchId,
+    playerRole
+  ]);
+
+  // 2. Poll remote actions from opponent in PvP
+  useEffect(() => {
+    if (!isPvP || !matchId) return;
+
+    const syncInterval = setInterval(async () => {
+      try {
+        const actions = await MatchmakingService.getBattleActions(matchId, lastSyncTimeRef.current);
+        if (actions && actions.length > 0) {
+          for (const act of actions) {
+            if (act.timestamp > lastSyncTimeRef.current) {
+              lastSyncTimeRef.current = act.timestamp;
+            }
+            if (act.sender !== playerRole && act.type === 'SYNC_GAME_STATE' && act.gameState) {
+              isApplyingRemoteSyncRef.current = true;
+              setGameState(act.gameState);
+              setTimeout(() => {
+                isApplyingRemoteSyncRef.current = false;
+              }, 100);
+            }
+          }
+        }
+      } catch {}
+    }, 700);
+
+    return () => clearInterval(syncInterval);
+  }, [isPvP, matchId, playerRole]);
+
   // BUG-026: Automated Bot Turn Controller for Player 2 (Single-Player VS Opponent Bot)
   useEffect(() => {
-    if (gameState.isGameOver) return;
+    if (gameState.isGameOver || isPvP) return;
 
     const currentTurnDeployer = gameState.phase === 'Deployment'
       ? (gameState.deployingPlayer || gameState.activePlayer)
       : gameState.activePlayer;
 
-    if (currentTurnDeployer === 'player2') {
+    if (!isPvP && currentTurnDeployer === 'player2') {
       setIsBotDeploying(true);
       const timer = setTimeout(() => {
         handleExecuteBotAction();
@@ -4298,8 +4554,13 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
           handleConfirmMove(selectedUnit.id);
         } else if (selectedUnit?.isPendingDisembarkConfirm) {
           handleConfirmDisembark(selectedUnit.id);
-        } else if (selectedUnit && selectedUnit.owner === gameState.activePlayer) {
-          setActiveTool('move');
+        } else {
+          const isOwner = isPvP
+            ? (selectedUnit?.owner === playerRole && gameState.activePlayer === playerRole)
+            : (selectedUnit?.owner === gameState.activePlayer);
+          if (selectedUnit && isOwner && gameState.phase === 'Movement' && !selectedUnit.hasMoved && !selectedUnit.embarkedIn) {
+            setActiveTool('move');
+          }
         }
       } else if (e.key === '2') {
         if (selectedUnit && selectedUnit.owner === gameState.activePlayer) {
@@ -4322,7 +4583,10 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
           handleExecuteMissionAction();
         }
       } else if (e.key === '6') {
-        if (selectedUnit && selectedUnit.owner === gameState.activePlayer) {
+        const isOwner = isPvP
+          ? (selectedUnit?.owner === playerRole && gameState.activePlayer === playerRole)
+          : (selectedUnit?.owner === gameState.activePlayer);
+        if (selectedUnit && isOwner && (gameState.phase === 'Movement' || gameState.phase === 'Deployment') && !selectedUnit.embarkedIn) {
           const formations: FormationType[] = ['circle', 'line', 'grid', 'stack', 'auto'];
           const currentIdx = formations.indexOf(selectedUnit.formation || 'circle');
           const nextFormation = formations[(currentIdx + 1) % formations.length];
@@ -4367,7 +4631,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
         setShowActionDock(prev => !prev);
       } else if (e.key === ' ') {
         e.preventDefault();
-        if (gameState.activePlayer === 'player2') {
+        if (!isPvP && gameState.activePlayer === 'player2') {
           handleExecuteBotAction();
         } else {
           handleAdvancePhase();
@@ -4403,6 +4667,8 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
               targetUnitId={targetUnitId}
               activePhase={gameState.phase}
               activePlayer={gameState.phase === 'Deployment' ? (gameState.deployingPlayer || gameState.activePlayer) : gameState.activePlayer}
+              isPvP={isPvP}
+              playerRole={playerRole}
               onSelectUnit={id => {
                 setSelectedUnitId(id);
                 if (id) setTargetUnitId(null);
@@ -4426,7 +4692,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
           <CrpgInitiativeQueue
             units={gameState.units}
             selectedUnitId={selectedUnitId}
-            activePlayer={gameState.activePlayer}
+            activePlayer={gameState.phase === 'Deployment' ? (gameState.deployingPlayer || gameState.activePlayer) : gameState.activePlayer}
             round={gameState.round}
             phase={gameState.phase}
             player1Score={gameState.player1Score}
@@ -4443,7 +4709,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
 
           {/* 2. Top Left: Party / Forces Portrait Column */}
           <CrpgPartyColumn
-            playerUnits={gameState.units.filter(u => u.owner === 'player1')}
+            playerUnits={gameState.units.filter(u => u.owner === (isPvP && playerRole ? playerRole : 'player1'))}
             selectedUnitId={selectedUnitId}
             isOpen={showPartyColumn}
             onToggle={() => setShowPartyColumn(prev => !prev)}
@@ -4518,12 +4784,15 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
             <CrpgActionDock
               selectedUnit={selectedUnit}
               activePlayer={gameState.activePlayer}
+              deployingPlayer={gameState.deployingPlayer}
               phase={gameState.phase}
               round={gameState.round}
               isOpen={showActionDock}
               onToggle={() => setShowActionDock(prev => !prev)}
               onAdvancePhase={handleAdvancePhase}
               onExecuteBotAction={handleExecuteBotAction}
+              isPvP={isPvP}
+              playerRole={playerRole}
             />
           </div>
 
@@ -5052,6 +5321,8 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
           targetUnit={targetUnit}
           phase={gameState.phase}
           activePlayer={gameState.activePlayer}
+          isPvP={isPvP}
+          playerRole={playerRole}
           canShootEmbarked={(() => {
             if (!selectedUnit?.embarkedIn) return false;
             const carrier = gameState.units.find(u => u.id === selectedUnit.embarkedIn);
@@ -5143,12 +5414,15 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
       {armyTrayDrawerOpen && (() => {
         const isDeployment = gameState.phase === 'Deployment';
         const currentDeployer = gameState.deployingPlayer || gameState.activePlayer;
-        const isP1 = currentDeployer === 'player1';
-        const totalDeployerUnits = gameState.units.filter(u => u.owner === currentDeployer).length;
+        const myRole = isPvP && playerRole ? playerRole : (currentDeployer || 'player1');
+        const isMyDeployTurn = !isPvP || currentDeployer === myRole;
+        const deployerRole = isPvP ? myRole : currentDeployer;
+        const isP1 = deployerRole === 'player1';
+        const totalDeployerUnits = gameState.units.filter(u => u.owner === deployerRole).length;
         const p1Remaining = gameState.units.filter(u => u.owner === 'player1' && !u.position && !u.inStrategicReserve && !u.embarkedIn && !u.attachedTo && u.stats.lives > 0).length;
         const p2Remaining = gameState.units.filter(u => u.owner === 'player2' && !u.position && !u.inStrategicReserve && !u.embarkedIn && !u.attachedTo && u.stats.lives > 0).length;
-        const trayUnits = gameState.units.filter(u => !u.position && !u.inStrategicReserve && !u.embarkedIn && !u.attachedTo && u.stats.lives > 0 && u.owner === currentDeployer);
-        const playerUnits = gameState.units.filter(u => u.owner === 'player1');
+        const trayUnits = gameState.units.filter(u => !u.position && !u.inStrategicReserve && !u.embarkedIn && !u.attachedTo && u.stats.lives > 0 && u.owner === deployerRole);
+        const playerUnits = gameState.units.filter(u => u.owner === myRole);
         const livingPlayerUnits = playerUnits.filter(u => u.stats.lives > 0);
 
         return (
@@ -5176,7 +5450,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
               {!isDeployment && (
                 <div className="space-y-3">
                   <div className="flex items-center justify-between text-xs font-mono text-zinc-400 border-b border-zinc-800 pb-2">
-                    <span>Player 1 Force • {playerUnits.length} Squads</span>
+                    <span>{myRole === 'player1' ? 'Player 1 Force' : 'Player 2 Force'} • {playerUnits.length} Squads</span>
                     <button
                       onClick={() => setShowArmySelectionModal(true)}
                       className="text-[10px] text-amber-400 hover:text-amber-300 underline cursor-pointer"
@@ -5280,28 +5554,66 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
               {isDeployment && (
                 <>
               {/* Deployer & Rules Callout Banner */}
-              <div className={`p-3 rounded-xl border space-y-1.5 ${
-                isP1 ? 'bg-rose-950/20 border-rose-800/40 text-rose-300' : 'bg-sky-950/20 border-sky-800/40 text-sky-300'
-              }`}>
-                <div className="flex items-center justify-between text-xs font-bold font-mono">
-                  <div className="flex items-center space-x-1.5">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                    <span>TURN: {isP1 ? 'PLAYER 1 (WEST)' : 'PLAYER 2 (EAST)'}</span>
+              {isPvP && !isMyDeployTurn ? (
+                <div className="p-3 rounded-xl border space-y-1.5 bg-zinc-900/80 border-amber-500/50 text-zinc-300 shadow-md">
+                  <div className="flex items-center space-x-2 text-xs font-bold font-mono">
+                    <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
+                    <span className="text-amber-300">⏳ OPPONENT'S TURN: WAITING FOR {currentDeployer === 'player1' ? 'PLAYER 1 (WEST)' : 'PLAYER 2 (EAST)'}</span>
                   </div>
-                  <span className="text-[10px] text-zinc-400">
-                    Zone: {isP1 ? 'x ≤ 200px' : 'x ≥ 1000px'}
-                  </span>
+                  <p className="text-[10px] text-zinc-400 leading-relaxed">
+                    Deployment alternates 1 unit per turn. Your tray will unlock as soon as your opponent finishes deploying their unit.
+                  </p>
+                  <div className="flex items-center justify-between text-[10px] font-mono text-zinc-400 pt-0.5 border-t border-zinc-800/60">
+                    <div className="flex items-center space-x-2">
+                      <span>Remaining:</span>
+                      <span className="text-rose-400 font-bold">P1: {p1Remaining}</span>
+                      <span>|</span>
+                      <span className="text-sky-400 font-bold">P2: {p2Remaining}</span>
+                    </div>
+                    <button
+                      onClick={() => setShowCoinTossModal(true)}
+                      className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-amber-300 font-mono text-[9px] border border-zinc-650 flex items-center space-x-1 cursor-pointer"
+                      title="View or re-flip coin in map center"
+                    >
+                      <Coins className="w-3 h-3 text-amber-400" />
+                      <span>Coin Toss</span>
+                    </button>
+                  </div>
                 </div>
-                <div className="flex items-center space-x-3 text-[10px] font-mono text-zinc-400 pt-0.5 border-t border-zinc-800/60">
-                  <span>Tray:</span>
-                  <span className="text-rose-400 font-bold">P1: {p1Remaining} left</span>
-                  <span>|</span>
-                  <span className="text-sky-400 font-bold">P2: {p2Remaining} left</span>
+              ) : (
+                <div className={`p-3 rounded-xl border space-y-1.5 ${
+                  isP1 ? 'bg-rose-950/20 border-rose-800/40 text-rose-300' : 'bg-sky-950/20 border-sky-800/40 text-sky-300'
+                }`}>
+                  <div className="flex items-center justify-between text-xs font-bold font-mono">
+                    <div className="flex items-center space-x-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                      <span>TURN: {isP1 ? 'PLAYER 1 (WEST)' : 'PLAYER 2 (EAST)'}</span>
+                    </div>
+                    <span className="text-[10px] text-zinc-400">
+                      Zone: {isP1 ? 'x ≤ 200px' : 'x ≥ 1000px'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-[10px] font-mono text-zinc-400 pt-0.5 border-t border-zinc-800/60">
+                    <div className="flex items-center space-x-2">
+                      <span>Tray:</span>
+                      <span className="text-rose-400 font-bold">P1: {p1Remaining} left</span>
+                      <span>|</span>
+                      <span className="text-sky-400 font-bold">P2: {p2Remaining} left</span>
+                    </div>
+                    <button
+                      onClick={() => setShowCoinTossModal(true)}
+                      className="px-2 py-0.5 rounded bg-zinc-850 hover:bg-zinc-700 text-amber-300 font-mono text-[9px] border border-amber-600/40 flex items-center space-x-1 cursor-pointer"
+                      title="View or re-flip coin in map center"
+                    >
+                      <Coins className="w-3 h-3 text-amber-400" />
+                      <span>Coin Toss</span>
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-zinc-400 leading-relaxed pt-1">
+                    ✋ <strong className="text-white">Drag card onto canvas</strong> to deploy your squad. Drop outside deployment zone snaps back. Drag Leader onto Infantry to attach, or Infantry onto Vehicle to embark.
+                  </p>
                 </div>
-                <p className="text-[10px] text-zinc-400 leading-relaxed pt-1">
-                  ✋ <strong className="text-white">Drag card onto canvas</strong> to deploy your squad. Drop outside deployment zone snaps back. Drag Leader onto Infantry to attach, or Infantry onto Vehicle to embark.
-                </p>
-              </div>
+              )}
 
               {/* Units List */}
               {totalDeployerUnits === 0 ? (
@@ -5342,8 +5654,12 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                     return (
                       <div
                         key={u.id}
-                        draggable={true}
+                        draggable={isMyDeployTurn}
                         onDragStart={(e) => {
+                          if (!isMyDeployTurn) {
+                            e.preventDefault();
+                            return;
+                          }
                           e.dataTransfer.setData('text/plain', u.id);
                           e.dataTransfer.setData('application/json', JSON.stringify({ type: 'tray-unit', unitId: u.id, name: u.name }));
                           e.dataTransfer.effectAllowed = 'copyMove';
@@ -5355,10 +5671,12 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                           setDraggedUnitId(null);
                         }}
                         onDragOver={(e) => {
+                          if (!isMyDeployTurn) return;
                           e.preventDefault();
                           e.dataTransfer.dropEffect = 'copy';
                         }}
                         onDrop={(e) => {
+                          if (!isMyDeployTurn) return;
                           e.preventDefault();
                           e.stopPropagation();
                           try {
@@ -5386,10 +5704,12 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                             console.error('Tray drop error:', err);
                           }
                         }}
-                        className={`p-3 bg-zinc-950 rounded-xl border transition cursor-grab active:cursor-grabbing select-none relative group space-y-2.5 shadow-md ${
-                          draggedUnitId === u.id 
-                            ? 'opacity-40 border-amber-400 ring-2 ring-amber-400' 
-                            : 'border-zinc-800 hover:border-amber-500/70 hover:shadow-amber-500/5'
+                        className={`p-3 bg-zinc-950 rounded-xl border transition select-none relative group space-y-2.5 shadow-md ${
+                          !isMyDeployTurn
+                            ? 'opacity-60 border-zinc-850 cursor-not-allowed'
+                            : draggedUnitId === u.id 
+                            ? 'opacity-40 border-amber-400 ring-2 ring-amber-400 cursor-grabbing' 
+                            : 'border-zinc-800 hover:border-amber-500/70 hover:shadow-amber-500/5 cursor-grab active:cursor-grabbing'
                         }`}
                       >
                         {/* Drag Indicator Bar */}
@@ -5418,9 +5738,13 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                             </div>
                           </div>
 
-                          <div className="flex items-center space-x-1 text-zinc-500 group-hover:text-amber-400 transition" title="Drag onto map to deploy">
+                          <div className={`flex items-center space-x-1 transition ${
+                            isMyDeployTurn ? 'text-zinc-500 group-hover:text-amber-400' : 'text-zinc-600'
+                          }`} title={isMyDeployTurn ? "Drag onto map to deploy" : "Waiting for opponent's turn to deploy"}>
                             <Move className="w-3.5 h-3.5" />
-                            <span className="text-[9px] font-mono uppercase font-bold tracking-wider">Drag</span>
+                            <span className="text-[9px] font-mono uppercase font-bold tracking-wider">
+                              {isMyDeployTurn ? 'Drag' : 'Locked'}
+                            </span>
                           </div>
                         </div>
 
@@ -5513,25 +5837,47 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                         {/* Action Buttons Row */}
                         <div className="flex items-center space-x-1.5 pt-0.5">
                           <button
-                            onClick={() => handleDeployReserveUnit(u.id)}
-                            className="flex-1 py-1 bg-amber-500 hover:bg-amber-400 text-black font-bold font-mono rounded text-[10px] transition flex items-center justify-center space-x-1 shadow"
-                            title="Deploy unit to active player's flank"
+                            onClick={() => {
+                              if (!isMyDeployTurn) {
+                                addLog(`⛔ Waiting for opponent's deployment turn.`, 'info');
+                                return;
+                              }
+                              handleDeployReserveUnit(u.id);
+                            }}
+                            disabled={!isMyDeployTurn}
+                            className={`flex-1 py-1 font-bold font-mono rounded text-[10px] transition flex items-center justify-center space-x-1 shadow ${
+                              isMyDeployTurn
+                                ? 'bg-amber-500 hover:bg-amber-400 text-black cursor-pointer'
+                                : 'bg-zinc-800 text-zinc-500 cursor-not-allowed opacity-60'
+                            }`}
+                            title={isMyDeployTurn ? "Deploy unit to active player's flank" : "Waiting for opponent's turn to deploy"}
                           >
                             <ArrowRight className="w-3 h-3" />
                             <span>Deploy Flank</span>
                           </button>
 
                           <button
-                            onClick={() => handleHoldInStrategicReserve(u.id)}
-                            className="px-2 py-1 bg-zinc-900 hover:bg-zinc-800 text-amber-300 border border-amber-600/40 rounded text-[10px] font-mono transition flex items-center space-x-1"
-                            title="Hold back in Strategic Reserves (Deployable Round 2+ Movement Phase)"
+                            onClick={() => {
+                              if (!isMyDeployTurn) {
+                                addLog(`⛔ Waiting for opponent's deployment turn.`, 'info');
+                                return;
+                              }
+                              handleHoldInStrategicReserve(u.id);
+                            }}
+                            disabled={!isMyDeployTurn}
+                            className={`px-2 py-1 border rounded text-[10px] font-mono transition flex items-center space-x-1 ${
+                              isMyDeployTurn
+                                ? 'bg-zinc-900 hover:bg-zinc-800 text-amber-300 border-amber-600/40 cursor-pointer'
+                                : 'bg-zinc-800 border-zinc-750 text-zinc-500 cursor-not-allowed opacity-60'
+                            }`}
+                            title={isMyDeployTurn ? "Hold back in Strategic Reserves (Deployable Round 2+ Movement Phase)" : "Waiting for opponent's turn"}
                           >
                             <Box className="w-3 h-3" />
                             <span>Reserve</span>
                           </button>
 
                           {isLeader && !u.attachedTo && (() => {
-                            const canAttach = gameState.phase === 'Deployment' || gameState.phase === 'Command';
+                            const canAttach = isMyDeployTurn && (gameState.phase === 'Deployment' || gameState.phase === 'Command');
                             return (
                               <button
                                 onClick={() => {
@@ -5543,7 +5889,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                                     ? 'bg-purple-900/80 hover:bg-purple-800 text-purple-200 border-purple-600/50 cursor-pointer'
                                     : 'bg-zinc-800/80 border-zinc-700 text-zinc-500 cursor-not-allowed opacity-60'
                                 }`}
-                                title={canAttach ? 'Attach Leader to an Infantry bodyguard squad' : 'Attach Leader only permitted during Deployment or Command Phase'}
+                                title={canAttach ? 'Attach Leader to an Infantry bodyguard squad' : isMyDeployTurn ? 'Attach Leader only permitted during Deployment or Command Phase' : "Waiting for opponent's turn"}
                               >
                                 <UserPlus className="w-3 h-3" />
                                 <span>Attach</span>
@@ -5555,7 +5901,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                             const isFightReembark = (gameState.phase === 'Fight' || gameState.phase === 'Action') && u.lastDisembarkRound === gameState.round && u.lastDisembarkPhase !== gameState.phase;
                             const hasEmbarkedThisPhase = u.lastEmbarkPhase === gameState.phase && u.lastEmbarkRound === gameState.round;
                             const hasDisembarkedThisPhase = u.lastDisembarkPhase === gameState.phase && u.lastDisembarkRound === gameState.round;
-                            const canEmbark = (gameState.phase === 'Deployment' || gameState.phase === 'Movement' || isFightReembark) && !hasEmbarkedThisPhase && !hasDisembarkedThisPhase;
+                            const canEmbark = isMyDeployTurn && (gameState.phase === 'Deployment' || gameState.phase === 'Movement' || isFightReembark) && !hasEmbarkedThisPhase && !hasDisembarkedThisPhase;
                             return (
                               <button
                                 onClick={() => {
@@ -5570,7 +5916,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
                                 title={
                                   hasEmbarkedThisPhase ? 'Cannot embark multiple times in the same phase' :
                                   hasDisembarkedThisPhase ? 'Cannot embark and disembark in the same phase' :
-                                  canEmbark ? 'Embark inside a friendly transport vehicle' : 'Embark only permitted during Deployment, Movement, or Fight re-embark'
+                                  canEmbark ? 'Embark inside a friendly transport vehicle' : isMyDeployTurn ? 'Embark only permitted during Deployment, Movement, or Fight re-embark' : "Waiting for opponent's turn"
                                 }
                               >
                                 <Truck className="w-3 h-3" />
@@ -6071,7 +6417,7 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
             ) : (
               <div className="space-y-3">
                 {gameState.units.filter(u => u.inStrategicReserve).map(u => {
-                  const isOwnerTurn = gameState.activePlayer === u.owner;
+                  const isOwnerTurn = isPvP ? (gameState.activePlayer === playerRole && u.owner === playerRole) : (gameState.activePlayer === u.owner);
                   const isRound2Plus = gameState.round >= 2;
                   const isMovementPhase = gameState.phase === 'Movement';
                   const canDeploy = isOwnerTurn && isRound2Plus && isMovementPhase;
@@ -7115,6 +7461,18 @@ export const Battlefield: React.FC<BattlefieldProps> = ({ customRoster, boardSki
           </div>
         );
       })()}
+
+      {/* Coin Toss Modal in Center of Battlefield Map */}
+      <CoinTossModal
+        isOpen={showCoinTossModal && gameState.phase === 'Deployment' && gameState.round === 1}
+        winner={gameState.deployingPlayer || gameState.activePlayer || 'player1'}
+        playerRole={playerRole}
+        isPvP={isPvP}
+        player1Name={playerRole === 'player1' ? (customRoster?.name || 'Player 1') : (opponentCommander?.name || opponentRoster?.name || 'Player 1')}
+        player2Name={playerRole === 'player2' ? (customRoster?.name || 'Player 2') : (opponentCommander?.name || opponentRoster?.name || 'Player 2')}
+        onComplete={handleCompleteCoinToss}
+        onRetoss={handleRetossCoin}
+      />
     </div>
   );
 };

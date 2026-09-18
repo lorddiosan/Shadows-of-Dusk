@@ -60,6 +60,8 @@ interface CrpgSkillHotbarProps {
 
   // Firing deck / embark status
   canShootEmbarked?: boolean;
+  isPvP?: boolean;
+  playerRole?: 'player1' | 'player2';
 }
 
 export const CrpgSkillHotbar: React.FC<CrpgSkillHotbarProps> = ({
@@ -102,18 +104,22 @@ export const CrpgSkillHotbar: React.FC<CrpgSkillHotbarProps> = ({
   readyAbilitiesCount,
   onToggleHotbar,
   canShootEmbarked,
+  isPvP = false,
+  playerRole = 'player1',
 }) => {
   const [isLocked, setIsLocked] = React.useState(true);
 
-  const isOwner = selectedUnit?.owner === activePlayer;
+  const isOwner = isPvP
+    ? (selectedUnit?.owner === playerRole && activePlayer === playerRole)
+    : (selectedUnit?.owner === activePlayer);
   const remActions = selectedUnit?.actionsRemaining ?? 2;
   const hasActions = remActions > 0;
   const isEmbarked = !!selectedUnit?.embarkedIn;
 
-  // Formation cycler
+  // Formation cycler (strictly restricted to Movement and Deployment phases)
   const formations: FormationType[] = ['circle', 'line', 'grid', 'stack', 'auto'];
   const handleCycleFormation = () => {
-    if (!selectedUnit || !onChangeFormation) return;
+    if (!selectedUnit || !onChangeFormation || (phase !== 'Movement' && phase !== 'Deployment')) return;
     const currentIdx = formations.indexOf(selectedUnit.formation || 'circle');
     const nextFormation = formations[(currentIdx + 1) % formations.length];
     onChangeFormation(nextFormation);
@@ -255,7 +261,7 @@ export const CrpgSkillHotbar: React.FC<CrpgSkillHotbarProps> = ({
               {onCancelDeployment && (
                 <button
                   onClick={onCancelDeployment}
-                  title="Return to Tray"
+                  title="Cancel Deployment (Return to Army Tray)"
                   className="w-7 h-10 sm:w-8 sm:h-11 rounded-lg bg-zinc-800 hover:bg-zinc-700 border border-zinc-600 text-amber-400 flex items-center justify-center shadow cursor-pointer"
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
@@ -304,15 +310,19 @@ export const CrpgSkillHotbar: React.FC<CrpgSkillHotbarProps> = ({
             </div>
           ) : (
             <button
-              disabled={!selectedUnit || !isOwner || isEmbarked}
+              disabled={!selectedUnit || !isOwner || isEmbarked || phase !== 'Movement' || !!selectedUnit?.hasMoved}
               onClick={() => onSelectTool('move')}
               title={
-                isEmbarked
+                phase !== 'Movement'
+                  ? 'Cannot Move - Movement is only permitted during Movement phase'
+                  : selectedUnit?.hasMoved
+                  ? 'Cannot Move - Unit has already moved this turn'
+                  : isEmbarked
                   ? 'Cannot Move - Unit is Embarked inside Transport'
                   : `Move (Key 1) - Mv: ${selectedUnit?.stats.mv || 5} sq`
               }
               className={`w-10 h-10 sm:w-11 sm:h-11 rounded-lg border flex flex-col items-center justify-center transition-all ${
-                selectedUnit && isOwner && !isEmbarked
+                selectedUnit && isOwner && !isEmbarked && phase === 'Movement' && !selectedUnit.hasMoved
                   ? 'bg-gradient-to-b from-[#1b253b] to-[#0f1624] border-sky-500/70 hover:border-sky-400 text-sky-200 cursor-pointer shadow hover:scale-105'
                   : 'bg-[#0f1118] border-zinc-800 text-zinc-600 cursor-not-allowed opacity-50'
               }`}
@@ -329,8 +339,11 @@ export const CrpgSkillHotbar: React.FC<CrpgSkillHotbarProps> = ({
         {/* Slot 2: Shoot */}
         <div className="relative group">
           {(() => {
-            const canShoot = selectedUnit && isOwner && hasActions && (selectedUnit.stats.range > 0) && (!isEmbarked || !!canShootEmbarked);
-            const shootTitle = isEmbarked
+            const isActionPhase = phase === 'Action';
+            const canShoot = selectedUnit && isOwner && hasActions && isActionPhase && (selectedUnit.stats.range > 0) && (!isEmbarked || !!canShootEmbarked);
+            const shootTitle = !isActionPhase
+              ? 'Shoot (Key 2) - Only available during Action Phase'
+              : isEmbarked
               ? (canShootEmbarked
                   ? `🔫 Firing Deck Shoot (Key 2) - Range: ${selectedUnit?.stats.range} sq from Transport`
                   : 'Shoot (Key 2) - Embarked (Transport lacks Firing Deck)')
@@ -366,82 +379,108 @@ export const CrpgSkillHotbar: React.FC<CrpgSkillHotbarProps> = ({
 
         {/* Slot 3: Charge / Engage */}
         <div className="relative group">
-          <button
-            disabled={!selectedUnit || !isOwner || !hasActions || isEmbarked}
-            onClick={phase === 'Action' ? onExecuteEngagement : onExecuteCharge}
-            title={
-              isEmbarked
-                ? 'Cannot Engage - Unit is Embarked inside Transport'
-                : 'Charge / Engage (Key 3) - Costs 1 Action'
-            }
-            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-lg border flex flex-col items-center justify-center transition-all ${
-              selectedUnit && isOwner && hasActions && !isEmbarked
-                ? 'bg-gradient-to-b from-[#332211] to-[#1c1208] border-amber-500/80 hover:border-amber-400 text-amber-200 cursor-pointer shadow hover:scale-105'
-                : 'bg-[#0f1118] border-zinc-800 text-zinc-600 cursor-not-allowed opacity-50'
-            }`}
-          >
-            <Flame className="w-4 h-4 text-amber-400" />
-            <span className="text-[7px] font-mono uppercase font-bold text-amber-300 leading-none">Engage</span>
-            <span className="absolute bottom-0.5 right-1 text-[8px] font-mono font-black text-zinc-400">3</span>
-          </button>
+          {(() => {
+            const isActionPhase = phase === 'Action';
+            const canEngage = selectedUnit && isOwner && hasActions && !isEmbarked && isActionPhase;
+            return (
+              <button
+                disabled={!canEngage}
+                onClick={onExecuteEngagement}
+                title={
+                  !isActionPhase
+                    ? 'Charge / Engage (Key 3) - Only available during Action Phase'
+                    : isEmbarked
+                    ? 'Cannot Engage - Unit is Embarked inside Transport'
+                    : 'Charge / Engage (Key 3) - Costs 1 Action'
+                }
+                className={`w-10 h-10 sm:w-11 sm:h-11 rounded-lg border flex flex-col items-center justify-center transition-all ${
+                  canEngage
+                    ? 'bg-gradient-to-b from-[#332211] to-[#1c1208] border-amber-500/80 hover:border-amber-400 text-amber-200 cursor-pointer shadow hover:scale-105'
+                    : 'bg-[#0f1118] border-zinc-800 text-zinc-600 cursor-not-allowed opacity-50'
+                }`}
+              >
+                <Flame className="w-4 h-4 text-amber-400" />
+                <span className="text-[7px] font-mono uppercase font-bold text-amber-300 leading-none">Engage</span>
+                <span className="absolute bottom-0.5 right-1 text-[8px] font-mono font-black text-zinc-400">3</span>
+              </button>
+            );
+          })()}
         </div>
 
         {/* Slot 4: Fight (Melee) */}
         <div className="relative group">
-          <button
-            disabled={!selectedUnit || !isOwner || !hasActions || isEmbarked}
-            onClick={onExecuteFight}
-            title={
-              isEmbarked
-                ? 'Cannot Fight - Unit is Embarked inside Transport'
-                : 'Fight (Key 4) - Melee Combat'
-            }
-            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-lg border flex flex-col items-center justify-center transition-all ${
-              selectedUnit && isOwner && hasActions && !isEmbarked
-                ? 'bg-gradient-to-b from-[#3a1515] to-[#1a0808] border-red-500/80 hover:border-red-400 text-red-200 cursor-pointer shadow hover:scale-105'
-                : 'bg-[#0f1118] border-zinc-800 text-zinc-600 cursor-not-allowed opacity-50'
-            }`}
-          >
-            <Swords className="w-4 h-4 text-red-400" />
-            <span className="text-[7px] font-mono uppercase font-bold text-red-300 leading-none">Fight</span>
-            <span className="absolute bottom-0.5 right-1 text-[8px] font-mono font-black text-zinc-400">4</span>
-          </button>
+          {(() => {
+            const isActionPhase = phase === 'Action';
+            const canFight = selectedUnit && isOwner && hasActions && !isEmbarked && isActionPhase;
+            return (
+              <button
+                disabled={!canFight}
+                onClick={onExecuteFight}
+                title={
+                  !isActionPhase
+                    ? 'Fight (Key 4) - Only available during Action Phase'
+                    : isEmbarked
+                    ? 'Cannot Fight - Unit is Embarked inside Transport'
+                    : 'Fight (Key 4) - Melee Combat'
+                }
+                className={`w-10 h-10 sm:w-11 sm:h-11 rounded-lg border flex flex-col items-center justify-center transition-all ${
+                  canFight
+                    ? 'bg-gradient-to-b from-[#3a1515] to-[#1a0808] border-red-500/80 hover:border-red-400 text-red-200 cursor-pointer shadow hover:scale-105'
+                    : 'bg-[#0f1118] border-zinc-800 text-zinc-600 cursor-not-allowed opacity-50'
+                }`}
+              >
+                <Swords className="w-4 h-4 text-red-400" />
+                <span className="text-[7px] font-mono uppercase font-bold text-red-300 leading-none">Fight</span>
+                <span className="absolute bottom-0.5 right-1 text-[8px] font-mono font-black text-zinc-400">4</span>
+              </button>
+            );
+          })()}
         </div>
 
         {/* Slot 5: Mission Action */}
         <div className="relative group">
-          <button
-            disabled={!selectedUnit || !isOwner || !hasActions || isEmbarked}
-            onClick={onExecuteMissionAction}
-            title={
-              isEmbarked
-                ? 'Cannot Score Mission - Unit is Embarked inside Transport'
-                : 'Mission Action (Key 5) - Objective POI Score'
-            }
-            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-lg border flex flex-col items-center justify-center transition-all ${
-              selectedUnit && isOwner && hasActions && !isEmbarked
-                ? 'bg-gradient-to-b from-[#0e2a1b] to-[#07170e] border-emerald-500/80 hover:border-emerald-400 text-emerald-200 cursor-pointer shadow hover:scale-105'
-                : 'bg-[#0f1118] border-zinc-800 text-zinc-600 cursor-not-allowed opacity-50'
-            }`}
-          >
-            <Sparkles className="w-4 h-4 text-emerald-400" />
-            <span className="text-[7px] font-mono uppercase font-bold text-emerald-300 leading-none">Mission</span>
-            <span className="absolute bottom-0.5 right-1 text-[8px] font-mono font-black text-zinc-400">5</span>
-          </button>
+          {(() => {
+            const isActionPhase = phase === 'Action';
+            const canMission = selectedUnit && isOwner && hasActions && !isEmbarked && isActionPhase;
+            return (
+              <button
+                disabled={!canMission}
+                onClick={onExecuteMissionAction}
+                title={
+                  !isActionPhase
+                    ? 'Mission Action (Key 5) - Only available during Action Phase'
+                    : isEmbarked
+                    ? 'Cannot Score Mission - Unit is Embarked inside Transport'
+                    : 'Mission Action (Key 5) - Objective POI Score'
+                }
+                className={`w-10 h-10 sm:w-11 sm:h-11 rounded-lg border flex flex-col items-center justify-center transition-all ${
+                  canMission
+                    ? 'bg-gradient-to-b from-[#0e2a1b] to-[#07170e] border-emerald-500/80 hover:border-emerald-400 text-emerald-200 cursor-pointer shadow hover:scale-105'
+                    : 'bg-[#0f1118] border-zinc-800 text-zinc-600 cursor-not-allowed opacity-50'
+                }`}
+              >
+                <Sparkles className="w-4 h-4 text-emerald-400" />
+                <span className="text-[7px] font-mono uppercase font-bold text-emerald-300 leading-none">Mission</span>
+                <span className="absolute bottom-0.5 right-1 text-[8px] font-mono font-black text-zinc-400">5</span>
+              </button>
+            );
+          })()}
         </div>
 
         {/* Slot 6: Formation Switcher */}
         <div className="relative group">
           <button
-            disabled={!selectedUnit || !isOwner || isEmbarked}
+            disabled={!selectedUnit || !isOwner || isEmbarked || (phase !== 'Movement' && phase !== 'Deployment')}
             onClick={handleCycleFormation}
             title={
-              isEmbarked
+              (phase !== 'Movement' && phase !== 'Deployment')
+                ? 'Cannot Change Formation - Formations can only be changed during Movement phase'
+                : isEmbarked
                 ? 'Cannot Change Formation - Unit is Embarked inside Transport'
                 : `Cycle Formation (Key 6) - Current: ${selectedUnit?.formation || 'circle'}`
             }
             className={`w-10 h-10 sm:w-11 sm:h-11 rounded-lg border flex flex-col items-center justify-center transition-all ${
-              selectedUnit && isOwner && !isEmbarked
+              selectedUnit && isOwner && !isEmbarked && (phase === 'Movement' || phase === 'Deployment')
                 ? 'bg-gradient-to-b from-[#1b1c2e] to-[#0d0e17] border-indigo-500/80 hover:border-indigo-400 text-indigo-200 cursor-pointer shadow hover:scale-105'
                 : 'bg-[#0f1118] border-zinc-800 text-zinc-600 cursor-not-allowed opacity-50'
             }`}

@@ -19,8 +19,29 @@ import { StorageService } from './services/storageService';
 import { UserProfile, ShopItem } from './types/user';
 import { ArmyRoster } from './types/army';
 
+const VALID_TABS = ['home', 'matchmaking', 'play', 'builder', 'guilds', 'shop', 'battlepass', 'lore', 'profile', 'admin'] as const;
+type TabType = typeof VALID_TABS[number];
+
+function getInitialTab(): TabType {
+  try {
+    if (typeof window !== 'undefined') {
+      const hash = window.location.hash.replace(/^#\/?/, '').toLowerCase();
+      if (VALID_TABS.includes(hash as TabType)) {
+        return hash as TabType;
+      }
+      const saved = localStorage.getItem('twg_active_tab');
+      if (saved && VALID_TABS.includes(saved as TabType)) {
+        return saved as TabType;
+      }
+    }
+  } catch {
+    // fallback
+  }
+  return 'home';
+}
+
 export function App() {
-  const [currentTab, setCurrentTab] = useState<'home' | 'matchmaking' | 'play' | 'builder' | 'guilds' | 'shop' | 'battlepass' | 'lore' | 'profile' | 'admin'>('home');
+  const [currentTab, setCurrentTab] = useState<TabType>(getInitialTab);
   const [user, setUser] = useState<UserProfile>(() => AuthService.getCurrentUser());
   const [activeBattleRoster, setActiveBattleRoster] = useState<ArmyRoster | null>(null);
   const [matchmakingRoster, setMatchmakingRoster] = useState<ArmyRoster | null>(null);
@@ -30,6 +51,14 @@ export function App() {
   const [isDuelZoneOpen, setIsDuelZoneOpen] = useState(false);
   const [dataVersion, setDataVersion] = useState(0);
   const [activeBattleMapId, setActiveBattleMapId] = useState<string | undefined>(undefined);
+  const [pvpBattleConfig, setPvpBattleConfig] = useState<{
+    isPvP?: boolean;
+    matchId?: string;
+    playerRole?: 'player1' | 'player2';
+    opponentRoster?: ArmyRoster;
+    opponentCommander?: any;
+    coinWinner?: 'player1' | 'player2';
+  } | null>(null);
 
   // Subscribe to auth state changes from Supabase / AuthService
   useEffect(() => {
@@ -46,18 +75,63 @@ export function App() {
     }
   }, [currentTab, user.role]);
 
+  // Sync tab with URL hash and localStorage without triggering hashchange loops
+  useEffect(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        const targetHash = `#${currentTab}`;
+        if (window.location.hash !== targetHash) {
+          window.history.replaceState(null, '', targetHash);
+        }
+        localStorage.setItem('twg_active_tab', currentTab);
+      }
+    } catch {
+      // ignore
+    }
+  }, [currentTab]);
+
+  // Listen for browser back/forward and hash changes
+  useEffect(() => {
+    const handleHashChange = () => {
+      try {
+        const hash = window.location.hash.replace(/^#\/?/, '').toLowerCase();
+        if (VALID_TABS.includes(hash as TabType)) {
+          if (hash === 'admin' && user.role !== 'admin') {
+            setIsAuthModalOpen(true);
+            setCurrentTab('home');
+          } else {
+            setCurrentTab(prev => (prev === hash ? prev : (hash as TabType)));
+          }
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, [user.role]);
+
   // Sync user profile changes to local storage
   useEffect(() => {
     StorageService.saveUserProfile(user);
   }, [user]);
 
-  const handleSetTab = (tab: 'home' | 'matchmaking' | 'play' | 'builder' | 'guilds' | 'shop' | 'battlepass' | 'lore' | 'profile' | 'admin') => {
+  const handleSetTab = (tab: TabType) => {
     // AUTH-009: Prevent non-admin access to admin tab
     if (tab === 'admin' && user.role !== 'admin') {
       setIsAuthModalOpen(true);
       return;
     }
     setCurrentTab(tab);
+    try {
+      if (typeof window !== 'undefined') {
+        window.history.replaceState(null, '', `#${tab}`);
+        localStorage.setItem('twg_active_tab', tab);
+      }
+    } catch {
+      // ignore
+    }
   };
 
   const handleDeployRosterToBattle = (roster: ArmyRoster) => {
@@ -109,6 +183,20 @@ export function App() {
     }
   };
 
+  const rostersList = StorageService.getRosters();
+  const fallbackPresetRoster: ArmyRoster = {
+    id: 'roster_fallback',
+    name: 'Convergence Battlegroup',
+    factionId: 'crimson_empire',
+    factionName: 'Crimson Empire',
+    totalPoints: 500,
+    maxPoints: 500,
+    units: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  const activeRosterForMatchmaking = matchmakingRoster || activeBattleRoster || rostersList[0] || fallbackPresetRoster;
+
   return (
     <div className="min-h-screen bg-[#090a0f] text-zinc-100 flex flex-col selection:bg-rose-600 selection:text-white">
       <Navbar
@@ -137,23 +225,40 @@ export function App() {
 
         {currentTab === 'play' && (
           <Battlefield
-            key={`battle_${dataVersion}_${activeBattleMapId || 'default'}`}
+            key={`battle_${dataVersion}_${activeBattleMapId || 'default'}_${pvpBattleConfig?.matchId || 'local'}`}
             customRoster={activeBattleRoster}
             boardSkin={user.equippedBoardSkin}
             initialMapId={activeBattleMapId}
-            onReturnHome={() => setCurrentTab('home')}
+            isPvP={pvpBattleConfig?.isPvP}
+            matchId={pvpBattleConfig?.matchId}
+            playerRole={pvpBattleConfig?.playerRole}
+            opponentRoster={pvpBattleConfig?.opponentRoster}
+            opponentCommander={pvpBattleConfig?.opponentCommander}
+            coinWinner={pvpBattleConfig?.coinWinner}
+            onReturnHome={() => {
+              setPvpBattleConfig(null);
+              setCurrentTab('home');
+            }}
           />
         )}
 
         {currentTab === 'matchmaking' && (
           <MatchmakingPage
             user={user}
-            rosters={StorageService.getRosters()}
-            activeRoster={matchmakingRoster || activeBattleRoster || StorageService.getRosters()[0]}
+            rosters={rostersList}
+            activeRoster={activeRosterForMatchmaking}
             onSelectRoster={(roster) => setMatchmakingRoster(roster)}
-            onDeployToBattle={(roster, _opponent, mapId) => {
+            onDeployToBattle={(roster, opponent, mapId, pvpConfig) => {
               setActiveBattleRoster(roster);
               if (mapId) setActiveBattleMapId(mapId);
+              setPvpBattleConfig({
+                isPvP: pvpConfig?.isPvP ?? false,
+                matchId: pvpConfig?.matchId,
+                playerRole: pvpConfig?.playerRole,
+                opponentRoster: pvpConfig?.opponentRoster,
+                opponentCommander: opponent,
+                coinWinner: pvpConfig?.coinWinner
+              });
               setCurrentTab('play');
             }}
             onNavigate={handleSetTab}
@@ -265,9 +370,9 @@ export function App() {
           isOpen={isMatchmakingModalOpen}
           onClose={() => setIsMatchmakingModalOpen(false)}
           user={user}
-          roster={matchmakingRoster || StorageService.getRosters()[0]}
+          roster={activeRosterForMatchmaking}
           onMatchFound={() => {
-            setActiveBattleRoster(matchmakingRoster || StorageService.getRosters()[0]);
+            setActiveBattleRoster(activeRosterForMatchmaking);
             setIsMatchmakingModalOpen(false);
             setCurrentTab('play');
           }}
@@ -279,8 +384,8 @@ export function App() {
         isOpen={isDuelZoneOpen}
         onClose={() => setIsDuelZoneOpen(false)}
         user={user}
-        rosters={StorageService.getRosters()}
-        selectedRoster={matchmakingRoster || StorageService.getRosters()[0]}
+        rosters={rostersList}
+        selectedRoster={activeRosterForMatchmaking}
         onSelectRoster={(roster) => setMatchmakingRoster(roster)}
         onStart1v1Matchmaking={(roster) => {
           setMatchmakingRoster(roster);

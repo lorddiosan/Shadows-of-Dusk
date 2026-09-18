@@ -3,7 +3,7 @@ import {
   Swords, Shield, Play, Trophy, Users, ChevronRight, 
   Sparkles, Scroll, Flame, ArrowUpRight, Award, Compass,
   Calendar, Clock, CheckCircle2, MessageSquare, ExternalLink,
-  Volume2, VolumeX, Eye, X, Check, ArrowRight, Zap, Target
+  Volume2, VolumeX, Eye, X, Check, ArrowRight, Zap, Target, Crosshair
 } from 'lucide-react';
 import { StorageService } from '../../services/storageService';
 import { FACTIONS } from '../../data/factions';
@@ -430,15 +430,14 @@ export const WarRoomHome: React.FC<WarRoomHomeProps> = ({
             <span>Muster Armies</span>
           </button>
 
-          {(onOpenDuelZone || onStartMatchmaking) && (
-            <button
-              onClick={() => onOpenDuelZone ? onOpenDuelZone() : (activeRoster && onStartMatchmaking && onStartMatchmaking(activeRoster))}
-              className="px-5 py-2.5 bg-gradient-to-r from-amber-700 via-rose-700 to-amber-700 hover:brightness-125 text-white font-bold text-xs uppercase tracking-widest rounded-xl shadow-[0_0_25px_rgba(245,158,11,0.5)] border border-amber-400/70 flex items-center space-x-2 transition cursor-pointer"
-            >
-              <span>⚔️</span>
-              <span>Duel Zone Arena</span>
-            </button>
-          )}
+          <button
+            onClick={() => onNavigate('matchmaking')}
+            className="px-5 py-2.5 bg-gradient-to-r from-amber-700 via-rose-700 to-amber-700 hover:brightness-125 text-white font-bold text-xs uppercase tracking-widest rounded-xl shadow-[0_0_25px_rgba(245,158,11,0.5)] border border-amber-400/70 flex items-center space-x-2 transition cursor-pointer hover:scale-105"
+            title="Open PvP Matchmaking, Ranked Queues & Custom Duels"
+          >
+            <Crosshair className="w-4 h-4 text-amber-300" />
+            <span>MATCHMAKING</span>
+          </button>
 
           <button
             onClick={() => onNavigate('play')}

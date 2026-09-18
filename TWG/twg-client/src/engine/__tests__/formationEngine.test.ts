@@ -685,7 +685,7 @@ describe('Infiltration and Leader Attachment Rules', () => {
 
   describe('Inspection Tool & Trait Explanations', () => {
     it('provides accurate explanations for core tactical traits', async () => {
-      const { getTraitExplanation, getTraitBadgeInfo } = await import('../../components/game/TabletopCanvas');
+      const { getTraitExplanation, getTraitBadgeInfo } = await import('../../utils/traitUtils');
 
       expect(getTraitExplanation('Infiltrator')).toContain('deployment');
       expect(getTraitExplanation('Flying')).toContain('intervening');
@@ -699,7 +699,7 @@ describe('Infiltration and Leader Attachment Rules', () => {
     });
 
     it('provides accurate explanations for temporary status conditions', async () => {
-      const { getTraitExplanation, getTraitBadgeInfo } = await import('../../components/game/TabletopCanvas');
+      const { getTraitExplanation, getTraitBadgeInfo } = await import('../../utils/traitUtils');
 
       expect(getTraitExplanation('On Fire')).toContain('mortal wound');
       expect(getTraitExplanation('Poisoned')).toContain('toxin');
