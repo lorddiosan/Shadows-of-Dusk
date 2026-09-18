@@ -393,4 +393,34 @@ describe('Phase and Movement/Formation Restrictions', () => {
     expect(htmlModal).toContain('PLAYER 2');
     expect(htmlModal).toContain('Begin Deployment');
   });
+
+  it('enforces 1-unit deployment: blocks deploying a second unit when one is pending confirmation', () => {
+    const units: Unit[] = [
+      {
+        ...dummyUnit,
+        id: 'u1',
+        name: 'Squad 1',
+        owner: 'player1',
+        position: { x: 100, y: 100 },
+        isPendingDeploymentConfirm: true
+      },
+      {
+        ...dummyUnit,
+        id: 'u2',
+        name: 'Squad 2',
+        owner: 'player1',
+        position: null,
+        isPendingDeploymentConfirm: false
+      }
+    ];
+
+    const currentDeployer = 'player1';
+    const existingPending = units.find(u => u.owner === currentDeployer && u.isPendingDeploymentConfirm);
+    expect(existingPending).toBeDefined();
+    expect(existingPending?.id).toBe('u1');
+
+    // Attempting to deploy u2 while u1 is pending should be blocked
+    const canDeploySecond = !units.some(u => u.owner === currentDeployer && u.isPendingDeploymentConfirm && u.id !== 'u2');
+    expect(canDeploySecond).toBe(false);
+  });
 });

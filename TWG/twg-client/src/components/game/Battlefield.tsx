@@ -954,6 +954,15 @@ export const Battlefield: React.FC<BattlefieldProps> = ({
       return;
     }
 
+    const existingPending = gameState.units.find(u => u.owner === currentDeployer && u.isPendingDeploymentConfirm);
+    if (existingPending) {
+      const msg = `⛔ You must confirm or cancel placement of ${existingPending.name} before placing units in reserve!`;
+      addLog(msg, 'info');
+      setDeploymentErrorNotice(msg);
+      setTimeout(() => setDeploymentErrorNotice(null), 3500);
+      return;
+    }
+
     const updatedUnits = gameState.units.map(u => u.id === unitId ? setUnitMutualState(u, 'reserve') : u);
     addLog(`📦 ${unit.name} held back in Strategic Reserves (Deployable from Round 2+ Movement Phase).`, 'event');
     progressDeploymentAlternation(unit.owner, updatedUnits);
@@ -1351,11 +1360,33 @@ export const Battlefield: React.FC<BattlefieldProps> = ({
 
     if (gameState.phase === 'Deployment') {
       const currentDeployer = gameState.deployingPlayer || gameState.activePlayer;
-      if (unit.owner !== currentDeployer) {
-        const msg = `⚠️ It is ${currentDeployer === 'player1' ? 'Player 1' : 'Player 2 (Bot)'}'s turn to deploy!`;
+      if (unit.owner !== currentDeployer || (isPvP && (unit.owner !== playerRole || currentDeployer !== playerRole))) {
+        const msg = isPvP
+          ? `⚠️ It is your opponent's turn to deploy! Waiting for ${currentDeployer === 'player1' ? 'Player 1' : 'Player 2'}.`
+          : `⚠️ It is ${currentDeployer === 'player1' ? 'Player 1' : 'Player 2 (Bot)'}'s turn to deploy!`;
         addLog(msg, 'info');
         setDeploymentErrorNotice(msg);
         setTimeout(() => setDeploymentErrorNotice(null), 3500);
+        return;
+      }
+
+      // If unit was already confirmed, it is locked into position!
+      if (unit.position && !unit.isPendingDeploymentConfirm) {
+        const msg = `🔒 ${unit.name} is locked in place! Confirmed units cannot be moved during deployment.`;
+        addLog(msg, 'info');
+        setDeploymentErrorNotice(msg);
+        setTimeout(() => setDeploymentErrorNotice(null), 3500);
+        return;
+      }
+
+      // If trying to place a new unit while another unit is already pending confirmation
+      const existingPending = gameState.units.find(u => u.owner === currentDeployer && u.isPendingDeploymentConfirm);
+      if (!unit.position && existingPending && existingPending.id !== unitId) {
+        const msg = `⛔ 1 Squad at a time! You already placed ${existingPending.name}. Confirm its placement or cancel it before deploying another unit.`;
+        addLog(msg, 'info');
+        setDeploymentErrorNotice(msg);
+        setTimeout(() => setDeploymentErrorNotice(null), 4000);
+        setSelectedUnitId(existingPending.id);
         return;
       }
 
@@ -1528,8 +1559,19 @@ export const Battlefield: React.FC<BattlefieldProps> = ({
     // Support Manual Placement Mode during Deployment Phase (BUG-013)
     if (gameState.phase === 'Deployment') {
       const currentDeployer = gameState.deployingPlayer || gameState.activePlayer;
-      if (unit.owner !== currentDeployer) {
-        const msg = `⚠️ It is ${currentDeployer === 'player1' ? 'Player 1' : 'Player 2 (Bot)'}'s turn to deploy!`;
+      if (unit.owner !== currentDeployer || (isPvP && (unit.owner !== playerRole || currentDeployer !== playerRole))) {
+        const msg = isPvP
+          ? `⚠️ It is your opponent's turn to deploy! Waiting for ${currentDeployer === 'player1' ? 'Player 1' : 'Player 2'}.`
+          : `⚠️ It is ${currentDeployer === 'player1' ? 'Player 1' : 'Player 2 (Bot)'}'s turn to deploy!`;
+        addLog(msg, 'info');
+        setDeploymentErrorNotice(msg);
+        setTimeout(() => setDeploymentErrorNotice(null), 3500);
+        return;
+      }
+
+      // If unit was already confirmed, its models cannot be moved
+      if (unit.position && !unit.isPendingDeploymentConfirm) {
+        const msg = `🔒 ${unit.name} is locked in place! Confirmed units cannot be moved during deployment.`;
         addLog(msg, 'info');
         setDeploymentErrorNotice(msg);
         setTimeout(() => setDeploymentErrorNotice(null), 3500);
@@ -2056,46 +2098,15 @@ export const Battlefield: React.FC<BattlefieldProps> = ({
       return;
     }
 
-    // Auto-commit any previously placed unit that was pending confirmation if it passes coherency (BUG-026)
+    // 1-Unit Deployment Enforcement: Strictly block deploying multiple units at once
     const existingPending = gameState.units.find(u => u.owner === currentDeployer && u.isPendingDeploymentConfirm);
     if (existingPending && existingPending.id !== unitId) {
-      const coherencyDistInches = gameState.currentMap?.coherencyDistanceInches || 2;
-      const coherencyDistPx = coherencyDistInches * 50;
-      const coherencyCheck = validateUnitCoherency(existingPending, coherencyDistPx);
-      if (coherencyCheck.isCoherent) {
-        const cleanTokens = (existingPending.tokens || []).map(t => ({
-          ...t,
-          offendingCoherency: false,
-          turnStartPos: { x: t.x, y: t.y }
-        }));
-        setGameState(prev => ({
-          ...prev,
-          units: prev.units.map(u => u.id === existingPending.id ? {
-            ...u,
-            tokens: cleanTokens,
-            isPendingDeploymentConfirm: false
-          } : u)
-        }));
-        addLog(`✅ Auto-confirmed placement of ${existingPending.name}.`, 'info');
-        if (existingPending.abilities && existingPending.abilities.length > 0) {
-          addLog(`🃏 Added ${existingPending.name}'s tactical cards to your Hand: ${existingPending.abilities.map(a => a.name).join(', ')}!`, 'score');
-        }
-        if (existingPending.attachedUnits && existingPending.attachedUnits.length > 0) {
-          existingPending.attachedUnits.forEach(attId => {
-            const attLeader = gameState.units.find(u => u.id === attId);
-            if (attLeader && attLeader.abilities && attLeader.abilities.length > 0) {
-              addLog(`🃏 Added ${attLeader.name}'s tactical cards to your Hand: ${attLeader.abilities.map(a => a.name).join(', ')}!`, 'score');
-            }
-          });
-        }
-      } else {
-        const msg = `⚠️ Please adjust coherency for ${existingPending.name} before placing another squad!`;
-        addLog(msg, 'info');
-        setDeploymentErrorNotice(msg);
-        setTimeout(() => setDeploymentErrorNotice(null), 4000);
-        setSelectedUnitId(existingPending.id);
-        return;
-      }
+      const msg = `⛔ 1 Squad at a time! You already placed ${existingPending.name}. Confirm its placement or cancel it before deploying another unit.`;
+      addLog(msg, 'info');
+      setDeploymentErrorNotice(msg);
+      setTimeout(() => setDeploymentErrorNotice(null), 4000);
+      setSelectedUnitId(existingPending.id);
+      return;
     }
 
     // Leader-attachment warning popup on deployment
@@ -2222,46 +2233,15 @@ export const Battlefield: React.FC<BattlefieldProps> = ({
       return;
     }
 
-    // Auto-commit any previously placed unit that was pending confirmation if it passes coherency (BUG-026)
+    // 1-Unit Deployment Enforcement: Strictly block deploying multiple units at once
     const existingPending = gameState.units.find(u => u.owner === currentDeployer && u.isPendingDeploymentConfirm);
     if (existingPending && existingPending.id !== unitId) {
-      const coherencyDistInches = gameState.currentMap?.coherencyDistanceInches || 2;
-      const coherencyDistPx = coherencyDistInches * 50;
-      const coherencyCheck = validateUnitCoherency(existingPending, coherencyDistPx);
-      if (coherencyCheck.isCoherent) {
-        const cleanTokens = (existingPending.tokens || []).map(t => ({
-          ...t,
-          offendingCoherency: false,
-          turnStartPos: { x: t.x, y: t.y }
-        }));
-        setGameState(prev => ({
-          ...prev,
-          units: prev.units.map(u => u.id === existingPending.id ? {
-            ...u,
-            tokens: cleanTokens,
-            isPendingDeploymentConfirm: false
-          } : u)
-        }));
-        addLog(`✅ Auto-confirmed placement of ${existingPending.name}.`, 'info');
-        if (existingPending.abilities && existingPending.abilities.length > 0) {
-          addLog(`🃏 Added ${existingPending.name}'s tactical cards to your Hand: ${existingPending.abilities.map(a => a.name).join(', ')}!`, 'score');
-        }
-        if (existingPending.attachedUnits && existingPending.attachedUnits.length > 0) {
-          existingPending.attachedUnits.forEach(attId => {
-            const attLeader = gameState.units.find(u => u.id === attId);
-            if (attLeader && attLeader.abilities && attLeader.abilities.length > 0) {
-              addLog(`🃏 Added ${attLeader.name}'s tactical cards to your Hand: ${attLeader.abilities.map(a => a.name).join(', ')}!`, 'score');
-            }
-          });
-        }
-      } else {
-        const msg = `⚠️ Please adjust coherency for ${existingPending.name} before placing another squad!`;
-        addLog(msg, 'info');
-        setDeploymentErrorNotice(msg);
-        setTimeout(() => setDeploymentErrorNotice(null), 4000);
-        setSelectedUnitId(existingPending.id);
-        return;
-      }
+      const msg = `⛔ 1 Squad at a time! You already placed ${existingPending.name}. Confirm its placement or cancel it before deploying another unit.`;
+      addLog(msg, 'info');
+      setDeploymentErrorNotice(msg);
+      setTimeout(() => setDeploymentErrorNotice(null), 4000);
+      setSelectedUnitId(existingPending.id);
+      return;
     }
 
     // Leader-attachment warning popup on deployment
@@ -5526,6 +5506,8 @@ export const Battlefield: React.FC<BattlefieldProps> = ({
         const trayUnits = gameState.units.filter(u => !u.position && !u.inStrategicReserve && !u.embarkedIn && !u.attachedTo && u.stats.lives > 0 && u.owner === deployerRole);
         const playerUnits = gameState.units.filter(u => u.owner === myRole);
         const livingPlayerUnits = playerUnits.filter(u => u.stats.lives > 0);
+        const pendingUnit = gameState.units.find(u => u.owner === myRole && u.isPendingDeploymentConfirm);
+        const hasPendingUnit = !!pendingUnit;
 
         return (
           <div className="fixed top-[50px] right-0 bottom-0 w-84 md:w-96 bg-[#11131c]/95 backdrop-blur-md border-l border-zinc-700 shadow-2xl z-50 flex flex-col overflow-hidden animate-in slide-in-from-right duration-200">
@@ -5717,6 +5699,36 @@ export const Battlefield: React.FC<BattlefieldProps> = ({
                 </div>
               )}
 
+              {/* Active Pending Unit Confirmation Callout */}
+              {isDeployment && hasPendingUnit && (
+                <div className="p-3 rounded-xl border bg-amber-950/60 border-amber-500/80 text-amber-200 shadow-xl space-y-2 animate-in fade-in duration-200">
+                  <div className="flex items-center justify-between text-xs font-bold font-mono">
+                    <span className="flex items-center space-x-1.5 text-amber-300">
+                      <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
+                      <span>1 SQUAD PENDING CONFIRMATION</span>
+                    </span>
+                    <span className="text-[10px] bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded border border-amber-500/40">Active Placement</span>
+                  </div>
+                  <p className="text-[10px] text-zinc-300 leading-relaxed">
+                    <strong className="text-white">{pendingUnit.name}</strong> is staged on the battlefield. Confirm placement to pass your turn, or cancel to return it to the tray before placing another squad.
+                  </p>
+                  <div className="flex items-center space-x-2 pt-0.5">
+                    <button
+                      onClick={() => handleConfirmDeployment(pendingUnit.id)}
+                      className="flex-1 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs font-mono shadow flex items-center justify-center space-x-1 transition cursor-pointer"
+                    >
+                      <span>✅ Confirm Placement</span>
+                    </button>
+                    <button
+                      onClick={() => handleCancelDeployment(pendingUnit.id)}
+                      className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white font-mono text-xs border border-zinc-650 transition cursor-pointer"
+                    >
+                      <span>Cancel</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Units List */}
               {totalDeployerUnits === 0 ? (
                 <div className="p-8 text-center border border-dashed border-amber-800/60 rounded-xl space-y-3 bg-amber-950/20">
@@ -5756,10 +5768,16 @@ export const Battlefield: React.FC<BattlefieldProps> = ({
                     return (
                       <div
                         key={u.id}
-                        draggable={isMyDeployTurn}
+                        draggable={isMyDeployTurn && !hasPendingUnit}
                         onDragStart={(e) => {
-                          if (!isMyDeployTurn) {
+                          if (!isMyDeployTurn || hasPendingUnit) {
                             e.preventDefault();
+                            if (hasPendingUnit) {
+                              const msg = `⛔ Confirm or Cancel placement of ${pendingUnit.name} before deploying another squad.`;
+                              addLog(msg, 'info');
+                              setDeploymentErrorNotice(msg);
+                              setTimeout(() => setDeploymentErrorNotice(null), 3500);
+                            }
                             return;
                           }
                           e.dataTransfer.setData('text/plain', u.id);
@@ -5944,15 +5962,28 @@ export const Battlefield: React.FC<BattlefieldProps> = ({
                                 addLog(`⛔ Waiting for opponent's deployment turn.`, 'info');
                                 return;
                               }
+                              if (hasPendingUnit) {
+                                const msg = `⛔ Confirm or Cancel placement of ${pendingUnit.name} before deploying another squad.`;
+                                addLog(msg, 'info');
+                                setDeploymentErrorNotice(msg);
+                                setTimeout(() => setDeploymentErrorNotice(null), 3500);
+                                return;
+                              }
                               handleDeployReserveUnit(u.id);
                             }}
-                            disabled={!isMyDeployTurn}
+                            disabled={!isMyDeployTurn || hasPendingUnit}
                             className={`flex-1 py-1 font-bold font-mono rounded text-[10px] transition flex items-center justify-center space-x-1 shadow ${
-                              isMyDeployTurn
+                              isMyDeployTurn && !hasPendingUnit
                                 ? 'bg-amber-500 hover:bg-amber-400 text-black cursor-pointer'
                                 : 'bg-zinc-800 text-zinc-500 cursor-not-allowed opacity-60'
                             }`}
-                            title={isMyDeployTurn ? "Deploy unit to active player's flank" : "Waiting for opponent's turn to deploy"}
+                            title={
+                              hasPendingUnit 
+                                ? `Confirm placement of ${pendingUnit.name} first`
+                                : isMyDeployTurn 
+                                ? "Deploy unit to active player's flank" 
+                                : "Waiting for opponent's turn to deploy"
+                            }
                           >
                             <ArrowRight className="w-3 h-3" />
                             <span>Deploy Flank</span>
